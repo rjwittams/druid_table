@@ -18,7 +18,7 @@ use std::f64::INFINITY;
 use std::time::Duration;
 
 use druid::kurbo::{Affine, Point, Rect, RoundedRect, Size, Vec2};
-use druid::theme;
+use druid::{theme, LensWrap, Lens, WidgetExt};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx,
     RenderContext, TimerToken, UpdateCtx, Widget, WidgetPod,
@@ -28,7 +28,7 @@ const SCROLLBAR_MIN_SIZE: f64 = 45.0;
 
 #[derive(Clone)]
 pub struct ScrollOffsetWrapper<T>{
-    scroll_offset:  Vec2,
+    scroll_offset: Vec2,
     inner: T
 }
 
@@ -36,6 +36,14 @@ impl <T> ScrollOffsetWrapper<T>{
     pub fn new(inner: T) ->ScrollOffsetWrapper<T>{
         ScrollOffsetWrapper {
             scroll_offset: Vec2::new(0.0, 0.0),
+            inner
+        }
+    }
+
+    pub fn new_with_offset(scroll_offset: Vec2,
+                           inner: T) -> ScrollOffsetWrapper<T>{
+        ScrollOffsetWrapper {
+            scroll_offset,
             inner
         }
     }
@@ -504,47 +512,66 @@ fn log_size_warnings(size: Size) {
 }
 
 pub struct ScrollParent<T, W>{
-   child: WidgetPod<ScrollOffsetWrapper<T>, W>
+    scroll_offset: Vec2,
+    child: WidgetPod<ScrollOffsetWrapper<T>, W>
 }
 
-impl<T: Data, W: Widget<ScrollOffsetWrapper<T>>> ScrollParent<T, W>{
+impl<T: Data, W: Widget<ScrollOffsetWrapper<T>> + 'static > ScrollParent<T, W> {
     pub fn new(child: W) -> ScrollParent<T, W> {
-        ScrollParent{
+        ScrollParent {
+            scroll_offset: Vec2::new(0., 0.),
             child: WidgetPod::new(child)
         }
     }
-}
 
-impl<T: Data, W: Widget<ScrollOffsetWrapper<T>>> Widget<ScrollOffsetWrapper<T>> for ScrollParent<T, W> {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut ScrollOffsetWrapper<T>, env: &Env) {
-        let old_scroll = data.scroll_offset.clone();
-        self.child.event( ctx, event, data, env);
-        if !old_scroll.same(&data.scroll_offset ) {
-            ctx.with_update_ctx(|update_ctx| {
-                println!("Calling update in event:{:?}", data.scroll_offset);
-                self.child.update(update_ctx, data, env);
-            })
-        }
+    fn with_wrapped_data<F: FnOnce(&mut Self, &ScrollOffsetWrapper<T>) -> V, V>(&mut self, data: &T, f: F) -> V {
+        f(self, &ScrollOffsetWrapper::new_with_offset(self.scroll_offset.clone(), data.clone()))
     }
 
-    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &ScrollOffsetWrapper<T>, env: &Env) {
-        self.child.lifecycle(ctx, event, data, env)
-    }
-
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &ScrollOffsetWrapper<T>, data: &ScrollOffsetWrapper<T>, env: &Env) {
-        self.child.update(ctx, data, env)
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &ScrollOffsetWrapper<T>, env: &Env) -> Size {
-        let size = self.child.layout(ctx, bc, data, env);
-        let origin = Point::new(0., 0.);
-        self.child
-            .set_layout_rect(ctx, data, env, Rect::from_origin_size(origin, size));
-        size
-    }
-
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &ScrollOffsetWrapper<T>, env: &Env) {
-        self.child.paint(ctx, data, env)
+    fn with_wrapped_data_mut<F: FnOnce(&mut Self, &mut ScrollOffsetWrapper<T>) -> V, V>(&mut self, data: &mut T, f: F) -> V {
+        let mut temp = ScrollOffsetWrapper::new_with_offset(self.scroll_offset.clone(), data.clone());
+        let v = f(self, &mut temp);
+        *data = temp.inner;
+        self.scroll_offset = temp.scroll_offset;
+        v
     }
 }
+
+impl<T: Data, W: Widget<ScrollOffsetWrapper<T>> + 'static > Widget<T> for ScrollParent<T, W> {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        let old_scroll = self.scroll_offset.clone();
+        self.with_wrapped_data_mut(data, |s, wrapped| {
+            s.child.event(ctx, event, wrapped, env);
+            if !old_scroll.same(&wrapped.scroll_offset) {
+                ctx.with_update_ctx(|update_ctx| {
+                    println!("Calling update in event:{:?}", wrapped.scroll_offset);
+                    s.child.update(update_ctx, wrapped, env);
+                })
+            }
+        });
+    }
+
+    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &T, env: &Env) {
+        self.with_wrapped_data(data,|s, wrapped| s.child.lifecycle(ctx, event, wrapped, env));
+    }
+
+    fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
+        self.with_wrapped_data(data,|s, wrapped| s.child.update(ctx, wrapped, env));
+    }
+
+    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
+        self.with_wrapped_data(data,|s, wrapped| {
+            let size = s.child.layout(ctx, bc, wrapped, env);
+            let origin = Point::new(0., 0.);
+            s.child
+                .set_layout_rect(ctx, wrapped, env, Rect::from_origin_size(origin, size));
+            size
+        })
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
+        self.with_wrapped_data(data, |s, wrapped| s.child.paint(ctx, wrapped, env))
+    }
+}
+
 
