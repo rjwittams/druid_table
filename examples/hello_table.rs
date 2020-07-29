@@ -11,6 +11,9 @@ use druid::{
 use druid::{Color, Value};
 use std::f64::consts::PI;
 
+#[macro_use]
+extern crate log;
+
 const WINDOW_TITLE: LocalizedString<TableState> = LocalizedString::new("Hello Table!");
 
 #[derive(Clone, Data, Lens, Debug)]
@@ -101,6 +104,10 @@ fn build_root_widget() -> impl Widget<TableState> {
 }
 
 pub fn main() {
+    simple_logger::init().unwrap();
+
+    info!("Hello table");
+
     // describe the main window
     let main_window = WindowDesc::new(build_root_widget)
         .title(WINDOW_TITLE)
