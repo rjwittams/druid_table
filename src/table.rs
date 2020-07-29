@@ -11,8 +11,6 @@ use druid::{
     LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetExt,
 };
 use im::Vector;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub trait CellRender<T> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
@@ -271,6 +269,7 @@ pub const SELECT_INDICES: Selector<IndicesSelection> =
 
 type SelectionHandler = dyn Fn(&mut EventCtx, &TableSelection);
 
+#[derive(Clone)]
 pub struct TableConfig {
     header_background: KeyOrValue<Color>,
     cells_background: KeyOrValue<Color>,
@@ -290,6 +289,16 @@ pub struct ResolvedTableConfig{
 }
 
 impl TableConfig {
+
+    fn new() -> TableConfig{
+        TableConfig {
+            header_background: theme::BACKGROUND_LIGHT.into(),
+            cells_background: theme::LABEL_COLOR.into(),
+            cells_border: theme::BORDER_LIGHT.into(),
+            cell_border_thickness: 1.0.into(),
+            cell_padding: 2.0.into()
+        }
+    }
 
     fn resolve(&self, rows: usize, columns: usize, env: &Env)->ResolvedTableConfig{
         ResolvedTableConfig{
@@ -348,11 +357,7 @@ impl ResolvedTableConfig{
 pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellRender<RowData>>>>,
     column_header_render: Box<dyn CellRender<String>>,
-    header_background: KeyOrValue<Color>,
-    cells_background: KeyOrValue<Color>,
-    cells_border: KeyOrValue<Color>,
-    cell_border_thickness: KeyOrValue<f64>,
-    cell_padding: KeyOrValue<f64>,
+    table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
 }
 
@@ -367,11 +372,7 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
         TableBuilder {
             table_columns: Vec::<TableColumn<RowData, Box<dyn CellRender<RowData>>>>::new(),
             column_header_render: Box::new(TextCell::new().text_color(theme::PRIMARY_LIGHT)),
-            header_background: theme::BACKGROUND_LIGHT.into(),
-            cells_background: theme::LABEL_COLOR.into(),
-            cells_border: theme::BORDER_LIGHT.into(),
-            cell_border_thickness: 1.0.into(),
-            cell_padding: 2.0.into(),
+            table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
         }
     }
@@ -401,27 +402,17 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
 
         let column_names = self.table_columns.iter().map(|tc| tc.header.clone()).collect();
 
-        let config = TableConfig{
-            header_background: self.header_background,
-            cells_background: self.cells_background,
-            cells_border: self.cells_border,
-            cell_border_thickness: self.cell_border_thickness,
-            cell_padding: self.cell_padding
-        };
-
-        let shared_config = Rc::new(RefCell::new(config));
-
         let column_headers_id = WidgetId::next();
         let column_headers_scroll_id = WidgetId::next();
 
         let headings = ColumnHeadings::new(
-            Rc::clone(&shared_config),
+            self.table_config.clone(),
             column_names,
             self.column_header_render
         ).with_id(column_headers_id);
 
         let ch_scroll = Scroll::new(headings).with_id(column_headers_scroll_id);
-        let mut cells = Cells::new(Rc::clone(&shared_config),
+        let mut cells = Cells::new(self.table_config.clone(),
                                    self.table_columns.len(),
                                    self.table_columns);
         cells.add_selection_handler(move |ctxt, table_sel| {
@@ -443,28 +434,31 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
 
 }
 
-pub struct ColumnHeadings<TableData: Data> {
-    config: Rc<RefCell<TableConfig>>,
-    column_names: Vec<String>,
-    column_header_render: Box<dyn CellRender<String>>,
+pub struct ColumnHeadings<TableData: Data, ColumnHeader: Data, CR: CellRender<ColumnHeader>> {
+    config: TableConfig,
+    column_headers: Vec<ColumnHeader>,
+    column_header_render: CR,
     selection: IndicesSelection,
     phantom_td: PhantomData<TableData>
 }
 
-impl<TableData: Data> ColumnHeadings<TableData> {
+impl<TableData: Data,
+    ColumnHeader: Data,
+    CR: CellRender<ColumnHeader>> ColumnHeadings<TableData, ColumnHeader, CR> {
     fn new(
-        config: Rc<RefCell<TableConfig>>,
-        column_names: Vec<String>,
-        column_header_render: Box<dyn CellRender<String>>
-    ) -> ColumnHeadings<TableData> {
-        ColumnHeadings { config, column_names,
+        config: TableConfig,
+        column_names: Vec<ColumnHeader>,
+        column_header_render: CR,
+    ) -> ColumnHeadings<TableData, ColumnHeader, CR> {
+        ColumnHeadings { config,
+            column_headers: column_names,
             column_header_render, selection: IndicesSelection::NoSelection,
             phantom_td: PhantomData::default()}
     }
 }
 
-impl<TableData: TableLen> Widget<TableData>
-    for ColumnHeadings<TableData>
+impl<TableData: TableLen, ColumnHeader: Data, CR: CellRender<ColumnHeader>> Widget<TableData>
+    for ColumnHeadings<TableData, ColumnHeader, CR>
 {
     fn event(&mut self, _ctx: &mut EventCtx, _event: &Event, _data: &mut TableData, _env: &Env) {
         if let Event::Command(ref cmd) = _event {
@@ -503,16 +497,14 @@ impl<TableData: TableLen> Widget<TableData>
         env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
-        let config: &TableConfig = &self.config.borrow();
-        let rtc = config.resolve(data.len(), self.column_names.len(), env);
+        let rtc = self.config.resolve(data.len(), self.column_headers.len(), env);
 
         bc.constrain(rtc.ch_get_desired_size())
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
         let rect = ctx.region().to_rect();
-        let config: &mut TableConfig = &mut self.config.borrow_mut();
-        let rtc = config.resolve(data.len(), self.column_names.len(), env);
+        let rtc = self.config.resolve(data.len(), self.column_headers.len(), env);
 
         ctx.fill(rect, &rtc.header_background);
 
@@ -525,7 +517,7 @@ impl<TableData: TableLen> Widget<TableData>
             rtc.find_cell_coords(&(rect.origin() + rect.size().to_vec2()));
 
         let start_col = start_col.unwrap_or(0);
-        let end_col = end_col.unwrap_or(self.column_names.len() - 1);
+        let end_col = end_col.unwrap_or(self.column_headers.len() - 1);
 
         let selection = &self.selection;
         let header_render = &mut self.column_header_render;
@@ -535,7 +527,7 @@ impl<TableData: TableLen> Widget<TableData>
         for col_idx in start_col..=end_col {
             let cell_rect = Rect::from_origin_size(Point::new(cell_left, row_top), cell_size);
             let padded_rect = cell_rect.inset(-rtc.cell_padding);
-            if let Some(col_name) = self.column_names.get(col_idx) {
+            if let Some(col_name) = self.column_headers.get(col_idx) {
                 ctx.with_save(|ctx| {
                     let layout_origin = padded_rect.origin().to_vec2();
                     ctx.clip(padded_rect);
@@ -556,7 +548,7 @@ impl<TableData: TableLen> Widget<TableData>
 }
 
 pub struct Cells<RowData: Data, TableData: Data, CR: CellRender<RowData>> {
-    config: Rc<RefCell<TableConfig>>,
+    config: TableConfig,
     selection: TableSelection,
     selection_handlers: Vec<Box<SelectionHandler>>,
     columns: usize,
@@ -566,7 +558,7 @@ pub struct Cells<RowData: Data, TableData: Data, CR: CellRender<RowData>> {
 }
 
 impl<RowData: Data, TableData: Data, CR: CellRender<RowData>> Cells<RowData, TableData, CR> {
-    fn new(config: Rc<RefCell<TableConfig>>, columns: usize, cell_render:CR) -> Cells<RowData, TableData, CR> {
+    fn new(config: TableConfig, columns: usize, cell_render:CR) -> Cells<RowData, TableData, CR> {
         Cells {
             config,
             selection_handlers: Vec::new(),
@@ -602,8 +594,7 @@ where
         let mut new_selection: Option<TableSelection> = None;
 
         if let Event::MouseDown(me) = event {
-            let config = self.config.borrow();
-            let rtc = config.resolve(data.len(), self.columns, env);
+            let rtc = self.config.resolve(data.len(), self.columns, env);
             if let Some(cell) = rtc.find_cell(&me.pos) {
                 new_selection = Some(cell.into())
                 // TODO: Modifier keys ask current selection to add this cell
@@ -641,7 +632,7 @@ where
         env: &Env,
     ) -> Size {
         bc.debug_check("TableCells");
-        let table_config = (&self.config.borrow()).resolve(data.len(), self.columns, env);
+        let table_config = self.config.resolve(data.len(), self.columns, env);
         let cell_size = table_config.full_cell_size();
         bc.constrain(Size::new(
             cell_size.width * (table_config.columns as f64),
@@ -650,10 +641,7 @@ where
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
-        let rtc = {
-            let config = self.config.borrow();
-            config.resolve(data.len(), self.columns, env)
-        };
+        let rtc = self.config.resolve(data.len(), self.columns, env);
         let rect = ctx.region().to_rect();
 
         ctx.fill(rect, &rtc.cells_background);
