@@ -74,7 +74,6 @@ impl CellRender<f64> for PieCell {
 
 fn build_root_widget() -> impl Widget<TableState> {
     let table_config = TableConfig::<HelloRow, Vector<HelloRow>>::new()
-        .with_column("Who knows", PieCell {}.lens(HelloRow::who_knows))
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
         .with_column(
             "Greeting",
@@ -84,8 +83,9 @@ fn build_root_widget() -> impl Widget<TableState> {
             "Westernised",
             TextCell::new().font_size(17.).lens(HelloRow::westernised),
         )
+        .with_column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
         .with_column(
-            "Greeting 2",
+            "Greeting 2 with very long column name",
             TextCell::new()
                 .font_name(KeyOrValue::Concrete(Value::String("Courier New".into())))
                 .lens(HelloRow::greeting),
@@ -111,7 +111,7 @@ pub fn main() {
     // describe the main window
     let main_window = WindowDesc::new(build_root_widget)
         .title(WINDOW_TITLE)
-        .window_size((400.0, 700.0));
+        .window_size((400.0, 300.0));
 
     // create the initial app state
     let initial_state = TableState {
@@ -122,6 +122,9 @@ pub fn main() {
             HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85.),
             HelloRow::new("Hindi", "नमस्ते", "namaste", 74.),
             HelloRow::new("Arabic", "مرحبا", "marhabaan", 24.),
+            HelloRow::new("Portuguese", "olá", "olá", 30.),
+            HelloRow::new("Russian", "Привет", "Privet", 42.),
+            HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.),
         ],
     };
 

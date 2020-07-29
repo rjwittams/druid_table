@@ -1,15 +1,18 @@
 use std::marker::PhantomData;
 use std::ops::DerefMut;
 
+use crate::TableSelection::NoSelection;
 use druid::kurbo::Line;
-use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
+use druid::piet::{FontBuilder, IntoBrush, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
-use druid::{theme, Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, KeyOrValue, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, Selector};
+use druid::{
+    theme, Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, KeyOrValue, LayoutCtx, Lens,
+    LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetExt,
+};
 use im::Vector;
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::TableSelection::NoSelection;
 
 pub trait CellRender<T> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
@@ -69,7 +72,7 @@ pub struct TextCell {
 }
 
 impl TextCell {
-    pub fn new() -> TextCell {
+    pub fn new() -> Self {
         TextCell {
             text_color: Color::BLACK.into(),
             font_name: theme::FONT_NAME.into(),
@@ -91,6 +94,12 @@ impl TextCell {
     pub fn font_size(mut self, font_size: impl Into<KeyOrValue<f64>>) -> TextCell {
         self.font_size = font_size.into();
         self
+    }
+}
+
+impl Default for TextCell {
+    fn default() -> Self {
+        TextCell::new()
     }
 }
 
@@ -142,7 +151,11 @@ pub struct Cells<RowData: Data, TableData: Data>(pub Rc<RefCell<TableConfig<RowD
 
 pub trait TableRows<RowData: Data>: Data {
     fn len(&self) -> usize;
-    fn use_row<V>(&self, idx: usize, f: impl FnOnce(&RowData)->V) -> Option<V>;
+    fn use_row<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V>;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<RowData: Data> TableRows<RowData> for Vector<RowData> {
@@ -150,69 +163,87 @@ impl<RowData: Data> TableRows<RowData> for Vector<RowData> {
         self.len()
     }
 
-    fn use_row<V>(&self, idx: usize, f: impl FnOnce(&RowData)->V) -> Option<V> {
-        self.get(idx).map(move|x|{
-            f(x)
-        })
+    fn use_row<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V> {
+        self.get(idx).map(move |x| f(x))
     }
 }
 
 #[derive(Debug)]
-pub struct SingleCell{
+pub struct SingleCell {
     row: usize,
-    col: usize
+    col: usize,
 }
 
-impl SingleCell{
-    fn new(row: usize, col: usize)->SingleCell{
-        SingleCell{row, col}
+impl SingleCell {
+    fn new(row: usize, col: usize) -> SingleCell {
+        SingleCell { row, col }
     }
 }
 
 #[derive(Debug)]
-pub enum TableSelection{
+pub enum IndicesSelection {
     NoSelection,
-    SingleCell(SingleCell)
-//  SingleColumn
-//  SingleRow
-//  MultiColumn
-//  MultiRow
-//  Discontiguous
+    Single(usize),
+    //Many(Vec<usize>),
+    //Range(from, to)
 }
 
-impl From<SingleCell> for TableSelection{
+#[derive(Debug)]
+pub enum TableSelection {
+    NoSelection,
+    SingleCell(SingleCell),
+    //  SingleColumn
+                            //  SingleRow
+                            //  Range
+                            //  Discontiguous
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SelectionStatus {
+    NotSelected,
+    Primary,
+    AlsoSelected
+}
+
+impl From<SelectionStatus> for bool {
+    fn from(ss: SelectionStatus) -> Self {
+        ss != SelectionStatus::NotSelected
+    }
+}
+
+impl From<SingleCell> for TableSelection {
     fn from(sc: SingleCell) -> Self {
         TableSelection::SingleCell(sc)
     }
 }
 
-impl TableSelection{
-    fn contains_column(&self, col_idx: usize)->bool{
-        match self{
-            NoSelection=>false,
-            TableSelection::SingleCell(sc)=> sc.col == col_idx
+impl TableSelection {
+    fn contains_column(&self, col_idx: usize) -> bool {
+        match self {
+            NoSelection => false,
+            TableSelection::SingleCell(sc) => sc.col == col_idx,
         }
     }
 
-    fn to_column_selection(&self)->IndicesSelection{
+    fn to_column_selection(&self) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(SingleCell{col, ..})=>IndicesSelection::Single(*col),
+            TableSelection::SingleCell(SingleCell { col, .. }) => IndicesSelection::Single(*col),
         }
     }
-}
 
-#[derive(Debug)]
-pub enum IndicesSelection{
-    NoSelection,
-    Single(usize),
-    //Many(Vec<usize>)
+    fn get_cell_status(&self, row_idx: usize, col_idx: usize)->SelectionStatus {
+        match self{
+            TableSelection::SingleCell(sc) if row_idx == sc.row && col_idx == sc.col => SelectionStatus::Primary,
+            _=>SelectionStatus::NotSelected
+        }
+    }
 }
 
 pub const SELECT_INDICES: Selector<IndicesSelection> =
     Selector::new("druid-builtin.table.select-indices");
 
-type SelectionHandler = dyn Fn(&mut EventCtx, &TableSelection) -> ();
+type SelectionHandler = dyn Fn(&mut EventCtx, &TableSelection);
 
 pub struct TableConfig<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellRender<RowData>>>>,
@@ -224,7 +255,13 @@ pub struct TableConfig<RowData: Data, TableData: Data> {
     cell_padding: KeyOrValue<f64>,
     phantom_td: PhantomData<TableData>,
     selection: TableSelection,
-    selection_handlers: Vec<Box<SelectionHandler>>
+    selection_handlers: Vec<Box<SelectionHandler>>,
+}
+
+impl<RowData: Data, TableData: TableRows<RowData>> Default for TableConfig<RowData, TableData> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<RowData: Data, TableData: TableRows<RowData>> TableConfig<RowData, TableData> {
@@ -239,7 +276,7 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableConfig<RowData, TableDat
             cell_padding: 2.0.into(),
             phantom_td: PhantomData::default(),
             selection: NoSelection,
-            selection_handlers: Vec::new()
+            selection_handlers: Vec::new(),
         }
     }
 
@@ -278,18 +315,18 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableConfig<RowData, TableDat
             ctxt.submit_command(SCROLL_TO.with(ScrollTo::x(pos.x)), column_headers_scroll_id);
         });
 
-        shared_config.borrow_mut().add_selection_handler(move|ctxt, table_sel|{
-            let column_sel = table_sel.to_column_selection();
-            log::info!("Forwarding to cols:{:?}", column_sel);
-            ctxt.submit_command(SELECT_INDICES.with(column_sel), column_headers_id);
-        });
+        shared_config
+            .borrow_mut()
+            .add_selection_handler(move |ctxt, table_sel| {
+                let column_sel = table_sel.to_column_selection();
+                ctxt.submit_command(SELECT_INDICES.with(column_sel), column_headers_id);
+            });
 
-        let col = Flex::column()
+        Flex::column()
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(ch_scroll)
             .with_flex_child(cells_scroll, 1.)
-            .center();
-        col
+            .center()
     }
 
     fn columns(&self) -> usize {
@@ -297,7 +334,8 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableConfig<RowData, TableDat
     }
 
     fn cell_size(&self, _data: &TableData, _env: &Env) -> Size {
-        Size::new(100., 40.)
+        Size::new(100., 40.) // TODO: Size policies (measure or fixed).
+                             // Callers of this will need to delegate a lot more to handle measured cells.
     }
 
     //TODO: Measure content or fixed sizes per axis
@@ -308,44 +346,53 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableConfig<RowData, TableDat
     }
 
     fn find_cell(&self, data: &TableData, env: &Env, pos: &Point) -> Option<SingleCell> {
+        let (r, c) = self.find_cell_coords(data, env, pos);
+        Some(SingleCell::new(r?, c?))
+    }
+
+    fn find_cell_coords(
+        &self,
+        data: &TableData,
+        env: &Env,
+        pos: &Point,
+    ) -> (Option<usize>, Option<usize>) {
         let cs = self.full_cell_size(data, env); //TODO: Need vectors of border positions
         let col = (pos.x / cs.width).floor() as usize;
         let row = (pos.y / cs.height).floor() as usize;
-        log::info!("find cell pos{:?} {:?} {:?}", cs, pos, (col, row) );
-        if col < self.columns() && row < data.len() {
-            Some(SingleCell::new(row, col))
-        }else{
-            None
-        }
+        (
+            if row < data.len() { Some(row) } else { None },
+            if col < self.columns() {
+                Some(col)
+            } else {
+                None
+            },
+        )
     }
 
-    fn set_selected(&mut self, ctx: &mut EventCtx, selection: TableSelection){
+    fn set_selected(&mut self, ctx: &mut EventCtx, selection: TableSelection) {
         self.selection = selection;
-        log::info!("Selected {:?}", &self.selection);
-        for sh in &self.selection_handlers{
+        for sh in &self.selection_handlers {
             sh(ctx, &self.selection)
         }
     }
 
     pub fn add_selection_handler(
         &mut self,
-        selection_handler: impl Fn(&mut EventCtx, &TableSelection) -> () + 'static,
+        selection_handler: impl Fn(&mut EventCtx, &TableSelection) + 'static,
     ) {
         self.selection_handlers.push(Box::new(selection_handler));
     }
-
 }
 
 pub struct ColumnHeadings<RowData: Data, TableData: Data> {
-    config: Rc<RefCell<TableConfig <RowData, TableData>>>
-
+    config: Rc<RefCell<TableConfig<RowData, TableData>>>,
 }
 
-impl <RowData: Data, TableData: Data> ColumnHeadings<RowData, TableData>{
-    fn new(config: Rc<RefCell<TableConfig <RowData, TableData>>>) -> ColumnHeadings<RowData, TableData> {
-        ColumnHeadings{
-            config
-        }
+impl<RowData: Data, TableData: Data> ColumnHeadings<RowData, TableData> {
+    fn new(
+        config: Rc<RefCell<TableConfig<RowData, TableData>>>,
+    ) -> ColumnHeadings<RowData, TableData> {
+        ColumnHeadings { config }
     }
 }
 
@@ -353,16 +400,13 @@ impl<RowData: Data, TableData: TableRows<RowData>> Widget<TableData>
     for ColumnHeadings<RowData, TableData>
 {
     fn event(&mut self, _ctx: &mut EventCtx, _event: &Event, _data: &mut TableData, _env: &Env) {
-        match _event{
-            Event::Command(ref cmd)=>{
-                if cmd.is(SELECT_INDICES){
-                     if let Some(_sel) = cmd.get(SELECT_INDICES){
-                         // Todo store own selecions?
-                         _ctx.request_paint()
-                     }
+        if let Event::Command(ref cmd) = _event {
+            if cmd.is(SELECT_INDICES) {
+                if let Some(_sel) = cmd.get(SELECT_INDICES) {
+                    // Todo store own selecions?
+                    _ctx.request_paint()
                 }
             }
-            _=>{}
         }
     }
 
@@ -373,8 +417,6 @@ impl<RowData: Data, TableData: TableRows<RowData>> Widget<TableData>
         _data: &TableData,
         _env: &Env,
     ) {
-
-
     }
 
     fn update(
@@ -402,56 +444,48 @@ impl<RowData: Data, TableData: TableRows<RowData>> Widget<TableData>
         ))
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, _data: &TableData, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
         let rect = ctx.region().to_rect();
-        let table_config: &mut TableConfig<RowData, TableData> = &mut self.config.borrow_mut();
+        let config: &mut TableConfig<RowData, TableData> = &mut self.config.borrow_mut();
 
-        ctx.fill(rect, &table_config.header_background.resolve(env));
+        ctx.fill(rect, &config.header_background.resolve(env));
 
-        let cell_size = Size::new(100.0, 40.0); // TODO: column and row size policies
-        let border_thickness = table_config.cell_border_thickness.resolve(env);
-        let border = table_config.cells_border.resolve(env);
+        let cell_size = config.cell_size(data, env);
+        let border_thickness = config.cell_border_thickness.resolve(env);
+        let border = config.cells_border.resolve(env);
         let selected_border = Color::rgb(0xFF, 0, 0);
-        let padding = table_config.cell_padding.resolve(env);
+        let padding = config.cell_padding.resolve(env);
 
-        let mut cell_left = 0.;
+        let (_, start_col) = config.find_cell_coords(data, env, &rect.origin());
+        let (_, end_col) =
+            config.find_cell_coords(data, env, &(rect.origin() + rect.size().to_vec2()));
+
+        let start_col = start_col.unwrap_or(0);
+        let end_col = end_col.unwrap_or(config.columns() - 1);
+
+        let selection = &config.selection;
+        let header_render = &mut config.column_header_render;
+
         let row_top = 0.;
-        let selection = &table_config.selection;
-
-        for (col_idx, col) in table_config.table_columns.iter_mut().enumerate() {
+        let mut cell_left = (start_col as f64) * (cell_size.width + border_thickness);
+        for col_idx in start_col..=end_col {
             let cell_rect = Rect::from_origin_size(Point::new(cell_left, row_top), cell_size);
             let padded_rect = cell_rect.inset(-padding);
-
-            let header_render = &mut table_config.column_header_render;
-
-            ctx.with_save(|ctx| {
-                let layout_origin = padded_rect.origin().to_vec2();
-                ctx.transform(Affine::translate(layout_origin));
-                ctx.with_child_ctx(padded_rect, |ctxt| {
-                    header_render.paint(ctxt, 0, col_idx, &col.header, env);
+            if let Some(col) = config.table_columns.get_mut(col_idx) {
+                ctx.with_save(|ctx| {
+                    let layout_origin = padded_rect.origin().to_vec2();
+                    ctx.clip(padded_rect);
+                    ctx.transform(Affine::translate(layout_origin));
+                    ctx.with_child_ctx(padded_rect, |ctxt| {
+                        header_render.paint(ctxt, 0, col_idx, &col.header, env);
+                    });
                 });
-            });
-            if selection.contains_column(col_idx){
-                ctx.stroke(padded_rect, &selected_border, 2.);
-            }else {
-                ctx.stroke(
-                    Line::new(
-                        Point::new(cell_rect.x1, cell_rect.y0),
-                        Point::new(cell_rect.x1, cell_rect.y1),
-                    ),
-                    &border,
-                    border_thickness,
-                );
-                ctx.stroke(
-                    Line::new(
-                        Point::new(cell_rect.x0, cell_rect.y1),
-                        Point::new(cell_rect.x1, cell_rect.y1),
-                    ),
-                    &border,
-                    border_thickness,
-                );
+                if selection.contains_column(col_idx) {
+                    ctx.stroke(padded_rect, &selected_border, 2.);
+                } else {
+                    ctx.stroke_bottom_left_border(border_thickness, &border, &cell_rect);
+                }
             }
-
             cell_left = cell_rect.x1 + border_thickness;
         }
     }
@@ -462,19 +496,13 @@ where
     TableData: TableRows<RowData>,
 {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut TableData, _env: &Env) {
-        match event{
-            Event::MouseDown(me)=>{
-                let mut config = self.0.borrow_mut();
+        if let Event::MouseDown(me) = event {
+            let mut config = self.0.borrow_mut();
 
-                if let Some(cell) = config.find_cell(_data, _env, &me.pos) {
-                    config.set_selected(ctx, cell.into());
-                    ctx.request_paint();
-                }
-            },
-            // Event::MouseUp(me)=>{
-            //     log::info!("Mouse up {:?}", me)
-            // },
-            _=>()
+            if let Some(cell) = config.find_cell(_data, _env, &me.pos) {
+                config.set_selected(ctx, cell.into());
+                ctx.request_paint();
+            }
         }
     }
 
@@ -494,7 +522,6 @@ where
         _data: &TableData,
         _env: &Env,
     ) {
-
     }
 
     fn layout(
@@ -520,64 +547,80 @@ where
         ctx.fill(rect, &config.cells_background.resolve(env));
 
         let cell_size = config.cell_size(data, env);
+        let border = config.cells_border.resolve(env);
         let border_thickness = config.cell_border_thickness.resolve(env);
         let padding = config.cell_padding.resolve(env);
 
+        let (start_row, start_col) = config.find_cell_coords(data, env, &rect.origin());
+        let (end_row, end_col) =
+            config.find_cell_coords(data, env, &(rect.origin() + rect.size().to_vec2()));
 
+        let start_row = start_row.unwrap_or(0);
+        let end_row = end_row.unwrap_or(data.len() - 1);
+        let start_col = start_col.unwrap_or(0);
+        let end_col = end_col.unwrap_or(config.columns() - 1);
 
-        let start_cell = config.find_cell(data, env, &rect.origin() )
-            .unwrap_or_else(||SingleCell::new(0, 0));
-        let end_cell = config.find_cell(data, env, &(rect.origin() + rect.size().to_vec2()))
-            .unwrap_or_else( ||SingleCell::new(data.len() - 1, config.columns() -1));
+        let mut row_top = (start_row as f64) * (cell_size.height + border_thickness);
 
-        log::info!("Cells rect {:?} start {:?} end {:?} vp off {:?}", rect, start_cell, end_cell, ctx.viewport_offset() );
-
-        ctx.stroke( Line::new( rect.origin(), Point::new(rect.x1, rect.y1) ), &Color::rgb(0xFF, 0, 0), 2.);
-
-        let mut row_top = (start_cell.row as f64) * (cell_size.height + border_thickness);
-
-        for row_idx in start_cell.row ..= end_cell.row
-        {
+        for row_idx in start_row..=end_row {
             data.use_row(row_idx, |row| {
-                let mut cell_left = (start_cell.col as f64) * (cell_size.width + border_thickness);
+                let mut cell_left = (start_col as f64) * (cell_size.width + border_thickness);
 
-                for col_idx in start_cell.col ..= end_cell.col{
-                    let mut col = &mut config.table_columns[col_idx];
+                for col_idx in start_col..=end_col {
+                    let selected = config.selection.get_cell_status(row_idx, col_idx);
+
+                    let col = &mut config.table_columns[col_idx];
                     let cell_rect =
                         Rect::from_origin_size(Point::new(cell_left, row_top), cell_size);
                     let padded_rect = cell_rect.inset(-padding);
 
                     ctx.with_save(|ctx| {
                         let layout_origin = padded_rect.origin().to_vec2();
+                        ctx.clip(padded_rect);
                         ctx.transform(Affine::translate(layout_origin));
                         ctx.with_child_ctx(padded_rect, |ctxt| {
                             col.cell_render.paint(ctxt, row_idx, col_idx, row, env);
                         });
                     });
-                    ctx.stroke(
-                        Line::new(
-                            Point::new(cell_rect.x1, cell_rect.y0),
-                            Point::new(cell_rect.x1, cell_rect.y1),
-                        ),
-                        &Color::BLACK,
-                        border_thickness,
-                    );
-                    ctx.stroke(
-                        Line::new(
-                            Point::new(cell_rect.x0, cell_rect.y1),
-                            Point::new(cell_rect.x1, cell_rect.y1),
-                        ),
-                        &Color::BLACK,
-                        border_thickness,
-                    );
+                    if selected.into() {
+                        ctx.stroke(cell_rect, &Color::rgb(0, 0, 0xFF), border_thickness);
+                    } else {
+                        ctx.stroke_bottom_left_border(border_thickness, &border, &cell_rect);
+                    }
 
-
-                   cell_left = cell_rect.x1 + border_thickness;
+                    cell_left = cell_rect.x1 + border_thickness;
                 }
 
                 row_top += cell_size.height + border_thickness;
             });
         }
-
     }
 }
+
+trait TableRenderContextExt: RenderContext {
+    fn stroke_bottom_left_border(
+        &mut self,
+        border_thickness: f64,
+        border: &impl IntoBrush<Self>,
+        cell_rect: &Rect,
+    ) {
+        self.stroke(
+            Line::new(
+                Point::new(cell_rect.x1, cell_rect.y0),
+                Point::new(cell_rect.x1, cell_rect.y1),
+            ),
+            border,
+            border_thickness,
+        );
+        self.stroke(
+            Line::new(
+                Point::new(cell_rect.x0, cell_rect.y1),
+                Point::new(cell_rect.x1, cell_rect.y1),
+            ),
+            border,
+            border_thickness,
+        );
+    }
+}
+
+impl<R: RenderContext> TableRenderContextExt for R {}
