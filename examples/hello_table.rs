@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRender, CellRenderExt, TableConfig, TextCell};
+use druid_table::{CellRender, CellRenderExt, TextCell, TableBuilder};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -73,7 +73,7 @@ impl CellRender<f64> for PieCell {
 }
 
 fn build_root_widget() -> impl Widget<TableState> {
-    let table_config = TableConfig::<HelloRow, Vector<HelloRow>>::new()
+    let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
         .with_column(
             "Greeting",
@@ -100,7 +100,7 @@ fn build_root_widget() -> impl Widget<TableState> {
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
 
-    table_config.build_widget().lens(TableState::items)
+    table_builder.build_widget().lens(TableState::items)
 }
 
 pub fn main() {

@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRenderExt, TableConfig, TableRows, TextCell};
+use druid_table::{CellRenderExt, TableRows, TextCell, TableBuilder, TableLen};
 
 use druid::{AppLauncher, Data, Lens, Widget, WindowDesc};
 
@@ -18,10 +18,13 @@ struct BigTable {
     rows: usize,
 }
 
-impl TableRows<BigRow> for BigTable {
+impl TableLen for BigTable{
     fn len(&self) -> usize {
         return self.rows;
     }
+}
+
+impl TableRows<BigRow> for BigTable {
 
     fn use_row<V>(&self, idx: usize, f: impl FnOnce(&BigRow) -> V) -> Option<V> {
         if idx < self.rows {
@@ -37,16 +40,16 @@ impl TableRows<BigRow> for BigTable {
 }
 
 fn build_root_widget() -> impl Widget<BigTable> {
-    let mut table_config = TableConfig::<BigRow, BigTable>::new();
+    let mut builder = TableBuilder::<BigRow, BigTable>::new();
 
     for idx in 0..20 {
-        table_config.add_column(
+        builder.add_column(
             format!("Col {:?}", idx),
             TextCell::new().lens(BigRow::row_str),
         );
     }
 
-    table_config.build_widget()
+    builder.build_widget()
 }
 
 pub fn main() {
