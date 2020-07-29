@@ -24,7 +24,7 @@ impl<T> CellRender<T> for Box<dyn CellRender<T>> {
 
 impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
-        if let Some(cell_render) =  self.get_mut(col_idx) {
+        if let Some(cell_render) = self.get_mut(col_idx) {
             cell_render.paint(ctx, row_idx, col_idx, data, env)
         }
     }
@@ -153,13 +153,13 @@ struct TableColumn<T: Data, CR: CellRender<T>> {
     phantom_: PhantomData<T>,
 }
 
-impl <T: Data, CR: CellRender<T>> CellRender<T> for TableColumn<T, CR>{
+impl<T: Data, CR: CellRender<T>> CellRender<T> for TableColumn<T, CR> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         self.cell_render.paint(ctx, row_idx, col_idx, data, env)
     }
 }
 
-pub trait TableLen: Data{
+pub trait TableLen: Data {
     fn len(&self) -> usize;
 
     fn is_empty(&self) -> bool {
@@ -171,7 +171,7 @@ pub trait TableRows<RowData: Data>: TableLen {
     fn use_row<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V>;
 }
 
-impl <T: Data> TableLen for Vector<T> {
+impl<T: Data> TableLen for Vector<T> {
     fn len(&self) -> usize {
         self.len()
     }
@@ -207,11 +207,11 @@ pub enum IndicesSelection {
     //Range(from, to)
 }
 
-impl IndicesSelection{
-    fn index_selected(&self, idx: usize)->bool {
+impl IndicesSelection {
+    fn index_selected(&self, idx: usize) -> bool {
         match self {
             IndicesSelection::Single(sel_idx) if *sel_idx == idx => true,
-            _ => false
+            _ => false,
         }
     }
 }
@@ -246,7 +246,6 @@ impl From<SingleCell> for TableSelection {
 }
 
 impl TableSelection {
-
     fn to_column_selection(&self) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
@@ -275,12 +274,63 @@ pub struct TableConfig {
     cells_background: KeyOrValue<Color>,
     cells_border: KeyOrValue<Color>,
     cell_border_thickness: KeyOrValue<f64>,
-    cell_padding: KeyOrValue<f64>
+    cell_padding: KeyOrValue<f64>,
 }
 
-pub struct ResolvedTableConfig{
-    rows: usize,
-    columns: usize,
+struct FixedSizeAxis {
+    pixels_per_unit: f64,
+    border: f64,
+    len: usize,
+}
+
+impl FixedSizeAxis {
+    fn new(pixels_per_unit: f64, border: f64, len: usize) -> FixedSizeAxis {
+        FixedSizeAxis {
+            pixels_per_unit,
+            border,
+            len,
+        }
+    }
+
+    fn full_pixels_per_unit(&self) -> f64 {
+        // TODO: Priv
+        self.pixels_per_unit + self.border
+    }
+
+    fn total_pixel_length(&self) -> f64 {
+        self.full_pixels_per_unit() * (self.len as f64)
+    }
+
+    fn index_from_pixel(&self, pixel: f64) -> Option<usize> {
+        let index = (pixel / self.full_pixels_per_unit()).floor() as usize;
+        if index < self.len {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    fn index_range_from_pixels(&self, p0: f64, p1: f64) -> (usize, usize) {
+        let start = self.index_from_pixel(p0);
+        let end = self.index_from_pixel(p1);
+
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(self.len - 1);
+        (start, end)
+    }
+
+    fn first_pixel_from_index(&self, idx: usize) -> f64 {
+        (idx as f64) * self.full_pixels_per_unit()
+    }
+
+    fn pixels_for_idx(&self, _idx: usize) -> f64 {
+        self.pixels_per_unit
+    }
+}
+
+pub struct ResolvedTableConfig {
+    rows: FixedSizeAxis,
+    columns: FixedSizeAxis,
     header_background: Color,
     cells_background: Color,
     cells_border: Color,
@@ -289,21 +339,22 @@ pub struct ResolvedTableConfig{
 }
 
 impl TableConfig {
-
-    fn new() -> TableConfig{
+    fn new() -> TableConfig {
         TableConfig {
             header_background: theme::BACKGROUND_LIGHT.into(),
             cells_background: theme::LABEL_COLOR.into(),
             cells_border: theme::BORDER_LIGHT.into(),
             cell_border_thickness: 1.0.into(),
-            cell_padding: 2.0.into()
+            cell_padding: 2.0.into(),
         }
     }
 
-    fn resolve(&self, rows: usize, columns: usize, env: &Env)->ResolvedTableConfig{
-        ResolvedTableConfig{
-            rows,
-            columns,
+    fn resolve(&self, rows: usize, columns: usize, env: &Env) -> ResolvedTableConfig {
+        let border = self.cell_border_thickness.resolve(env);
+
+        ResolvedTableConfig {
+            rows: FixedSizeAxis::new(40., border, rows),
+            columns: FixedSizeAxis::new(100., border, columns),
             header_background: self.header_background.resolve(env),
             cells_background: self.cells_background.resolve(env),
             cells_border: self.cells_border.resolve(env),
@@ -311,20 +362,12 @@ impl TableConfig {
             cell_padding: self.cell_padding.resolve(env),
         }
     }
-
 }
 
-impl ResolvedTableConfig{
+impl ResolvedTableConfig {
     fn cell_size(&self) -> Size {
-        Size::new(100., 40.) // TODO: Size policies (measure or fixed).
-        // Callers of this will need to delegate a lot more to handle measured cells.
-    }
-
-    //TODO: Measure content or fixed sizes per axis
-    fn full_cell_size(&self) -> Size {
-        let cs = self.cell_size();
-        Size::new(self.cell_border_thickness + cs.width,
-                  self.cell_border_thickness + cs.height)
+        Size::new(self.columns.pixels_per_unit, self.rows.pixels_per_unit) // TODO: Size policies (measure or fixed).
+                                                                           // Callers of this will need to delegate a lot more to handle measured cells.
     }
 
     fn find_cell(&self, pos: &Point) -> Option<SingleCell> {
@@ -332,24 +375,17 @@ impl ResolvedTableConfig{
         Some(SingleCell::new(r?, c?))
     }
 
-    fn find_cell_coords(
-        &self,
-        pos: &Point,
-    ) -> (Option<usize>, Option<usize>) {
-        let cs = self.full_cell_size(); //TODO: Need vectors of border positions
-        let col = (pos.x / cs.width).floor() as usize;
-        let row = (pos.y / cs.height).floor() as usize;
+    fn find_cell_coords(&self, pos: &Point) -> (Option<usize>, Option<usize>) {
         (
-            if row < self.rows { Some(row) } else { None },
-            if col < self.columns { Some(col) } else { None },
+            self.rows.index_from_pixel(pos.y),
+            self.columns.index_from_pixel(pos.x),
         )
     }
 
     fn ch_get_desired_size(&self) -> Size {
-        let cell_size = self.full_cell_size();
         Size::new(
-            cell_size.width * (self.columns as f64),
-            cell_size.height,
+            self.columns.total_pixel_length(),
+            self.rows.full_pixels_per_unit(),
         )
     }
 }
@@ -399,8 +435,11 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
     }
 
     pub fn build_widget(self) -> Align<TableData> {
-
-        let column_names = self.table_columns.iter().map(|tc| tc.header.clone()).collect();
+        let column_names = self
+            .table_columns
+            .iter()
+            .map(|tc| tc.header.clone())
+            .collect();
 
         let column_headers_id = WidgetId::next();
         let column_headers_scroll_id = WidgetId::next();
@@ -408,13 +447,16 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
         let headings = ColumnHeadings::new(
             self.table_config.clone(),
             column_names,
-            self.column_header_render
-        ).with_id(column_headers_id);
+            self.column_header_render,
+        )
+        .with_id(column_headers_id);
 
         let ch_scroll = Scroll::new(headings).with_id(column_headers_scroll_id);
-        let mut cells = Cells::new(self.table_config.clone(),
-                                   self.table_columns.len(),
-                                   self.table_columns);
+        let mut cells = Cells::new(
+            self.table_config.clone(),
+            self.table_columns.len(),
+            self.table_columns,
+        );
         cells.add_selection_handler(move |ctxt, table_sel| {
             let column_sel = table_sel.to_column_selection();
             ctxt.submit_command(SELECT_INDICES.with(column_sel), column_headers_id);
@@ -431,7 +473,6 @@ impl<RowData: Data, TableData: TableRows<RowData>> TableBuilder<RowData, TableDa
             .with_flex_child(cells_scroll, 1.)
             .center()
     }
-
 }
 
 pub struct ColumnHeadings<TableData: Data, ColumnHeader: Data, CR: CellRender<ColumnHeader>> {
@@ -439,21 +480,24 @@ pub struct ColumnHeadings<TableData: Data, ColumnHeader: Data, CR: CellRender<Co
     column_headers: Vec<ColumnHeader>,
     column_header_render: CR,
     selection: IndicesSelection,
-    phantom_td: PhantomData<TableData>
+    phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData: Data,
-    ColumnHeader: Data,
-    CR: CellRender<ColumnHeader>> ColumnHeadings<TableData, ColumnHeader, CR> {
+impl<TableData: Data, ColumnHeader: Data, CR: CellRender<ColumnHeader>>
+    ColumnHeadings<TableData, ColumnHeader, CR>
+{
     fn new(
         config: TableConfig,
         column_names: Vec<ColumnHeader>,
         column_header_render: CR,
     ) -> ColumnHeadings<TableData, ColumnHeader, CR> {
-        ColumnHeadings { config,
+        ColumnHeadings {
+            config,
             column_headers: column_names,
-            column_header_render, selection: IndicesSelection::NoSelection,
-            phantom_td: PhantomData::default()}
+            column_header_render,
+            selection: IndicesSelection::NoSelection,
+            phantom_td: PhantomData::default(),
+        }
     }
 }
 
@@ -497,35 +541,34 @@ impl<TableData: TableLen, ColumnHeader: Data, CR: CellRender<ColumnHeader>> Widg
         env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
-        let rtc = self.config.resolve(data.len(), self.column_headers.len(), env);
+        let rtc = self
+            .config
+            .resolve(data.len(), self.column_headers.len(), env);
 
         bc.constrain(rtc.ch_get_desired_size())
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
         let rect = ctx.region().to_rect();
-        let rtc = self.config.resolve(data.len(), self.column_headers.len(), env);
+        let rtc = self
+            .config
+            .resolve(data.len(), self.column_headers.len(), env);
 
         ctx.fill(rect, &rtc.header_background);
 
-        let cell_size = rtc.cell_size();
-
         let selected_border = Color::rgb(0xFF, 0, 0);
+        let (start_col, end_col) = rtc.columns.index_range_from_pixels(rect.x0, rect.x1);
 
-        let (_, start_col) = rtc.find_cell_coords(&rect.origin());
-        let (_, end_col) =
-            rtc.find_cell_coords(&(rect.origin() + rect.size().to_vec2()));
-
-        let start_col = start_col.unwrap_or(0);
-        let end_col = end_col.unwrap_or(self.column_headers.len() - 1);
-
-        let selection = &self.selection;
         let header_render = &mut self.column_header_render;
 
-        let row_top = 0.;
-        let mut cell_left = (start_col as f64) * (cell_size.width + rtc.cell_border_thickness);
         for col_idx in start_col..=end_col {
-            let cell_rect = Rect::from_origin_size(Point::new(cell_left, row_top), cell_size);
+            let cell_rect = Rect::from_origin_size(
+                Point::new(rtc.columns.first_pixel_from_index(col_idx), 0.),
+                Size::new(
+                    rtc.columns.pixels_for_idx(col_idx),
+                    rtc.rows.pixels_per_unit, // TODO separate column header height
+                ),
+            );
             let padded_rect = cell_rect.inset(-rtc.cell_padding);
             if let Some(col_name) = self.column_headers.get(col_idx) {
                 ctx.with_save(|ctx| {
@@ -536,13 +579,16 @@ impl<TableData: TableLen, ColumnHeader: Data, CR: CellRender<ColumnHeader>> Widg
                         header_render.paint(ctxt, 0, col_idx, col_name, env);
                     });
                 });
-                if selection.index_selected(col_idx) {
-                    ctx.stroke(padded_rect, &selected_border, 2.);
-                } else {
-                    ctx.stroke_bottom_left_border(rtc.cell_border_thickness, &rtc.cells_border, &cell_rect);
-                }
             }
-            cell_left = cell_rect.x1 + rtc.cell_border_thickness;
+            if self.selection.index_selected(col_idx) {
+                ctx.stroke(padded_rect, &selected_border, 2.);
+            } else {
+                ctx.stroke_bottom_left_border(
+                    rtc.cell_border_thickness,
+                    &rtc.cells_border,
+                    &cell_rect,
+                );
+            }
         }
     }
 }
@@ -554,11 +600,11 @@ pub struct Cells<RowData: Data, TableData: Data, CR: CellRender<RowData>> {
     columns: usize,
     cell_render: CR,
     phantom_rd: PhantomData<RowData>,
-    phantom_td: PhantomData<TableData>
+    phantom_td: PhantomData<TableData>,
 }
 
 impl<RowData: Data, TableData: Data, CR: CellRender<RowData>> Cells<RowData, TableData, CR> {
-    fn new(config: TableConfig, columns: usize, cell_render:CR) -> Cells<RowData, TableData, CR> {
+    fn new(config: TableConfig, columns: usize, cell_render: CR) -> Cells<RowData, TableData, CR> {
         Cells {
             config,
             selection_handlers: Vec::new(),
@@ -566,7 +612,7 @@ impl<RowData: Data, TableData: Data, CR: CellRender<RowData>> Cells<RowData, Tab
             columns,
             cell_render,
             phantom_rd: PhantomData::default(),
-            phantom_td: PhantomData::default()
+            phantom_td: PhantomData::default(),
         }
     }
 
@@ -586,9 +632,11 @@ impl<RowData: Data, TableData: Data, CR: CellRender<RowData>> Cells<RowData, Tab
     }
 }
 
-impl<RowData: Data, TableData: Data, CR: CellRender<RowData>> Widget<TableData> for Cells<RowData, TableData, CR>
+impl<RowData, TableData, CR> Widget<TableData> for Cells<RowData, TableData, CR>
 where
     TableData: TableRows<RowData>,
+    RowData: Data,
+    CR: CellRender<RowData>,
 {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableData, env: &Env) {
         let mut new_selection: Option<TableSelection> = None;
@@ -601,7 +649,7 @@ where
             }
         }
 
-        if let Some(sel) = new_selection{
+        if let Some(sel) = new_selection {
             self.set_selection(ctx, sel);
         }
     }
@@ -633,10 +681,9 @@ where
     ) -> Size {
         bc.debug_check("TableCells");
         let table_config = self.config.resolve(data.len(), self.columns, env);
-        let cell_size = table_config.full_cell_size();
         bc.constrain(Size::new(
-            cell_size.width * (table_config.columns as f64),
-            cell_size.height * (table_config.rows as f64),
+            table_config.columns.total_pixel_length(),
+            table_config.rows.total_pixel_length(),
         ))
     }
 
@@ -646,30 +693,20 @@ where
 
         ctx.fill(rect, &rtc.cells_background);
 
-        let cell_size = rtc.cell_size();
-
-        let (start_row, start_col) = rtc.find_cell_coords(&rect.origin());
-        let (end_row, end_col) =
-            rtc.find_cell_coords( &(rect.origin() + rect.size().to_vec2()));
-
-        let start_row = start_row.unwrap_or(0);
-        let end_row = end_row.unwrap_or(data.len() - 1);
-        let start_col = start_col.unwrap_or(0);
-        let end_col = end_col.unwrap_or(self.columns - 1);
-
-        let mut row_top = (start_row as f64) * (cell_size.height + rtc.cell_border_thickness);
+        let (start_row, end_row) = rtc.rows.index_range_from_pixels(rect.y0, rect.y1);
+        let (start_col, end_col) = rtc.columns.index_range_from_pixels(rect.x0, rect.x1);
 
         for row_idx in start_row..=end_row {
+            let row_top = rtc.rows.first_pixel_from_index(row_idx);
+            let cell_size = rtc.cell_size();
             data.use_row(row_idx, |row| {
-                let mut cell_left = (start_col as f64) * (cell_size.width + rtc.cell_border_thickness);
-
                 for col_idx in start_col..=end_col {
+                    let cell_left = rtc.columns.first_pixel_from_index(col_idx);
                     let selected = (&self.selection).get_cell_status(row_idx, col_idx);
 
                     let cell_rect =
                         Rect::from_origin_size(Point::new(cell_left, row_top), cell_size);
                     let padded_rect = cell_rect.inset(-rtc.cell_padding);
-
 
                     ctx.with_save(|ctx| {
                         let layout_origin = padded_rect.origin().to_vec2();
@@ -681,20 +718,23 @@ where
                     });
 
                     if selected.into() {
-                        ctx.stroke(cell_rect, &Color::rgb(0, 0, 0xFF), rtc.cell_border_thickness);
+                        ctx.stroke(
+                            cell_rect,
+                            &Color::rgb(0, 0, 0xFF),
+                            rtc.cell_border_thickness,
+                        );
                     } else {
-                        ctx.stroke_bottom_left_border(rtc.cell_border_thickness, &rtc.cells_border, &cell_rect);
+                        ctx.stroke_bottom_left_border(
+                            rtc.cell_border_thickness,
+                            &rtc.cells_border,
+                            &cell_rect,
+                        );
                     }
-
-                    cell_left = cell_rect.x1 + rtc.cell_border_thickness;
                 }
-
-                row_top += cell_size.height + rtc.cell_border_thickness;
             });
         }
     }
 }
-
 
 trait TableRenderContextExt: RenderContext {
     fn stroke_bottom_left_border(
@@ -723,5 +763,3 @@ trait TableRenderContextExt: RenderContext {
 }
 
 impl<R: RenderContext> TableRenderContextExt for R {}
-
-
