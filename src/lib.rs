@@ -10,7 +10,7 @@ mod render_ext;
 mod selection;
 
 pub use axis_measure::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, ADJUST_AXIS_MEASURE};
-pub use builder::{build_table, TableBuilder};
+pub use builder::{build_table, TableBuilder, AxisBuild};
 pub use cell_render::{CellRender, CellRenderExt, TextCell};
 pub use cells::Cells;
 pub use config::TableConfig;

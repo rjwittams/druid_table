@@ -1,5 +1,5 @@
 use druid_table::{
-    build_table, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen,
+    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen,
     ItemsUse, TableConfig, TextCell,
 };
 
@@ -57,21 +57,25 @@ fn build_root_widget() -> impl Widget<NumbersTable> {
     let inner_render = TextCell::new().on_result_of(|br: &usize| br.to_string());
 
     let columns = 1_000_000_000;
+    let rows= AxisBuild::new(HeadersFromIndices::new(),
+                             FixedAxisMeasure::new(25.),
+                             TextCell::new()
+                                 .text_color(Color::WHITE)
+                                 .on_result_of(|br: &usize| br.to_string()));
+
+    let cols = AxisBuild::new(ManyColumns::new(inner_render, columns),
+                              FixedAxisMeasure::new(100.),
+                              TextCell::new()
+                                  .text_color(Color::WHITE)
+                                  .on_result_of(|br: &usize| br.to_string()));
+
     build_table(
         ManyColumns::new(
             TextCell::new().on_result_of(|br: &usize| br.to_string()),
             columns,
         ),
-        HeadersFromIndices::new(),
-        FixedAxisMeasure::new(25.),
-        TextCell::new()
-            .text_color(Color::WHITE)
-            .on_result_of(|br: &usize| br.to_string()),
-        ManyColumns::new(inner_render, columns),
-        FixedAxisMeasure::new(100.),
-        TextCell::new()
-            .text_color(Color::WHITE)
-            .on_result_of(|br: &usize| br.to_string()),
+        rows,
+        cols,
         table_config,
     )
 }

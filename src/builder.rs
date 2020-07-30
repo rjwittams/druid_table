@@ -2,7 +2,7 @@ use crate::cell_render::{CellRender, CellRenderExt, TableColumn, TextCell};
 use crate::cells::*;
 
 use crate::axis_measure::{
-    AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE,
+    AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE,
 };
 use crate::config::TableConfig;
 use crate::data::{ItemsLen, ItemsUse, TableRows};
@@ -214,7 +214,7 @@ pub fn build_table<
 
     let rh_col = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_spacer(table_config.header_height)
+        .with_spacer(table_config.col_header_height)
         .with_flex_child(row_scroll, 1.);
 
     Flex::row()

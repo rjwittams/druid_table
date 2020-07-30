@@ -235,7 +235,10 @@ where
     ) -> Size {
         bc.debug_check("ColumnHeadings");
         let cross_axis_length = if let Some(rc) = &self.resolved_config {
-            rc.header_height
+            match self.axis{
+                TableAxis::Columns => rc.col_header_height,
+                TableAxis::Rows => rc.row_header_width
+            }
         } else {
             self.axis.default_header_cross()
         };
@@ -263,7 +266,7 @@ where
                 let length_pix = self.measure.pixels_length_for_index(main_idx).unwrap_or(0.);
                 let origin = self.axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
-                let size = self.axis.size(length_pix, rtc.header_height /*TODO */);
+                let size = self.axis.size(length_pix, rtc.cross_axis_length(&self.axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
                 headers.use_item(main_idx, |col_name| {
