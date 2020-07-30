@@ -1,4 +1,4 @@
-use druid::{EventCtx, Point, Rect, Selector, Size, Cursor};
+use druid::{Cursor, EventCtx, Point, Rect, Selector, Size};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -57,10 +57,10 @@ impl TableAxis {
         self.coords(main, cross).into()
     }
 
-    pub fn resize_cursor(&self)->&'static Cursor{
-        match self{
+    pub fn resize_cursor(&self) -> &'static Cursor {
+        match self {
             Rows => &Cursor::ResizeUpDown,
-            Columns => &Cursor::ResizeLeftRight
+            Columns => &Cursor::ResizeLeftRight,
         }
     }
 }

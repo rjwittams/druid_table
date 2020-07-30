@@ -105,15 +105,16 @@ where
             }
             Event::Command(cmd) => {
                 if cmd.is(ADJUST_AXIS_MEASURE) {
-                    if let Some(AxisMeasureAdjustment::LengthChanged(
-                        axis,
-                        idx,
-                        length,
-                    )) = cmd.get(ADJUST_AXIS_MEASURE)
+                    if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
+                        cmd.get(ADJUST_AXIS_MEASURE)
                     {
                         match axis {
-                            TableAxis::Rows => self.row_measure.set_pixel_length_for_idx(*idx, *length),
-                            TableAxis::Columns => self.column_measure.set_pixel_length_for_idx(*idx, *length)
+                            TableAxis::Rows => {
+                                self.row_measure.set_pixel_length_for_idx(*idx, *length)
+                            }
+                            TableAxis::Columns => {
+                                self.column_measure.set_pixel_length_for_idx(*idx, *length)
+                            }
                         };
                         ctx.request_layout();
                     }

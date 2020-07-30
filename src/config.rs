@@ -1,5 +1,5 @@
-use druid::{theme, Color, Env, KeyOrValue};
 use crate::axis_measure::TableAxis;
+use druid::{theme, Color, Env, KeyOrValue};
 
 pub(crate) const DEFAULT_COL_HEADER_HEIGHT: f64 = 25.0;
 pub(crate) const DEFAULT_ROW_HEADER_WIDTH: f64 = 100.0;
@@ -25,11 +25,11 @@ pub struct ResolvedTableConfig {
     pub(crate) cell_padding: f64,
 }
 
-impl ResolvedTableConfig{
+impl ResolvedTableConfig {
     pub(crate) fn cross_axis_length(&self, axis: &TableAxis) -> f64 {
         match axis {
             TableAxis::Columns => self.col_header_height,
-            TableAxis::Rows => self.row_header_width
+            TableAxis::Rows => self.row_header_width,
         }
     }
 }

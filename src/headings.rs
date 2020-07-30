@@ -21,9 +21,10 @@ pub trait HeadersFromData<TableData, Header: Data, Headers: ItemsUse<Item = Head
     fn get_headers(&self, table_data: &TableData) -> Headers;
 }
 
-impl<TableData, Header, Headers>
-    HeadersFromData<TableData, Header, Headers> for Headers where
-    Header: Data, Headers: ItemsUse<Item = Header> + Clone
+impl<TableData, Header, Headers> HeadersFromData<TableData, Header, Headers> for Headers
+where
+    Header: Data,
+    Headers: ItemsUse<Item = Header> + Clone,
 {
     fn get_headers(&self, _table_data: &TableData) -> Headers {
         (*self).clone()
@@ -159,9 +160,7 @@ where
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.dragging {
-
-                    self.set_pix_length_for_axis(ctx, idx,
-                                                 pix_main);
+                    self.set_pix_length_for_axis(ctx, idx, pix_main);
                     if me.buttons.is_empty() {
                         self.dragging = None;
                     }
@@ -235,9 +234,9 @@ where
     ) -> Size {
         bc.debug_check("ColumnHeadings");
         let cross_axis_length = if let Some(rc) = &self.resolved_config {
-            match self.axis{
+            match self.axis {
                 TableAxis::Columns => rc.col_header_height,
-                TableAxis::Rows => rc.row_header_width
+                TableAxis::Rows => rc.row_header_width,
             }
         } else {
             self.axis.default_header_cross()
@@ -266,7 +265,9 @@ where
                 let length_pix = self.measure.pixels_length_for_index(main_idx).unwrap_or(0.);
                 let origin = self.axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
-                let size = self.axis.size(length_pix, rtc.cross_axis_length(&self.axis));
+                let size = self
+                    .axis
+                    .size(length_pix, rtc.cross_axis_length(&self.axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
                 headers.use_item(main_idx, |col_name| {

@@ -1,9 +1,7 @@
 use crate::cell_render::{CellRender, CellRenderExt, TableColumn, TextCell};
 use crate::cells::*;
 
-use crate::axis_measure::{
-    AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE,
-};
+use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::config::TableConfig;
 use crate::data::{ItemsLen, ItemsUse, TableRows};
 use crate::headings::{HeadersFromData, HeadersFromIndices, Headings};
@@ -168,7 +166,9 @@ pub fn build_table<
         ctx.submit_command(ADJUST_AXIS_MEASURE.with(*adj), cells_id);
     });
 
-    let ch_scroll = Scroll::new(col_headings.with_id(column_headers_id)).with_id(column_scroll_id);
+    let ch_scroll = Scroll::new(col_headings.with_id(column_headers_id))
+        .disable_scrollbars()
+        .with_id(column_scroll_id);
 
     let mut cells = Cells::new(
         table_config.clone(),
@@ -210,7 +210,9 @@ pub fn build_table<
         ctx.submit_command(ADJUST_AXIS_MEASURE.with(*adj), cells_id);
     });
 
-    let row_scroll = Scroll::new(row_headings.with_id(row_headers_id)).with_id(row_scroll_id);
+    let row_scroll = Scroll::new(row_headings.with_id(row_headers_id))
+        .disable_scrollbars()
+        .with_id(row_scroll_id);
 
     let rh_col = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
