@@ -1,8 +1,12 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRenderExt, TableRows, TextCell, TableBuilder, TableLen};
+use druid_table::{
+    build_table, CellRender, CellRenderExt, FixedSizeAxis, ItemsLen, ItemsUse, TableConfig,
+    TextCell,
+};
 
-use druid::{AppLauncher, Data, Lens, Widget, WindowDesc};
+use druid::{AppLauncher, Color, Data, Env, Lens, PaintCtx, Widget, WindowDesc};
+use std::marker::PhantomData;
 
 #[macro_use]
 extern crate log;
@@ -10,7 +14,6 @@ extern crate log;
 #[derive(Debug, Data, Clone, Lens)]
 struct BigRow {
     row: usize,
-    row_str: String,
 }
 
 #[derive(Debug, Data, Clone, Lens)]
@@ -18,20 +21,17 @@ struct BigTable {
     rows: usize,
 }
 
-impl TableLen for BigTable{
+impl ItemsLen for BigTable {
     fn len(&self) -> usize {
         return self.rows;
     }
 }
 
-impl TableRows<BigRow> for BigTable {
-
-    fn use_row<V>(&self, idx: usize, f: impl FnOnce(&BigRow) -> V) -> Option<V> {
+impl ItemsUse for BigTable {
+    type Item = BigRow;
+    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&BigRow) -> V) -> Option<V> {
         if idx < self.rows {
-            let temp = BigRow {
-                row: idx,
-                row_str: idx.to_string(),
-            };
+            let temp = BigRow { row: idx };
             Some(f(&temp))
         } else {
             None
@@ -39,17 +39,68 @@ impl TableRows<BigRow> for BigTable {
     }
 }
 
-fn build_root_widget() -> impl Widget<BigTable> {
-    let mut builder = TableBuilder::<BigRow, BigTable>::new();
+#[derive(Clone)]
+struct ManyColumns<T, CR: CellRender<T>> {
+    inner: CR,
+    columns: usize,
+    phantom_t: PhantomData<T>,
+}
 
-    for idx in 0..20 {
-        builder.add_column(
-            format!("Col {:?}", idx),
-            TextCell::new().lens(BigRow::row_str),
-        );
+impl<T, CR: CellRender<T>> ManyColumns<T, CR> {
+    fn new(inner: CR, columns: usize) -> ManyColumns<T, CR> {
+        ManyColumns {
+            inner,
+            columns,
+            phantom_t: PhantomData::default(),
+        }
     }
+}
 
-    builder.build_widget()
+impl<T, CR: CellRender<T>> CellRender<T> for ManyColumns<T, CR> {
+    fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
+        self.inner.paint(ctx, row_idx, col_idx, data, env)
+    }
+}
+
+impl<T, CR: CellRender<T>> ItemsLen for ManyColumns<T, CR> {
+    fn len(&self) -> usize {
+        self.columns
+    }
+}
+
+impl<CR: CellRender<usize>> ItemsUse for ManyColumns<usize, CR> {
+    type Item = usize;
+
+    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
+        if idx < self.columns {
+            Some(f(&idx))
+        } else {
+            None
+        }
+    }
+}
+
+fn build_root_widget() -> impl Widget<BigTable> {
+    let table_config = TableConfig::new();
+
+    let inner_render = TextCell::new()
+        .on_result_of(|br: &usize| br.to_string())
+        .lens(BigRow::row);
+
+    let columns = 1_000_000_000;
+    build_table(
+        ManyColumns::new(
+            TextCell::new().on_result_of(|br: &usize| br.to_string()),
+            columns,
+        ),
+        ManyColumns::new(inner_render, columns),
+        FixedSizeAxis::new(25.),
+        FixedSizeAxis::new(100.),
+        TextCell::new()
+            .text_color(Color::WHITE)
+            .on_result_of(|br: &usize| br.to_string()),
+        table_config,
+    )
 }
 
 pub fn main() {

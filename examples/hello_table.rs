@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRender, CellRenderExt, TextCell, TableBuilder};
+use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
