@@ -1,25 +1,27 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Color, Data, Env, Event, EventCtx,
-            LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect,
-            Size, UpdateCtx, Widget, Cursor};
+use druid::{
+    Affine, BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
+    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+};
 
-
+use crate::axis_measure::{
+    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, TableAxis,
+};
 use crate::cell_render::CellRender;
+use crate::config::{ResolvedTableConfig, TableConfig, DEFAULT_HEADER_HEIGHT};
 use crate::data::ItemsUse;
-use crate::selection::{IndicesSelection, SELECT_INDICES};
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, AxisMeasureAdjustmentHandler};
-use crate::config::{TableConfig, ResolvedTableConfig, DEFAULT_HEADER_HEIGHT};
 use crate::render_ext::RenderContextExt;
+use crate::selection::{IndicesSelection, SELECT_INDICES};
 
 pub struct ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
-    where
-        TableData: Data,
-        ColumnHeader: Data,
-        ColumnHeaders: ItemsUse<Item = ColumnHeader>,
-        Render: CellRender<ColumnHeader>,
-        ColumnMeasure: AxisMeasure,
+where
+    TableData: Data,
+    ColumnHeader: Data,
+    ColumnHeaders: ItemsUse<Item = ColumnHeader>,
+    Render: CellRender<ColumnHeader>,
+    ColumnMeasure: AxisMeasure,
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
@@ -30,17 +32,17 @@ pub struct ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, Column
     selection: IndicesSelection,
     phantom_td: PhantomData<TableData>,
     phantom_ch: PhantomData<ColumnHeader>,
-    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
+    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
 }
 
 impl<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
-ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
-    where
-        TableData: Data,
-        ColumnHeader: Data,
-        ColumnHeaders: ItemsUse<Item = ColumnHeader>,
-        Render: CellRender<ColumnHeader>,
-        ColumnMeasure: AxisMeasure,
+    ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
+where
+    TableData: Data,
+    ColumnHeader: Data,
+    ColumnHeaders: ItemsUse<Item = ColumnHeader>,
+    Render: CellRender<ColumnHeader>,
+    ColumnMeasure: AxisMeasure,
 {
     pub fn new(
         config: TableConfig,
@@ -58,11 +60,14 @@ ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
             selection: IndicesSelection::NoSelection,
             phantom_td: PhantomData::default(),
             phantom_ch: PhantomData::default(),
-            measure_adjustment_handlers: Default::default()
+            measure_adjustment_handlers: Default::default(),
         }
     }
 
-    pub fn add_axis_measure_adjustment_handler(&mut self, handler: impl Fn(&mut EventCtx, &AxisMeasureAdjustment) + 'static){
+    pub fn add_axis_measure_adjustment_handler(
+        &mut self,
+        handler: impl Fn(&mut EventCtx, &AxisMeasureAdjustment) + 'static,
+    ) {
         self.measure_adjustment_handlers.push(Box::new(handler))
     }
 
@@ -74,20 +79,16 @@ ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
         }
         ctx.request_layout();
     }
-
 }
 
-
-
-
 impl<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure> Widget<TableData>
-for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
-    where
-        TableData: Data,
-        ColumnHeader: Data,
-        ColumnHeaders: ItemsUse<Item = ColumnHeader>,
-        Render: CellRender<ColumnHeader>,
-        ColumnMeasure: AxisMeasure,
+    for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure>
+where
+    TableData: Data,
+    ColumnHeader: Data,
+    ColumnHeaders: ItemsUse<Item = ColumnHeader>,
+    Render: CellRender<ColumnHeader>,
+    ColumnMeasure: AxisMeasure,
 {
     fn event(&mut self, ctx: &mut EventCtx, _event: &Event, _data: &mut TableData, _env: &Env) {
         match _event {
@@ -98,11 +99,11 @@ for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure
                         ctx.request_paint()
                     }
                 }
-            },
+            }
             Event::MouseMove(me) => {
-                if let Some(idx) = self.dragging{
-                    self.set_column_width(ctx,  idx, me.pos.x);
-                    if me.buttons.is_empty(){
+                if let Some(idx) = self.dragging {
+                    self.set_column_width(ctx, idx, me.pos.x);
+                    if me.buttons.is_empty() {
                         self.dragging = None;
                     }
                 } else {
@@ -115,16 +116,16 @@ for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure
                     }
                     ctx.set_cursor(cursor);
                 }
-            },
+            }
             Event::MouseDown(me) => {
                 if let Some(idx) = self.column_measure.pixel_near_border(me.pos.x) {
                     if idx > 0 && self.column_measure.can_resize(idx - 1) {
                         self.dragging = Some(idx - 1)
                     }
                 }
-            },
+            }
             Event::MouseUp(me) => {
-                if let Some(idx) = self.dragging{
+                if let Some(idx) = self.dragging {
                     self.set_column_width(ctx, idx, me.pos.x);
                     self.dragging = None;
                 }
@@ -189,9 +190,16 @@ for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure
 
             for col_idx in start_col..=end_col {
                 let cell_rect = Rect::from_origin_size(
-                    Point::new(self.column_measure.first_pixel_from_index(col_idx).unwrap_or(0.), 0.),
+                    Point::new(
+                        self.column_measure
+                            .first_pixel_from_index(col_idx)
+                            .unwrap_or(0.),
+                        0.,
+                    ),
                     Size::new(
-                        self.column_measure.pixels_length_for_index(col_idx).unwrap_or(0.),
+                        self.column_measure
+                            .pixels_length_for_index(col_idx)
+                            .unwrap_or(0.),
                         rtc.header_height,
                     ),
                 );
@@ -219,4 +227,3 @@ for ColumnHeadings<TableData, ColumnHeader, ColumnHeaders, Render, ColumnMeasure
         }
     }
 }
-

@@ -1,4 +1,4 @@
-use druid::{KeyOrValue, Color, theme, Env};
+use druid::{theme, Color, Env, KeyOrValue};
 
 pub(crate) const DEFAULT_HEADER_HEIGHT: f64 = 25.0;
 

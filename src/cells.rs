@@ -1,19 +1,17 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Color, Data, Env, Event, EventCtx,
-            LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect,
-            Size, UpdateCtx, Widget};
+use druid::{
+    Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
+    PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+};
 
-
-use crate::cell_render::{CellRender};
-use crate::data::{ItemsLen, TableRows};
-use crate::selection::{TableSelection, SelectionHandler, SingleCell};
 use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE};
-use crate::config::{TableConfig, ResolvedTableConfig};
+use crate::cell_render::CellRender;
+use crate::config::{ResolvedTableConfig, TableConfig};
+use crate::data::{ItemsLen, TableRows};
 use crate::render_ext::RenderContextExt;
-
-
+use crate::selection::{SelectionHandler, SingleCell, TableSelection};
 
 pub struct Cells<RowData, TableData, Render, RowMeasure, ColumnMeasure>
 where
@@ -106,14 +104,19 @@ where
                 }
             }
             Event::Command(cmd) => {
-                if cmd.is(ADJUST_AXIS_MEASURE){
-                   if let Some(AxisMeasureAdjustment::LengthChanged(TableAxis::Columns, idx, length)) = cmd.get(ADJUST_AXIS_MEASURE){
-                       self.column_measure.set_pixel_length_for_idx(*idx, *length);
-                       ctx.request_layout();
-                   }
+                if cmd.is(ADJUST_AXIS_MEASURE) {
+                    if let Some(AxisMeasureAdjustment::LengthChanged(
+                        TableAxis::Columns,
+                        idx,
+                        length,
+                    )) = cmd.get(ADJUST_AXIS_MEASURE)
+                    {
+                        self.column_measure.set_pixel_length_for_idx(*idx, *length);
+                        ctx.request_layout();
+                    }
                 }
             }
-            _=>()
+            _ => (),
         }
 
         if let Some(sel) = new_selection {
@@ -183,8 +186,12 @@ where
                     let cell_rect = Rect::from_origin_size(
                         Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
                         Size::new(
-                            self.column_measure.pixels_length_for_index(col_idx).unwrap_or(0.),
-                            self.row_measure.pixels_length_for_index(row_idx).unwrap_or(0.),
+                            self.column_measure
+                                .pixels_length_for_index(col_idx)
+                                .unwrap_or(0.),
+                            self.row_measure
+                                .pixels_length_for_index(row_idx)
+                                .unwrap_or(0.),
                         ),
                     );
                     let padded_rect = cell_rect.inset(-rtc.cell_padding);
@@ -216,5 +223,3 @@ where
         }
     }
 }
-
-

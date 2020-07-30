@@ -1,5 +1,4 @@
-use druid::{Selector, EventCtx};
-
+use druid::{EventCtx, Selector};
 
 #[derive(Debug, Clone)]
 pub struct SingleCell {

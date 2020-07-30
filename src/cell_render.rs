@@ -3,7 +3,7 @@ use std::ops::DerefMut;
 
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
-use druid::{theme, Color, Data, Env, KeyOrValue, Lens,  PaintCtx};
+use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
 
 pub trait CellRender<T> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
@@ -32,11 +32,11 @@ pub struct Wrapped<T, U, W, I> {
 }
 
 pub struct LensWrapped<T, U, W, I>(Wrapped<T, U, W, I>)
-    where
-        W: Lens<T, U>;
+where
+    W: Lens<T, U>;
 pub struct FuncWrapped<T, U, W, I>(Wrapped<T, U, W, I>)
-    where
-        W: Fn(&T) -> U;
+where
+    W: Fn(&T) -> U;
 
 impl<T, U, W, I> Wrapped<T, U, W, I> {
     fn new(inner: I, wrapper: W) -> Wrapped<T, U, W, I> {
@@ -62,11 +62,11 @@ pub trait CellRenderExt<T: Data>: CellRender<T> + Sized + 'static {
 impl<T: Data, CR: CellRender<T> + 'static> CellRenderExt<T> for CR {}
 
 impl<T, U, L, CR> CellRender<T> for LensWrapped<T, U, L, CR>
-    where
-        T: Data,
-        U: Data,
-        L: Lens<T, U>,
-        CR: CellRender<U>,
+where
+    T: Data,
+    U: Data,
+    L: Lens<T, U>,
+    CR: CellRender<U>,
 {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         let inner = &mut self.0.inner;
@@ -77,11 +77,11 @@ impl<T, U, L, CR> CellRender<T> for LensWrapped<T, U, L, CR>
 }
 
 impl<T, U, F, CR> CellRender<T> for FuncWrapped<T, U, F, CR>
-    where
-        T: Data,
-        U: Data,
-        F: Fn(&T) -> U,
-        CR: CellRender<U>,
+where
+    T: Data,
+    U: Data,
+    F: Fn(&T) -> U,
+    CR: CellRender<U>,
 {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         let inner = &mut self.0.inner;
@@ -174,7 +174,11 @@ pub(crate) struct TableColumn<T: Data, CR: CellRender<T>> {
 
 impl<T: Data, CR: CellRender<T>> TableColumn<T, CR> {
     pub fn new(header: String, cell_render: CR) -> Self {
-        TableColumn { header, cell_render, phantom_ : PhantomData::default() }
+        TableColumn {
+            header,
+            cell_render,
+            phantom_: PhantomData::default(),
+        }
     }
 }
 
@@ -182,6 +186,4 @@ impl<T: Data, CR: CellRender<T>> CellRender<T> for TableColumn<T, CR> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         self.cell_render.paint(ctx, row_idx, col_idx, data, env)
     }
-
-
 }

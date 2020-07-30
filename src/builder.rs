@@ -1,15 +1,15 @@
+use crate::cell_render::{CellRender, TableColumn, TextCell};
 use crate::cells::*;
-use crate::cell_render::{TableColumn, CellRender, TextCell};
 
+use crate::axis_measure::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, ADJUST_AXIS_MEASURE};
+use crate::config::TableConfig;
+use crate::data::{ItemsLen, ItemsUse, TableRows};
+use crate::headings::ColumnHeadings;
+use crate::selection::SELECT_INDICES;
 use druid::widget::prelude::*;
 use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
 use druid::{theme, Data, WidgetExt};
 use std::marker::PhantomData;
-use crate::data::{TableRows, ItemsUse, ItemsLen};
-use crate::selection::SELECT_INDICES;
-use crate::axis_measure::{StoredAxisMeasure, FixedSizeAxis, AxisMeasure, ADJUST_AXIS_MEASURE};
-use crate::config::TableConfig;
-use crate::headings::ColumnHeadings;
 
 pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellRender<RowData>>>>,
@@ -19,7 +19,7 @@ pub struct TableBuilder<RowData: Data, TableData: Data> {
 }
 
 impl<RowData: Data, TableData: TableRows<Item = RowData>> Default
-for TableBuilder<RowData, TableData>
+    for TableBuilder<RowData, TableData>
 {
     fn default() -> Self {
         Self::new()
@@ -50,9 +50,8 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, 
         header: impl Into<String>,
         cell_render: CR,
     ) {
-        self.table_columns.push(TableColumn::new(
-            header.into(),
-            Box::new(cell_render)));
+        self.table_columns
+            .push(TableColumn::new(header.into(), Box::new(cell_render)));
     }
 
     pub fn build_widget(self) -> Align<TableData> {
@@ -63,7 +62,7 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, 
             .collect();
 
         let column_measure = StoredAxisMeasure::new(100.);
-        let row_measure = FixedSizeAxis::new(30.);
+        let row_measure = FixedAxisMeasure::new(30.);
         build_table(
             column_headers,
             self.table_columns,
@@ -102,12 +101,12 @@ pub fn build_table<
         column_headers,
         column_header_render,
     );
-    headings.add_axis_measure_adjustment_handler(move |ctx, adj|{
-        log::info!("Column change {:?}", adj);
-        ctx.submit_command( ADJUST_AXIS_MEASURE.with(*adj), cells_id);
+    headings.add_axis_measure_adjustment_handler(move |ctx, adj| {
+        ctx.submit_command(ADJUST_AXIS_MEASURE.with(*adj), cells_id);
     });
 
-    let ch_scroll = Scroll::new(headings.with_id(column_headers_id) ).with_id(column_headers_scroll_id);
+    let ch_scroll =
+        Scroll::new(headings.with_id(column_headers_id)).with_id(column_headers_scroll_id);
     let mut cells = Cells::new(table_config, column_measure, row_measure, cell_area_render);
     cells.add_selection_handler(move |ctx, table_sel| {
         let column_sel = table_sel.to_column_selection();

@@ -1,5 +1,5 @@
-use druid::Data;
 use druid::im::Vector;
+use druid::Data;
 
 pub trait ItemsLen {
     fn len(&self) -> usize;

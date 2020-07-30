@@ -4,7 +4,10 @@ use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::{AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext, Widget, WidgetExt, WindowDesc};
+use druid::{
+    AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext,
+    Widget, WidgetExt, WindowDesc,
+};
 use druid::{Color, Value};
 use std::f64::consts::PI;
 

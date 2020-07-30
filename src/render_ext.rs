@@ -1,6 +1,6 @@
-use druid::{RenderContext, Rect, Point};
 use druid::kurbo::Line;
 use druid::piet::IntoBrush;
+use druid::{Point, Rect, RenderContext};
 
 pub(crate) trait RenderContextExt: RenderContext {
     fn stroke_bottom_left_border(

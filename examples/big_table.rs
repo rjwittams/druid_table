@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use druid_table::{
-    build_table, CellRender, CellRenderExt, FixedSizeAxis, ItemsLen, ItemsUse, TableConfig,
+    build_table, CellRender, CellRenderExt, FixedAxisMeasure, ItemsLen, ItemsUse, TableConfig,
     TextCell,
 };
 
@@ -94,8 +94,8 @@ fn build_root_widget() -> impl Widget<BigTable> {
             columns,
         ),
         ManyColumns::new(inner_render, columns),
-        FixedSizeAxis::new(25.),
-        FixedSizeAxis::new(100.),
+        FixedAxisMeasure::new(25.),
+        FixedAxisMeasure::new(100.),
         TextCell::new()
             .text_color(Color::WHITE)
             .on_result_of(|br: &usize| br.to_string()),

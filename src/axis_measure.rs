@@ -1,17 +1,18 @@
-
-use std::collections::BTreeMap;
+use druid::{EventCtx, Selector};
 use float_ord::FloatOrd;
-use druid::{Selector, EventCtx};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
 
 #[derive(Debug, Clone, Copy)]
-pub enum TableAxis{
+pub enum TableAxis {
     //Rows,
-    Columns
+    Columns,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum AxisMeasureAdjustment{
-    LengthChanged(TableAxis, usize, f64)
+pub enum AxisMeasureAdjustment {
+    LengthChanged(TableAxis, usize, f64),
 }
 
 pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
@@ -20,7 +21,7 @@ pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
 pub type AxisMeasureAdjustmentHandler = dyn Fn(&mut EventCtx, &AxisMeasureAdjustment);
 
 pub trait AxisMeasure: Clone {
-    fn border(&self)->f64;
+    fn border(&self) -> f64;
     fn set_axis_properties(&mut self, border: f64, len: usize);
     fn total_pixel_length(&self) -> f64;
     fn index_from_pixel(&self, pixel: f64) -> Option<usize>;
@@ -29,32 +30,35 @@ pub trait AxisMeasure: Clone {
     fn pixels_length_for_index(&self, idx: usize) -> Option<f64>;
     fn set_far_pixel_for_idx(&mut self, idx: usize, pixel: f64) -> f64;
     fn set_pixel_length_for_idx(&mut self, idx: usize, length: f64) -> f64;
-    fn can_resize(&self, idx: usize)->bool;
+    fn can_resize(&self, idx: usize) -> bool;
 
     fn pixel_near_border(&self, pixel: f64) -> Option<usize> {
         let idx = self.index_from_pixel(pixel)?;
         let idx_border_middle = self.first_pixel_from_index(idx).unwrap_or(0.) - self.border() / 2.;
-        let next_border_middle = self.first_pixel_from_index(idx + 1).unwrap_or_else(||self.total_pixel_length()) - self.border() / 2.;
-        if f64::abs(pixel - idx_border_middle ) < MOUSE_MOVE_EPSILON {
+        let next_border_middle = self
+            .first_pixel_from_index(idx + 1)
+            .unwrap_or_else(|| self.total_pixel_length())
+            - self.border() / 2.;
+        if f64::abs(pixel - idx_border_middle) < MOUSE_MOVE_EPSILON {
             Some(idx)
-        }else if f64::abs(pixel - next_border_middle ) < MOUSE_MOVE_EPSILON {
+        } else if f64::abs(pixel - next_border_middle) < MOUSE_MOVE_EPSILON {
             Some(idx + 1)
-        }else{
+        } else {
             None
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FixedSizeAxis {
+pub struct FixedAxisMeasure {
     pixels_per_unit: f64,
     border: f64,
     len: usize,
 }
 
-impl FixedSizeAxis {
+impl FixedAxisMeasure {
     pub fn new(pixels_per_unit: f64) -> Self {
-        FixedSizeAxis {
+        FixedAxisMeasure {
             pixels_per_unit,
             border: 0.,
             len: 0,
@@ -68,8 +72,8 @@ impl FixedSizeAxis {
 
 const MOUSE_MOVE_EPSILON: f64 = 3.;
 
-impl AxisMeasure for FixedSizeAxis {
-    fn border(&self)->f64 {
+impl AxisMeasure for FixedAxisMeasure {
+    fn border(&self) -> f64 {
         self.border
     }
 
@@ -103,7 +107,7 @@ impl AxisMeasure for FixedSizeAxis {
     fn first_pixel_from_index(&self, idx: usize) -> Option<f64> {
         if idx < self.len {
             Some((idx as f64) * self.full_pixels_per_unit())
-        }else{
+        } else {
             None
         }
     }
@@ -111,7 +115,7 @@ impl AxisMeasure for FixedSizeAxis {
     fn pixels_length_for_index(&self, idx: usize) -> Option<f64> {
         if idx < self.len {
             Some(self.pixels_per_unit)
-        }else{
+        } else {
             None
         }
     }
@@ -130,16 +134,55 @@ impl AxisMeasure for FixedSizeAxis {
 }
 
 #[derive(Clone)]
-pub struct StoredAxisMeasure{
+pub struct StoredAxisMeasure {
     pixel_lengths: Vec<f64>,
-    first_pixels : BTreeMap<usize, f64>,
+    first_pixels: BTreeMap<usize, f64>, // TODO newtypes
     pixels_to_index: BTreeMap<FloatOrd<f64>, usize>,
     default_pixels: f64,
     border: f64,
-    total_pixel_length: f64
+    total_pixel_length: f64,
 }
 
-impl StoredAxisMeasure{
+struct DebugFn<'a, F: Fn(&mut Formatter) -> fmt::Result>(&'a F);
+
+impl<'a, F: Fn(&mut Formatter) -> fmt::Result> Debug for DebugFn<'a, F> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let func = self.0;
+        (func)(f)
+    }
+}
+
+macro_rules! debug_fn {
+    ($content: expr) => {
+        &DebugFn(&$content)
+    };
+}
+
+impl Debug for StoredAxisMeasure {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        let fp = &self.first_pixels;
+        let pti = &self.pixels_to_index;
+        fmt.debug_struct("StoredAxisMeasure")
+            .field("pixel_lengths", &self.pixel_lengths)
+            .field("default_pixels", &self.default_pixels)
+            .field("border", &self.border)
+            .field("total_pixel_length", &self.total_pixel_length)
+            .field(
+                "first_pixels",
+                debug_fn!(|f| f.debug_map().entries(fp.iter()).finish()),
+            )
+            .field(
+                "pixels_to_index",
+                debug_fn!(|f| f
+                    .debug_map()
+                    .entries(pti.iter().map(|(k, v)| (k.0, v)))
+                    .finish()),
+            )
+            .finish()
+    }
+}
+
+impl StoredAxisMeasure {
     pub fn new(default_pixels: f64) -> Self {
         StoredAxisMeasure {
             pixel_lengths: Default::default(),
@@ -147,7 +190,7 @@ impl StoredAxisMeasure{
             pixels_to_index: Default::default(),
             default_pixels,
             border: 0.,
-            total_pixel_length: 0.
+            total_pixel_length: 0.,
         }
     }
 
@@ -164,8 +207,7 @@ impl StoredAxisMeasure{
     }
 }
 
-
-impl AxisMeasure for StoredAxisMeasure{
+impl AxisMeasure for StoredAxisMeasure {
     fn border(&self) -> f64 {
         self.border
     }
@@ -182,16 +224,18 @@ impl AxisMeasure for StoredAxisMeasure{
     }
 
     fn index_from_pixel(&self, pixel: f64) -> Option<usize> {
-        self.pixels_to_index.range( .. FloatOrd(pixel) ).next_back().map(|(_, v)| *v)
+        self.pixels_to_index
+            .range(..=FloatOrd(pixel))
+            .next_back()
+            .map(|(_, v)| *v)
     }
 
     fn index_range_from_pixels(&self, p0: f64, p1: f64) -> (usize, usize) {
-        let mut iter = self.pixels_to_index.range( FloatOrd(p0)..FloatOrd(p1) ).map(|(_,v)|*v);
-        let (start, end) = (iter.next(), iter.next_back());
-
-        let start = start.map(|i| if i == 0 {0 } else { i - 1} ).unwrap_or(0);
-        let end = end.unwrap_or(self.pixel_lengths.len() - 1);
-        (start, end)
+        (
+            self.index_from_pixel(p0).unwrap_or(0),
+            self.index_from_pixel(p1)
+                .unwrap_or(self.pixel_lengths.len() - 1),
+        )
     }
 
     fn first_pixel_from_index(&self, idx: usize) -> Option<f64> {
@@ -203,17 +247,78 @@ impl AxisMeasure for StoredAxisMeasure{
     }
 
     fn set_far_pixel_for_idx(&mut self, idx: usize, pixel: f64) -> f64 {
-        let length = f64::max(0.,  pixel - *self.first_pixels.get(&idx).unwrap_or(&0.));
+        let length = f64::max(0., pixel - *self.first_pixels.get(&idx).unwrap_or(&0.));
         self.set_pixel_length_for_idx(idx, length)
     }
 
     fn set_pixel_length_for_idx(&mut self, idx: usize, length: f64) -> f64 {
-        self.pixel_lengths[idx] = length;
-        self.build_maps(); // TODO : modify efficiently instead of rebuilding
-        length
+        // Todo Option
+        if let Some(place) = self.pixel_lengths.get_mut(idx) {
+            *place = length;
+            self.build_maps(); // TODO : modify efficiently instead of rebuilding
+            length
+        } else {
+            0.
+        }
     }
 
     fn can_resize(&self, _idx: usize) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure};
+    use float_ord::FloatOrd;
+    use std::collections::{BTreeMap, HashSet};
+    use std::fmt::Debug;
+
+    #[test]
+    fn fixed_axis() {
+        let mut ax = FixedAxisMeasure::new(99.0);
+
+        test_equal_sized(&mut ax);
+        assert_eq!(ax.set_far_pixel_for_idx(12, 34.), 99.);
+    }
+
+    fn test_equal_sized<AX: AxisMeasure + Debug>(ax: &mut AX) {
+        ax.set_axis_properties(1.0, 4);
+        println!("Axis:{:#?}", ax);
+        assert_eq!(ax.total_pixel_length(), 400.);
+        assert_eq!(ax.index_from_pixel(350.0), Some(3));
+        assert_eq!(ax.first_pixel_from_index(0), Some(0.));
+        assert_eq!(ax.index_from_pixel(0.0), Some(0));
+        assert_eq!(ax.index_from_pixel(100.0), Some(1));
+        assert_eq!(ax.index_from_pixel(1.0), Some(0));
+        assert_eq!(ax.first_pixel_from_index(1), Some(100.0));
+
+        assert_eq!(
+            (199..=201)
+                .into_iter()
+                .map(|n| ax.index_from_pixel(n as f64).unwrap())
+                .collect::<Vec<usize>>(),
+            vec![1, 2, 2]
+        );
+
+        assert_eq!(ax.index_range_from_pixels(105.0, 295.0), (1, 2));
+        assert_eq!(ax.index_range_from_pixels(100.0, 300.0), (1, 3));
+        let lengths = (1usize..=3)
+            .into_iter()
+            .map(|i| FloatOrd(ax.pixels_length_for_index(i).unwrap()))
+            .collect::<HashSet<FloatOrd<f64>>>();
+
+        assert_eq!(lengths.len(), 1);
+        assert_eq!(lengths.iter().next().unwrap().0, 99.0)
+    }
+
+    #[test]
+    fn stored_axis() {
+        let mut ax = StoredAxisMeasure::new(99.);
+        test_equal_sized(&mut ax);
+
+        assert_eq!(ax.set_pixel_length_for_idx(2, 49.), 49.);
+        assert_eq!(ax.set_far_pixel_for_idx(1, 109.), 9.);
+        assert_eq!(ax.total_pixel_length(), 260.0)
     }
 }
