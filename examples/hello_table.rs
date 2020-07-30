@@ -1,15 +1,13 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell};
+use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell, AxisMeasure, ItemsUse, ItemsLen, TableConfig, Cells, ColumnHeadings, TableRows, ADJUST_AXIS_MEASURE, SELECT_INDICES};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::{
-    AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext,
-    Widget, WidgetExt, WindowDesc,
-};
+use druid::{AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext, Widget, WidgetExt, WindowDesc, WidgetId};
 use druid::{Color, Value};
 use std::f64::consts::PI;
+use druid::widget::{Align, Scroll, SCROLL_TO, ScrollTo, CrossAxisAlignment, Flex};
 
 #[macro_use]
 extern crate log;

@@ -8,8 +8,8 @@ edition = "2018"
 
 [dependencies]
 #druid = {version="0.6.0", features =["im"]}
-druid = {path = "../druid/druid/", features=["im"]}
-#druid = {git = "https://github.com/rjwittams/druid",  features=["im"] }
+#druid = {path = "../druid/druid/", features=["im"]}
+druid = {git = "https://github.com/rjwittams/druid",  features=["im"] }
 im = { version = "15.0.0"}
 log = "0.4.8"
 simple_logger = { version = "1.6.0", default-features = false }
