@@ -1,3 +1,4 @@
+use crate::axis_measure::TableAxis;
 use druid::{EventCtx, Selector};
 
 #[derive(Debug, Clone)]
@@ -9,6 +10,12 @@ pub struct SingleCell {
 impl SingleCell {
     pub(crate) fn new(row: usize, col: usize) -> SingleCell {
         SingleCell { row, col }
+    }
+    fn main(&self, axis: TableAxis) -> usize {
+        match axis {
+            TableAxis::Rows => self.row,
+            TableAxis::Columns => self.col,
+        }
     }
 }
 
@@ -59,10 +66,10 @@ impl From<SingleCell> for TableSelection {
 }
 
 impl TableSelection {
-    pub fn to_column_selection(&self) -> IndicesSelection {
+    pub fn to_axis_selection(&self, axis: TableAxis) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(SingleCell { col, .. }) => IndicesSelection::Single(*col),
+            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.main(axis)),
         }
     }
 

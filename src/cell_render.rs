@@ -23,6 +23,7 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
     }
 }
 
+#[derive(Clone)]
 pub struct Wrapped<T, U, W, I> {
     inner: I,
     wrapper: W,
@@ -34,6 +35,8 @@ pub struct Wrapped<T, U, W, I> {
 pub struct LensWrapped<T, U, W, I>(Wrapped<T, U, W, I>)
 where
     W: Lens<T, U>;
+
+#[derive(Clone)]
 pub struct FuncWrapped<T, U, W, I>(Wrapped<T, U, W, I>)
 where
     W: Fn(&T) -> U;
@@ -90,6 +93,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct TextCell {
     text_color: KeyOrValue<Color>,
     font_name: KeyOrValue<&'static str>,

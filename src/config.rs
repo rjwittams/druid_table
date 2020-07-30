@@ -1,6 +1,7 @@
 use druid::{theme, Color, Env, KeyOrValue};
 
-pub(crate) const DEFAULT_HEADER_HEIGHT: f64 = 25.0;
+pub(crate) const DEFAULT_COL_HEADER_HEIGHT: f64 = 25.0;
+pub(crate) const DEFAULT_ROW_HEADER_WIDTH: f64 = 50.0;
 
 #[derive(Clone)]
 pub struct TableConfig {
@@ -30,7 +31,8 @@ impl Default for TableConfig {
 impl TableConfig {
     pub fn new() -> TableConfig {
         TableConfig {
-            header_height: DEFAULT_HEADER_HEIGHT.into(),
+            header_height: DEFAULT_COL_HEADER_HEIGHT.into(),
+
             header_background: theme::BACKGROUND_LIGHT.into(),
             cells_background: theme::LABEL_COLOR.into(),
             cells_border: theme::BORDER_LIGHT.into(),

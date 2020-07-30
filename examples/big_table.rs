@@ -1,43 +1,14 @@
-use std::fmt::Debug;
-
 use druid_table::{
-    build_table, CellRender, CellRenderExt, FixedAxisMeasure, ItemsLen, ItemsUse, TableConfig,
-    TextCell,
+    build_table, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen,
+    ItemsUse, TableConfig, TextCell,
 };
 
-use druid::{AppLauncher, Color, Data, Env, Lens, PaintCtx, Widget, WindowDesc};
+use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc};
+use druid_table::numbers_table::NumbersTable;
 use std::marker::PhantomData;
 
 #[macro_use]
 extern crate log;
-
-#[derive(Debug, Data, Clone, Lens)]
-struct BigRow {
-    row: usize,
-}
-
-#[derive(Debug, Data, Clone, Lens)]
-struct BigTable {
-    rows: usize,
-}
-
-impl ItemsLen for BigTable {
-    fn len(&self) -> usize {
-        return self.rows;
-    }
-}
-
-impl ItemsUse for BigTable {
-    type Item = BigRow;
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&BigRow) -> V) -> Option<V> {
-        if idx < self.rows {
-            let temp = BigRow { row: idx };
-            Some(f(&temp))
-        } else {
-            None
-        }
-    }
-}
 
 #[derive(Clone)]
 struct ManyColumns<T, CR: CellRender<T>> {
@@ -80,12 +51,10 @@ impl<CR: CellRender<usize>> ItemsUse for ManyColumns<usize, CR> {
     }
 }
 
-fn build_root_widget() -> impl Widget<BigTable> {
+fn build_root_widget() -> impl Widget<NumbersTable> {
     let table_config = TableConfig::new();
 
-    let inner_render = TextCell::new()
-        .on_result_of(|br: &usize| br.to_string())
-        .lens(BigRow::row);
+    let inner_render = TextCell::new().on_result_of(|br: &usize| br.to_string());
 
     let columns = 1_000_000_000;
     build_table(
@@ -93,8 +62,12 @@ fn build_root_widget() -> impl Widget<BigTable> {
             TextCell::new().on_result_of(|br: &usize| br.to_string()),
             columns,
         ),
-        ManyColumns::new(inner_render, columns),
+        HeadersFromIndices::new(),
         FixedAxisMeasure::new(25.),
+        TextCell::new()
+            .text_color(Color::WHITE)
+            .on_result_of(|br: &usize| br.to_string()),
+        ManyColumns::new(inner_render, columns),
         FixedAxisMeasure::new(100.),
         TextCell::new()
             .text_color(Color::WHITE)
@@ -114,9 +87,7 @@ pub fn main() {
         .window_size((400.0, 700.0));
 
     // create the initial app state
-    let initial_state = BigTable {
-        rows: 1_000_000_000,
-    };
+    let initial_state = NumbersTable::new(1_000_000_000);
 
     // start the application
     AppLauncher::with_window(main_window)

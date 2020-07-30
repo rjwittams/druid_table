@@ -1,4 +1,4 @@
-use druid::{EventCtx, Selector};
+use druid::{EventCtx, Point, Rect, Selector, Size, Cursor};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -6,8 +6,63 @@ use std::fmt::{Debug, Formatter};
 
 #[derive(Debug, Clone, Copy)]
 pub enum TableAxis {
-    //Rows,
+    Rows,
     Columns,
+}
+
+use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
+use TableAxis::*;
+
+impl TableAxis {
+    pub fn cross_axis(&self) -> TableAxis {
+        match self {
+            Rows => Columns,
+            Columns => Rows,
+        }
+    }
+
+    pub fn main_pixel_from_point(&self, point: &Point) -> f64 {
+        match self {
+            Rows => point.y,
+            Columns => point.x,
+        }
+    }
+
+    pub fn pixels_from_rect(&self, rect: &Rect) -> (f64, f64) {
+        match self {
+            Rows => (rect.y0, rect.y1),
+            Columns => (rect.x0, rect.x1),
+        }
+    }
+
+    pub fn default_header_cross(&self) -> f64 {
+        match self {
+            Rows => DEFAULT_ROW_HEADER_WIDTH,
+            Columns => DEFAULT_COL_HEADER_HEIGHT,
+        }
+    }
+
+    pub fn coords(&self, main: f64, cross: f64) -> (f64, f64) {
+        match self {
+            Rows => (cross, main),
+            Columns => (main, cross),
+        }
+    }
+
+    pub fn size(&self, main: f64, cross: f64) -> Size {
+        self.coords(main, cross).into()
+    }
+
+    pub fn cell_origin(&self, main: f64, cross: f64) -> Point {
+        self.coords(main, cross).into()
+    }
+
+    pub fn resize_cursor(&self)->&'static Cursor{
+        match self{
+            Rows => &Cursor::ResizeUpDown,
+            Columns => &Cursor::ResizeLeftRight
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -271,7 +326,7 @@ impl AxisMeasure for StoredAxisMeasure {
 mod test {
     use crate::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure};
     use float_ord::FloatOrd;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::HashSet;
     use std::fmt::Debug;
 
     #[test]
