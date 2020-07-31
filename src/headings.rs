@@ -17,17 +17,30 @@ use crate::render_ext::RenderContextExt;
 use crate::selection::{IndicesSelection, SELECT_INDICES};
 use crate::ItemsLen;
 
-pub trait HeadersFromData<TableData, Header: Data, Headers: ItemsUse<Item = Header>> {
-    fn get_headers(&self, table_data: &TableData) -> Headers;
+pub trait HeadersFromData<Headers: ItemsUse> {
+    type TableData;
+    type Header; // Headers::Item ;
+    fn get_headers(&self, table_data: &Self::TableData) -> Headers;
 }
 
-impl<TableData, Header, Headers> HeadersFromData<TableData, Header, Headers> for Headers
-where
-    Header: Data,
-    Headers: ItemsUse<Item = Header> + Clone,
+pub struct SuppliedHeaders<Headers, TableData> {
+    headers: Headers,
+    phantom_td: PhantomData<TableData>
+}
+
+impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
+    pub fn new(headers: Headers) -> Self {
+        SuppliedHeaders { headers, phantom_td: Default::default() }
+    }
+}
+
+
+impl<Headers: ItemsUse + Clone, TableData> HeadersFromData<Headers> for SuppliedHeaders<Headers, TableData>
 {
-    fn get_headers(&self, _table_data: &TableData) -> Headers {
-        (*self).clone()
+    type TableData = TableData;
+    type Header = Headers::Item;
+    fn get_headers(&self, _table_data: &Self::TableData) -> Headers{
+        self.headers.clone()
     }
 }
 
@@ -56,9 +69,12 @@ impl<TableData> HeadersFromIndices<TableData> {
     }
 }
 
-impl<TableData: ItemsLen> HeadersFromData<TableData, usize, NumbersTable>
+impl<TableData: ItemsLen> HeadersFromData<NumbersTable>
     for HeadersFromIndices<TableData>
 {
+    type TableData = TableData;
+    type Header = usize;
+
     fn get_headers(&self, table_data: &TableData) -> NumbersTable {
         NumbersTable::new(table_data.len())
     }
@@ -69,7 +85,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<TableData, Header, Headers>,
+    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {
@@ -93,7 +109,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<TableData, Header, Headers>,
+    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {
@@ -143,7 +159,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<TableData, Header, Headers>,
+    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {

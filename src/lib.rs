@@ -15,5 +15,5 @@ pub use cell_render::{CellRender, CellRenderExt, TextCell};
 pub use cells::Cells;
 pub use config::TableConfig;
 pub use data::{ItemsLen, ItemsUse, TableRows};
-pub use headings::{HeadersFromIndices, Headings};
+pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection, SELECT_INDICES};

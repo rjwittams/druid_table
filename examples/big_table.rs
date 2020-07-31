@@ -1,7 +1,4 @@
-use druid_table::{
-    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices,
-    ItemsLen, ItemsUse, TableConfig, TextCell,
-};
+use druid_table::{build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen, ItemsUse, TableConfig, TextCell, SuppliedHeaders};
 
 use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::NumbersTable;
@@ -66,7 +63,7 @@ fn build_root_widget() -> impl Widget<NumbersTable> {
     );
 
     let cols = AxisBuild::new(
-        ManyColumns::new(inner_render, columns),
+        SuppliedHeaders::new(ManyColumns::new(inner_render, columns)),
         FixedAxisMeasure::new(100.),
         TextCell::new()
             .text_color(Color::WHITE)

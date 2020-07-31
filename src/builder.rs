@@ -4,7 +4,7 @@ use crate::cells::*;
 use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::config::TableConfig;
 use crate::data::{ItemsLen, ItemsUse, TableRows};
-use crate::headings::{HeadersFromData, HeadersFromIndices, Headings};
+use crate::headings::{HeadersFromData, HeadersFromIndices, Headings, SuppliedHeaders};
 use crate::selection::SELECT_INDICES;
 use druid::widget::prelude::*;
 use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
@@ -57,7 +57,7 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, 
         cell_render: CR,
     ) {
         self.table_columns
-            .push(TableColumn::new(header.into(), Box::new(cell_render)));
+            .push(TableColumn::new(header, Box::new(cell_render)));
     }
 
     pub fn build_widget(self) -> Align<TableData> {
@@ -71,40 +71,39 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, 
         let row_measure = StoredAxisMeasure::new(30.);
 
         let row_build = AxisBuild::new(
-            HeadersFromIndices::new(),
+            HeadersFromIndices::<TableData>::new(),
             row_measure,
             self.row_header_render,
         );
-        let col_build = AxisBuild::new(column_headers, column_measure, self.column_header_render);
+        let col_build = AxisBuild::new(
+            SuppliedHeaders::new(column_headers),
+            column_measure,
+            self.column_header_render,
+        );
 
         build_table(self.table_columns, row_build, col_build, self.table_config)
     }
 }
 
 pub struct AxisBuild<
-    TableData,
-    Header: Data,
     Measure: AxisMeasure + 'static,
-    Headers: ItemsUse<Item = Header> + 'static,
-    HeadersSource: HeadersFromData<TableData, Header, Headers> + 'static,
-    HeaderRender: CellRender<Header> + 'static,
+    Headers: ItemsUse + 'static,
+    HeadersSource: HeadersFromData<Headers> + 'static,
+    HeaderRender: CellRender<Headers::Item> + 'static,
 > {
     headers_source: HeadersSource,
     measure: Measure,
     header_render: HeaderRender,
-    p_td: PhantomData<TableData>,
-    p_h: PhantomData<Header>,
     p_hs: PhantomData<Headers>,
 }
 
 impl<
         TableData,
-        Header: Data,
         Measure: AxisMeasure + 'static,
-        Headers: ItemsUse<Item = Header> + 'static,
-        HeadersSource: HeadersFromData<TableData, Header, Headers> + 'static,
-        HeaderRender: CellRender<Header> + 'static,
-    > AxisBuild<TableData, Header, Measure, Headers, HeadersSource, HeaderRender>
+        Headers: ItemsUse + 'static,
+        HeadersSource: HeadersFromData<Headers, TableData = TableData> + 'static,
+        HeaderRender: CellRender<Headers::Item> + 'static,
+    > AxisBuild<Measure, Headers, HeadersSource, HeaderRender>
 {
     pub fn new(
         headers_source: HeadersSource,
@@ -115,40 +114,57 @@ impl<
             headers_source,
             measure,
             header_render,
-            p_td: Default::default(),
-            p_h: Default::default(),
             p_hs: Default::default(),
         }
+    }
+}
+
+pub trait AxisBuildT {
+    type TableData;
+    type Measure: AxisMeasure + 'static;
+    type Header: Data;
+    type Headers: ItemsUse<Item = Self::Header> + 'static;
+    type HeadersSource: HeadersFromData<Self::Headers, TableData = Self::TableData> + 'static;
+    type HeaderRender: CellRender<Self::Header> + 'static;
+
+    fn content(
+        self,
+    ) -> AxisBuild<Self::Measure, Self::Headers, Self::HeadersSource, Self::HeaderRender>;
+}
+
+impl<
+        Measure: AxisMeasure + 'static,
+        Headers: ItemsUse + 'static,
+        HeadersSource: HeadersFromData<Headers> + 'static,
+        HeaderRender: CellRender<Headers::Item> + 'static,
+    > AxisBuildT for AxisBuild<Measure, Headers, HeadersSource, HeaderRender>
+{
+    type TableData = HeadersSource::TableData;
+    type Measure = Measure;
+    type Header = Headers::Item;
+    type Headers = Headers;
+    type HeadersSource = HeadersSource;
+    type HeaderRender = HeaderRender;
+
+    fn content(self) -> AxisBuild<Measure, Headers, HeadersSource, HeaderRender> {
+        self
     }
 }
 
 pub fn build_table<
     RowData: Data,
     TableData: TableRows<Item = RowData>,
-    RowHeader: Data,
-    RowMeasure: AxisMeasure + 'static,
-    RowHeaders: ItemsUse<Item = RowHeader> + 'static,
-    RowHeadersSource: HeadersFromData<TableData, RowHeader, RowHeaders> + 'static,
-    RowHeaderRender: CellRender<RowHeader> + 'static,
-    ColumnHeader: Data,
-    ColumnMeasure: AxisMeasure + 'static,
-    ColumnHeaders: ItemsUse<Item = ColumnHeader> + 'static,
-    ColumnHeadersSource: HeadersFromData<TableData, ColumnHeader, ColumnHeaders> + 'static,
-    ColumnHeaderRender: CellRender<ColumnHeader> + 'static,
+    RowT: AxisBuildT<TableData = TableData>,
+    ColT: AxisBuildT<TableData = TableData>,
     CellAreaRender: CellRender<RowData> + ItemsLen + 'static,
 >(
     cell_area_render: CellAreaRender,
-    row: AxisBuild<TableData, RowHeader, RowMeasure, RowHeaders, RowHeadersSource, RowHeaderRender>,
-    col: AxisBuild<
-        TableData,
-        ColumnHeader,
-        ColumnMeasure,
-        ColumnHeaders,
-        ColumnHeadersSource,
-        ColumnHeaderRender,
-    >,
+    row_t: RowT,
+    col_t: ColT,
     table_config: TableConfig,
 ) -> Align<TableData> {
+    let (row, col) = (row_t.content(), col_t.content());
+
     let column_headers_id = WidgetId::next();
     let column_scroll_id = WidgetId::next();
     let cells_id = WidgetId::next();

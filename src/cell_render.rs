@@ -3,7 +3,7 @@ use std::ops::DerefMut;
 
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
-use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
+use druid::{theme, Color, Data, Env, KeyOrValue,  Lens, PaintCtx};
 
 pub trait CellRender<T> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
@@ -173,16 +173,60 @@ impl CellRender<String> for TextCell {
 pub(crate) struct TableColumn<T: Data, CR: CellRender<T>> {
     pub(crate) header: String,
     cell_render: CR,
+    width:TableColumnWidth,
     phantom_: PhantomData<T>,
 }
 
+pub struct TableColumnWidth{
+    initial: Option<KeyOrValue<f64>>,
+    min: Option<KeyOrValue<f64>>,
+    max: Option<KeyOrValue<f64>>,
+}
+
+impl Default for TableColumnWidth{
+    fn default() -> Self {
+        TableColumnWidth{
+            initial: Some(50.0.into()), // Could be in a 'theme' I guess.
+            min: Some(20.0.into()),
+            max: None
+        }
+    }
+}
+
+impl From<f64> for TableColumnWidth{
+    fn from(num: f64) -> Self {
+        let mut tc = TableColumnWidth::default();
+        tc.initial = Some(num.into());
+        tc
+    }
+}
+
+impl <T1, T2, T3> From<(T1, T2, T3)> for TableColumnWidth
+where
+T1: Into<KeyOrValue<f64>>, T2: Into<KeyOrValue<f64>>, T3: Into<KeyOrValue<f64>>,
+{
+    fn from((initial, min, max): (T1, T2, T3)) -> Self {
+       TableColumnWidth{
+           initial: Some(initial.into()),
+            min: Some(min.into()),
+            max: Some(max.into())
+       }
+    }
+}
+
 impl<T: Data, CR: CellRender<T>> TableColumn<T, CR> {
-    pub fn new(header: String, cell_render: CR) -> Self {
+    pub fn new(header: impl Into<String>, cell_render: CR) -> Self {
         TableColumn {
-            header,
+            header: header.into(),
             cell_render,
+            width: TableColumnWidth::default(),
             phantom_: PhantomData::default(),
         }
+    }
+
+    pub fn width<W : Into<TableColumnWidth> >(mut self, width: W)->Self{
+        self.width = width.into();
+        self
     }
 }
 
