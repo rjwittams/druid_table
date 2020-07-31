@@ -1,4 +1,7 @@
-use druid_table::{build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen, ItemsUse, TableConfig, TextCell, SuppliedHeaders};
+use druid_table::{
+    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices,
+    ItemsLen, ItemsUse, SuppliedHeaders, TableConfig, TextCell,
+};
 
 use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::NumbersTable;

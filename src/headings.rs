@@ -25,21 +25,24 @@ pub trait HeadersFromData<Headers: ItemsUse> {
 
 pub struct SuppliedHeaders<Headers, TableData> {
     headers: Headers,
-    phantom_td: PhantomData<TableData>
+    phantom_td: PhantomData<TableData>,
 }
 
 impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
     pub fn new(headers: Headers) -> Self {
-        SuppliedHeaders { headers, phantom_td: Default::default() }
+        SuppliedHeaders {
+            headers,
+            phantom_td: Default::default(),
+        }
     }
 }
 
-
-impl<Headers: ItemsUse + Clone, TableData> HeadersFromData<Headers> for SuppliedHeaders<Headers, TableData>
+impl<Headers: ItemsUse + Clone, TableData> HeadersFromData<Headers>
+    for SuppliedHeaders<Headers, TableData>
 {
     type TableData = TableData;
     type Header = Headers::Item;
-    fn get_headers(&self, _table_data: &Self::TableData) -> Headers{
+    fn get_headers(&self, _table_data: &Self::TableData) -> Headers {
         self.headers.clone()
     }
 }
@@ -69,9 +72,7 @@ impl<TableData> HeadersFromIndices<TableData> {
     }
 }
 
-impl<TableData: ItemsLen> HeadersFromData<NumbersTable>
-    for HeadersFromIndices<TableData>
-{
+impl<TableData: ItemsLen> HeadersFromData<NumbersTable> for HeadersFromIndices<TableData> {
     type TableData = TableData;
     type Header = usize;
 
@@ -85,7 +86,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
+    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {
@@ -109,7 +110,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
+    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {
@@ -159,7 +160,7 @@ where
     TableData: Data,
     Header: Data,
     Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<Headers, TableData=TableData>,
+    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
 {
@@ -183,8 +184,12 @@ where
                 } else {
                     let mut cursor = &Cursor::Arrow;
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                        if idx > 0 && self.measure.can_resize(idx - 1) {
-                            cursor = self.axis.resize_cursor();
+                        if idx > 0 {
+                            cursor = if self.measure.can_resize(idx - 1) {
+                                self.axis.resize_cursor()
+                            } else {
+                                &Cursor::NotAllowed
+                            };
                             ctx.set_handled()
                         }
                     }
@@ -206,7 +211,7 @@ where
                     self.dragging = None;
                 }
             }
-            _ => {}
+            e => log::info!("Event {:?}", e),
         }
     }
 
@@ -217,15 +222,22 @@ where
         data: &TableData,
         env: &Env,
     ) {
-        if let LifeCycle::WidgetAdded = event {
-            let rtc = self.config.resolve(env);
-            self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
-            self.measure.set_axis_properties(
-                rtc.cell_border_thickness,
-                self.headers.as_ref().unwrap().len(),
-            );
-            self.resolved_config = Some(rtc);
+        match event {
+            LifeCycle::WidgetAdded => {
+                let rtc = self.config.resolve(env);
+                self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
+                self.measure.set_axis_properties(
+                    rtc.cell_border_thickness,
+                    self.headers.as_ref().unwrap().len(),
+                );
+                self.resolved_config = Some(rtc);
+            }
+            LifeCycle::HotChanged(false) => {
+                self.dragging = None;
+            }
+            _ => log::info!("Lifecycle {:?}", event),
         }
+        _ctx.children_changed()
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableData, data: &TableData, _env: &Env) {

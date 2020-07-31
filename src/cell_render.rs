@@ -3,10 +3,11 @@ use std::ops::DerefMut;
 
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
-use druid::{theme, Color, Data, Env, KeyOrValue,  Lens, PaintCtx};
+use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
 
 pub trait CellRender<T> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
+
 }
 
 impl<T> CellRender<T> for Box<dyn CellRender<T>> {
@@ -173,27 +174,27 @@ impl CellRender<String> for TextCell {
 pub(crate) struct TableColumn<T: Data, CR: CellRender<T>> {
     pub(crate) header: String,
     cell_render: CR,
-    width:TableColumnWidth,
+    width: TableColumnWidth,
     phantom_: PhantomData<T>,
 }
 
-pub struct TableColumnWidth{
+pub struct TableColumnWidth {
     initial: Option<KeyOrValue<f64>>,
     min: Option<KeyOrValue<f64>>,
     max: Option<KeyOrValue<f64>>,
 }
 
-impl Default for TableColumnWidth{
+impl Default for TableColumnWidth {
     fn default() -> Self {
-        TableColumnWidth{
+        TableColumnWidth {
             initial: Some(50.0.into()), // Could be in a 'theme' I guess.
             min: Some(20.0.into()),
-            max: None
+            max: None,
         }
     }
 }
 
-impl From<f64> for TableColumnWidth{
+impl From<f64> for TableColumnWidth {
     fn from(num: f64) -> Self {
         let mut tc = TableColumnWidth::default();
         tc.initial = Some(num.into());
@@ -201,16 +202,18 @@ impl From<f64> for TableColumnWidth{
     }
 }
 
-impl <T1, T2, T3> From<(T1, T2, T3)> for TableColumnWidth
+impl<T1, T2, T3> From<(T1, T2, T3)> for TableColumnWidth
 where
-T1: Into<KeyOrValue<f64>>, T2: Into<KeyOrValue<f64>>, T3: Into<KeyOrValue<f64>>,
+    T1: Into<KeyOrValue<f64>>,
+    T2: Into<KeyOrValue<f64>>,
+    T3: Into<KeyOrValue<f64>>,
 {
     fn from((initial, min, max): (T1, T2, T3)) -> Self {
-       TableColumnWidth{
-           initial: Some(initial.into()),
+        TableColumnWidth {
+            initial: Some(initial.into()),
             min: Some(min.into()),
-            max: Some(max.into())
-       }
+            max: Some(max.into()),
+        }
     }
 }
 
@@ -224,7 +227,7 @@ impl<T: Data, CR: CellRender<T>> TableColumn<T, CR> {
         }
     }
 
-    pub fn width<W : Into<TableColumnWidth> >(mut self, width: W)->Self{
+    pub fn width<W: Into<TableColumnWidth>>(mut self, width: W) -> Self {
         self.width = width.into();
         self
     }
