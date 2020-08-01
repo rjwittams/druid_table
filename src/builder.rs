@@ -1,6 +1,6 @@
 use crate::cells::*;
 use crate::columns::{
-    CellDelegate, CellRender, CellRenderExt, DataCompare, FuncWrapped, TableColumn, TextCell,
+    CellDelegate, CellRender, CellRenderExt, DataCompare, TableColumn, TextCell,
 };
 
 use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};

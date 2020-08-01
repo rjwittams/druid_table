@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::data::{SortDirection, SortSpec};
+use crate::data::SortDirection;
 use druid::kurbo::Line;
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;

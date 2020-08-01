@@ -9,9 +9,7 @@ use druid::{
 use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{
-    ItemsLen, RemapSpec, RemappedItems, Remapper, SortDirection, SortSpec, TableRows,
-};
+use crate::data::{ItemsLen, RemapSpec, RemappedItems, Remapper, TableRows};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{SelectionHandler, SingleCell, TableSelection};
 use crate::{ItemsUse, Remap};
@@ -47,6 +45,24 @@ where
     remap_rows: Remap,
     phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
+}
+
+struct CellRect {
+    start_row: usize,
+    end_row: usize,
+    start_col: usize,
+    end_col: usize,
+}
+
+impl CellRect {
+    fn new((start_row, end_row): (usize, usize), (start_col, end_col): (usize, usize)) -> CellRect {
+        CellRect {
+            start_row,
+            end_row,
+            start_col,
+            end_col,
+        }
+    }
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
@@ -108,16 +124,21 @@ where
         data: &impl ItemsUse<Item = RowData>,
         env: &Env,
         rtc: &ResolvedTableConfig,
-        start_row: usize,
-        end_row: usize,
-        start_col: usize,
-        end_col: usize,
+        rect: &CellRect,
     ) {
-        for row_idx in start_row..=end_row {
+        for row_idx in rect.start_row..=rect.end_row {
             let row_top = self.row_measure.first_pixel_from_index(row_idx);
 
             data.use_item(row_idx, |row| {
-                self.paint_row(ctx, env, &rtc, start_col, end_col, row_idx, row_top, row)
+                self.paint_row(
+                    ctx,
+                    env,
+                    &rtc,
+                    &mut (rect.start_col..=rect.end_col).into_iter(),
+                    row_idx,
+                    row_top,
+                    row
+                )
             });
         }
     }
@@ -127,13 +148,12 @@ where
         ctx: &mut PaintCtx,
         env: &Env,
         rtc: &ResolvedTableConfig,
-        start_col: usize,
-        end_col: usize,
+        rows: &mut impl Iterator<Item=usize>,
         row_idx: usize,
         row_top: Option<f64>,
-        row: &RowData,
+        row: &RowData
     ) {
-        for col_idx in start_col..=end_col {
+        for col_idx in rows {
             let cell_left = self.column_measure.first_pixel_from_index(col_idx);
             let selected = (&self.selection).get_cell_status(row_idx, col_idx);
 
@@ -270,20 +290,19 @@ where
 
         ctx.fill(rect, &rtc.cells_background);
 
-        let (start_row, end_row) = self.row_measure.index_range_from_pixels(rect.y0, rect.y1);
-        let (start_col, end_col) = self
-            .column_measure
-            .index_range_from_pixels(rect.x0, rect.x1);
+        // TODO:
+        let cell_rect = CellRect::new(
+            self.row_measure.index_range_from_pixels(rect.y0, rect.y1),
+            self.column_measure.index_range_from_pixels(rect.x0, rect.x1),
+        );
 
         match &self.remap_rows {
             Remap::Selected(details) => {
                 let details_copy = details;
                 let items = RemappedItems::new(data, &details_copy);
-                self.paint_cells(
-                    ctx, &items, env, &rtc, start_row, end_row, start_col, end_col,
-                )
+                self.paint_cells(ctx, &items, env, &rtc, &cell_rect)
             }
-            _ => self.paint_cells(ctx, data, env, &rtc, start_row, end_row, start_col, end_col),
+            _ => self.paint_cells(ctx, data, env, &rtc, &cell_rect),
         }
     }
 }

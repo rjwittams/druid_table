@@ -57,7 +57,7 @@ impl DataCompare<f64> for PieCell {
 }
 
 impl CellRender<f64> for PieCell {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {}
+    fn init(&mut self, _ctx: &mut PaintCtx, _env: &Env) {}
 
     fn paint(&self, ctx: &mut PaintCtx, _row_idx: usize, _col_idx: usize, data: &f64, _env: &Env) {
         let rect = ctx.region().to_rect().with_origin(Point::ORIGIN);

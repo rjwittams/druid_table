@@ -81,9 +81,6 @@ pub enum Remap {
 
 use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
-use Remap::*;
-
-impl Remap {}
 
 pub struct RemappedItems<'a, 'b, U: ItemsUse> {
     pub(crate) underlying: &'a U,
