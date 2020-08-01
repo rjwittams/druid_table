@@ -9,7 +9,7 @@ pub mod numbers_table;
 mod render_ext;
 mod selection;
 
-pub use axis_measure::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, ADJUST_AXIS_MEASURE};
+pub use axis_measure::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, ADJUST_AXIS_MEASURE, LogIdx, VisIdx};
 pub use builder::{build_table, AxisBuild, TableBuilder};
 pub use cells::Cells;
 pub use columns::{column, CellRender, CellRenderExt, DataCompare, TextCell};

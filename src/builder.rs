@@ -1,7 +1,7 @@
 use crate::cells::*;
 use crate::columns::{CellDelegate, CellRender, CellRenderExt, DataCompare, TableColumn, TextCell};
 
-use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
+use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE, LogIdx};
 use crate::config::TableConfig;
 use crate::data::{
     ItemsLen, ItemsUse, Remap, RemapDetails, RemapSpec, Remapper, SortSpec, TableRows,
@@ -17,12 +17,12 @@ use std::marker::PhantomData;
 pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>,
     column_header_delegate: Box<dyn CellDelegate<String>>,
-    row_header_delegate: Box<dyn CellDelegate<usize>>,
+    row_header_delegate: Box<dyn CellDelegate<LogIdx>>, // TODO: odd
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<RowData: Data, TableData: TableRows<Item = RowData>> Default
+impl<RowData: Data, TableData: TableRows<Item = RowData, Idx=LogIdx>> Default
     for TableBuilder<RowData, TableData>
 {
     fn default() -> Self {
@@ -58,19 +58,19 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelega
     }
 }
 
-impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>
+impl<RowData: Data, TableData: TableRows<Item = RowData, Idx=LogIdx>, ColumnType: CellDelegate<RowData>>
     CellRender<RowData> for ProvidedColumns<RowData, TableData, ColumnType>
 {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.cols.init(ctx, env)
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &RowData, env: &Env) {
+    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &RowData, env: &Env) {
         self.cols.paint(ctx, row_idx, col_idx, data, env);
     }
 }
 
-impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>
+impl<RowData: Data, TableData: TableRows<Item = RowData, Idx=LogIdx>, ColumnType: CellDelegate<RowData>>
     Remapper<RowData, TableData> for ProvidedColumns<RowData, TableData, ColumnType>
 {
     fn sort_fixed(&self, idx: usize) -> bool {
@@ -81,8 +81,8 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelega
         let mut spec = RemapSpec::default();
 
         // Put the columns in sort order
-        let mut in_order: Vec<&TableColumn<RowData, ColumnType>> = self.cols.iter().collect();
-        in_order.sort_by(|a, b| match (a.sort_order, b.sort_order) {
+        let mut in_order: Vec<(usize, &TableColumn<RowData, ColumnType>)> = self.cols.iter().enumerate().collect();
+        in_order.sort_by(|(_, a), (_, b)| match (a.sort_order, b.sort_order) {
             (Some(a), Some(b)) => a.cmp(&b),
             (Some(_), _) => Ordering::Greater,
             (_, Some(_)) => Ordering::Less,
@@ -92,9 +92,8 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelega
         // Then add the ones which have a
         for (idx, dir) in in_order
             .into_iter()
-            .map(|c| c.sort_dir.as_ref())
+            .map(|(idx, c)| c.sort_dir.as_ref().map(|c| (idx, c)))
             .flatten()
-            .enumerate()
         {
             spec.add_sort(SortSpec::new(idx, dir.clone()))
         }
@@ -105,7 +104,7 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelega
         if remap_spec.is_empty() {
             Remap::Pristine
         } else {
-            let mut idxs: Vec<usize> = (0usize..table_data.len()).collect(); //TODO Give up if too big?
+            let mut idxs: Vec<LogIdx> = (0usize..table_data.len()).map(LogIdx).collect(); //TODO Give up if too big?
             idxs.sort_by(|a, b| {
                 table_data
                     .use_item(*a, |a| {
@@ -129,14 +128,14 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelega
     }
 }
 
-impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, TableData> {
+impl<RowData: Data, TableData: TableRows<Item = RowData, Idx=LogIdx>> TableBuilder<RowData, TableData> {
     pub fn new() -> TableBuilder<RowData, TableData> {
         TableBuilder {
             table_columns: Vec::<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>::new(),
             row_header_delegate: Box::new(
                 TextCell::new()
                     .text_color(theme::PRIMARY_LIGHT)
-                    .on_result_of(|br: &usize| br.to_string()),
+                    .on_result_of(|br: &LogIdx| br.0.to_string()),
             ),
             column_header_delegate: Box::new(TextCell::new().text_color(theme::PRIMARY_LIGHT)),
             table_config: TableConfig::new(),
@@ -235,7 +234,7 @@ pub trait AxisBuildT {
     type TableData;
     type Measure: AxisMeasure + 'static;
     type Header: Data;
-    type Headers: ItemsUse<Item = Self::Header> + 'static;
+    type Headers: ItemsUse<Item = Self::Header, Idx = LogIdx> + 'static;
     type HeadersSource: HeadersFromData<Self::Headers, TableData = Self::TableData> + 'static;
     type HeaderRender: CellRender<Self::Header> + 'static;
 
@@ -246,7 +245,7 @@ pub trait AxisBuildT {
 
 impl<
         Measure: AxisMeasure + 'static,
-        Headers: ItemsUse + 'static,
+        Headers: ItemsUse<Idx = LogIdx> + 'static,
         HeadersSource: HeadersFromData<Headers> + 'static,
         HeaderRender: CellRender<Headers::Item> + 'static,
     > AxisBuildT for AxisBuild<Measure, Headers, HeadersSource, HeaderRender>
@@ -265,10 +264,10 @@ impl<
 
 pub fn build_table<
     RowData: Data,
-    TableData: TableRows<Item = RowData>,
+    TableData: TableRows<Item = RowData, Idx=LogIdx>,
     RowT: AxisBuildT<TableData = TableData>,
     ColT: AxisBuildT<TableData = TableData>,
-    ColDel: ColumnsBehaviour<RowData, TableData> + 'static,
+    ColDel: CellsDelegate<RowData, TableData> + 'static,
 >(
     columns_delegate: ColDel,
     row_t: RowT,

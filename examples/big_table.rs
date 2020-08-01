@@ -5,7 +5,7 @@ use druid_table::{
 };
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
-use druid_table::numbers_table::NumbersTable;
+use druid_table::numbers_table::LogIdxTable;
 use std::marker::PhantomData;
 
 #[macro_use]
@@ -72,7 +72,7 @@ impl<RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData
     }
 }
 
-fn build_root_widget() -> impl Widget<NumbersTable> {
+fn build_root_widget() -> impl Widget<LogIdxTable> {
     let table_config = TableConfig::new();
 
     let inner_render = TextCell::new().on_result_of(|br: &usize| br.to_string());
@@ -116,7 +116,7 @@ pub fn main() {
         .window_size((400.0, 700.0));
 
     // create the initial app state
-    let initial_state = NumbersTable::new(1_000_000_000);
+    let initial_state = LogIdxTable::new(1_000_000_000);
 
     // start the application
     AppLauncher::with_window(main_window)

@@ -1,5 +1,6 @@
 use druid::im::Vector;
 use druid::Data;
+use crate::axis_measure::{VisIdx, LogIdx};
 
 pub trait ItemsLen {
     fn len(&self) -> usize;
@@ -11,15 +12,17 @@ pub trait ItemsLen {
 
 pub trait ItemsUse: ItemsLen {
     type Item: Data;
+    type Idx: Copy;
     // This takes a callback so it can work
     // the same way for concrete and virtual data sources
     // but still provide a reference.
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
+    fn use_item<V>(&self, idx: Self::Idx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
     // Test only as we never want to use in real code - could blow up memory
     #[cfg(test)]
     fn all_items(&self) -> Vector<Self::Item> {
         (0usize..self.len())
+            .map(LogIdx)
             .map(|i| self.use_item(i, |item| item.clone()))
             .flatten()
             .collect()
@@ -38,9 +41,9 @@ impl<T: Clone> ItemsLen for Vector<T> {
 
 impl<RowData: Data> ItemsUse for Vector<RowData> {
     type Item = RowData;
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V> {
-        let option = self.get(idx);
-        log::info!("Using idx {} is_none{} len {}", idx, option.is_none(), self.len());
+    type Idx = LogIdx;
+    fn use_item<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
+        let option = self.get(idx.0);
         option.map(move |x| f(x))
     }
 }
@@ -53,27 +56,29 @@ impl<T> ItemsLen for Vec<T> {
 
 impl<RowData: Data> ItemsUse for Vec<RowData> {
     type Item = RowData;
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V> {
-        self.get(idx).map(move |x| f(x))
+    type Idx = LogIdx;
+    fn use_item<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
+        self.get(idx.0).map(move |x| f(x))
     }
 }
 
-#[derive(Clone)] // TODO defeat the borrow checker so we don't have to do this
+#[derive(Clone, Debug)]
 pub enum RemapDetails {
-    Full(Vec<usize>), // TODO : Adaptive storage for
+    Full(Vec<LogIdx>), // TODO : Adaptive storage for
                       // the case where only a few remappings have been done, ie manual moves.
                       // Runs of shifts in a Vec<(usize,usize)>
                       // Sorting and filtering will always provide a full vec
 }
 
 impl RemapDetails {
-    fn get(&self, idx: usize) -> Option<&usize> {
+    fn get_log_idx(&self, idx: VisIdx) -> Option<&LogIdx> {
         match self {
-            RemapDetails::Full(v) => v.get(idx),
+            RemapDetails::Full(v) => v.get(idx.0),
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Remap {
     Pristine,
     Selected(RemapDetails),
@@ -81,15 +86,24 @@ pub enum Remap {
               //  need some token to give back to the table rows
 }
 
+impl Remap{
+    pub fn get_log_idx(&self, vis_idx: VisIdx) -> Option<LogIdx> {
+        match self {
+            Remap::Selected(v) => v.get_log_idx(vis_idx).cloned(),
+            _=>Some(LogIdx(vis_idx.0)) // Dunno if right for internal
+        }
+    }
+}
+
 use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
 
-pub struct RemappedItems<'a, 'b, U: ItemsUse> {
+pub struct RemappedItems<'a, 'b, U: ItemsUse<Idx=LogIdx>> {
     pub(crate) underlying: &'a U,
     pub(crate) details: &'b RemapDetails,
 }
 
-impl<'a, 'b, U: ItemsUse> RemappedItems<'a, 'b, U> {
+impl<'a, 'b, U: ItemsUse<Idx=LogIdx>> RemappedItems<'a, 'b, U> {
     pub fn new(underlying: &'a U, details: &'b RemapDetails) -> RemappedItems<'a, 'b, U> {
         RemappedItems {
             underlying,
@@ -98,19 +112,20 @@ impl<'a, 'b, U: ItemsUse> RemappedItems<'a, 'b, U> {
     }
 }
 
-impl<U: ItemsUse + Data> ItemsLen for RemappedItems<'_, '_, U> {
+impl<U: ItemsUse<Idx=LogIdx> + Data> ItemsLen for RemappedItems<'_, '_, U> {
     fn len(&self) -> usize {
         let RemapDetails::Full(remap) = &self.details;
         remap.len()
     }
 }
 
-impl<U: ItemsUse + Data> ItemsUse for RemappedItems<'_, '_, U> {
+impl<U: ItemsUse<Idx=LogIdx> + Data> ItemsUse for RemappedItems<'_, '_, U> {
     type Item = U::Item;
+    type Idx = VisIdx;
 
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
+    fn use_item<V>(&self, idx: VisIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
         self.details
-            .get(idx)
+            .get_log_idx(idx)
             .and_then(|new_idx| self.underlying.use_item(*new_idx, f))
     }
 }

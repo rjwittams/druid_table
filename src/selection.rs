@@ -1,17 +1,18 @@
-use crate::axis_measure::TableAxis;
+use crate::axis_measure::{TableAxis, VisIdx, LogIdx};
 use druid::{EventCtx, Selector};
+use std::fmt::Debug;
 
-#[derive(Debug, Clone)]
-pub struct SingleCell {
-    row: usize,
-    col: usize,
+#[derive(Eq,PartialEq, Debug, Clone)]
+pub struct CellAddress<T: Copy + Debug>{
+    row: T,
+    col: T
 }
 
-impl SingleCell {
-    pub(crate) fn new(row: usize, col: usize) -> SingleCell {
-        SingleCell { row, col }
+impl <T: Copy+ Debug> CellAddress<T> {
+    pub(crate) fn new(row: T, col: T) -> CellAddress<T> {
+        CellAddress { row, col }
     }
-    fn main(&self, axis: TableAxis) -> usize {
+    fn main(&self, axis: TableAxis) -> T {
         match axis {
             TableAxis::Rows => self.row,
             TableAxis::Columns => self.col,
@@ -19,18 +20,32 @@ impl SingleCell {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SingleCell {
+    pub vis: CellAddress<VisIdx>,
+    pub log: CellAddress<LogIdx>
+}
+
+
+
+impl SingleCell {
+    pub fn new(vis: CellAddress<VisIdx>, log: CellAddress<LogIdx>) -> Self {
+        SingleCell { vis, log }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum IndicesSelection {
     NoSelection,
-    Single(usize),
+    Single(VisIdx, LogIdx),
     //Many(Vec<usize>),
     //Range(from, to)
 }
 
 impl IndicesSelection {
-    pub(crate) fn index_selected(&self, idx: usize) -> bool {
+    pub(crate) fn vis_index_selected(&self, vis_idx: VisIdx) -> bool {
         match self {
-            IndicesSelection::Single(sel_idx) if *sel_idx == idx => true,
+            IndicesSelection::Single(sel_vis,_ )  => *sel_vis == vis_idx,
             _ => false,
         }
     }
@@ -69,13 +84,13 @@ impl TableSelection {
     pub fn to_axis_selection(&self, axis: TableAxis) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.main(axis)),
+            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.vis.main(axis), sc.log.main(axis)),
         }
     }
 
-    pub(crate) fn get_cell_status(&self, row_idx: usize, col_idx: usize) -> SelectionStatus {
+    pub(crate) fn get_cell_status(&self, address: CellAddress<VisIdx>) -> SelectionStatus {
         match self {
-            TableSelection::SingleCell(sc) if row_idx == sc.row && col_idx == sc.col => {
+            TableSelection::SingleCell(sc) if address == sc.vis => {
                 SelectionStatus::Primary
             }
             _ => SelectionStatus::NotSelected,

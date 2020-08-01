@@ -6,31 +6,33 @@ use druid::{
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE};
+use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE, VisIdx, LogIdx};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{ItemsLen, RemapSpec, RemappedItems, Remapper, TableRows};
+use crate::data::{ItemsLen, RemapSpec, Remapper, TableRows};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{SelectionHandler, SingleCell, TableSelection};
+use crate::selection::{SelectionHandler, SingleCell, TableSelection, CellAddress};
 use crate::{ItemsUse, Remap};
+use std::ops::RangeInclusive;
+use std::iter::Map;
 
-pub trait ColumnsBehaviour<RowData: Data, TableData: TableRows<Item = RowData>>:
+pub trait CellsDelegate<RowData: Data, TableData: TableRows<Item = RowData>>:
     CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>
 {
 }
 
-impl<RowData: Data, TableData: TableRows<Item = RowData>, T> ColumnsBehaviour<RowData, TableData>
+impl<RowData: Data, TableData: TableRows<Item = RowData>, T> CellsDelegate<RowData, TableData>
     for T
 where
     T: CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>,
 {
 }
 
-pub struct Cells<RowData, TableData, ColBehaviour, RowMeasure, ColumnMeasure>
+pub struct Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData>,
-    ColBehaviour: ColumnsBehaviour<RowData, TableData>, // The length is the number of columns
+    TableData: TableRows<Item = RowData, Idx=LogIdx>,
+    CellDel: CellsDelegate<RowData, TableData>, // The length is the number of columns
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -40,23 +42,24 @@ where
     selection_handlers: Vec<Box<SelectionHandler>>,
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
-    columns: ColBehaviour,
+    cell_delegate: CellDel,
     remap_spec_rows: RemapSpec,
     remap_rows: Remap,
     phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
 }
 
+// A rect only makes sense in VisIdx - In LogIdx any list of points is possible due to remapping
 #[derive(Debug)]
 struct CellRect {
-    start_row: usize,
-    end_row: usize,
-    start_col: usize,
-    end_col: usize,
+    start_row: VisIdx,
+    end_row: VisIdx,
+    start_col: VisIdx,
+    end_col: VisIdx,
 }
 
 impl CellRect {
-    fn new((start_row, end_row): (usize, usize), (start_col, end_col): (usize, usize)) -> CellRect {
+    fn new((start_row, end_row): (VisIdx, VisIdx), (start_col, end_col): (VisIdx, VisIdx)) -> CellRect {
         CellRect {
             start_row,
             end_row,
@@ -64,14 +67,22 @@ impl CellRect {
             end_col,
         }
     }
+
+    fn rows(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+        VisIdx::range_inc_iter(self.start_row, self.end_row) // Todo work out how to support custom range
+    }
+
+    fn cols(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+        VisIdx::range_inc_iter(self.start_col, self.end_col)
+    }
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
     Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData>,
-    ColDel: ColumnsBehaviour<RowData, TableData>,
+    TableData: TableRows<Item = RowData, Idx=LogIdx>,
+    ColDel: CellsDelegate<RowData, TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -90,7 +101,7 @@ where
             row_measure,
             remap_spec_rows: RemapSpec::default(),
             remap_rows: Remap::Pristine,
-            columns,
+            cell_delegate: columns,
             phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
@@ -113,36 +124,40 @@ where
 
     fn find_cell(&self, pos: &Point) -> Option<SingleCell> {
         let (r, c) = (
-            self.row_measure.index_from_pixel(pos.y),
-            self.column_measure.index_from_pixel(pos.x),
+            self.row_measure.vis_from_pixel(pos.y),
+            self.column_measure.vis_from_pixel(pos.x),
         );
-        Some(SingleCell::new(r?, c?))
+        let log_row = r.and_then( |r|self.remap_rows.get_log_idx(r));
+        let log_col = c.and_then(|c|Remap::Pristine.get_log_idx(c));  // TODO! Moving columns
+        Some(SingleCell::new(CellAddress::new (r?, c?), CellAddress::new(log_row?, log_col?)))
     }
 
     fn paint_cells(
         &self,
         ctx: &mut PaintCtx,
-        data: &impl ItemsUse<Item = RowData>,
+        data: &impl ItemsUse<Item = RowData, Idx = LogIdx>,
         env: &Env,
         rtc: &ResolvedTableConfig,
         rect: &CellRect,
     ) {
-        for row_idx in rect.start_row..=rect.end_row {
-
-            let row_top = self.row_measure.first_pixel_from_index(row_idx);
-            let cols: Vec<usize> =  (rect.start_col..=rect.end_col).collect();
-            log::info!("Drawing row {}, {:?}, {:?}", row_idx, row_top, cols);
-            data.use_item(row_idx, |row| {
-                self.paint_row(
-                    ctx,
-                    env,
-                    &rtc,
-                    &mut (rect.start_col..=rect.end_col).into_iter(),
-                    row_idx,
-                    row_top,
-                    row,
-                )
-            });
+        log::info!("Remap {:?}", self.remap_rows);
+        for vis_row_idx in rect.rows() {
+            let row_top = self.row_measure.first_pixel_from_vis(vis_row_idx);
+            if let Some(log_row_idx) = self.remap_rows.get_log_idx(vis_row_idx) {
+                log::info!("Row: {:?} {:?}", log_row_idx, vis_row_idx);
+                data.use_item(log_row_idx, |row| {
+                    self.paint_row(
+                        ctx,
+                        env,
+                        &rtc,
+                        &mut rect.cols(),
+                        log_row_idx,
+                        vis_row_idx,
+                        row_top,
+                        row,
+                    )
+                });
+            }
         }
     }
 
@@ -151,54 +166,54 @@ where
         ctx: &mut PaintCtx,
         env: &Env,
         rtc: &ResolvedTableConfig,
-        cols: &mut impl Iterator<Item = usize>,
-        row_idx: usize,
+        cols: &mut impl Iterator<Item = VisIdx>,
+        log_row_idx: LogIdx,
+        vis_row_idx: VisIdx,
         row_top: Option<f64>,
         row: &RowData,
     ) {
+        for vis_col_idx in cols {
+            if let Some(log_col_idx) = Remap::Pristine.get_log_idx(vis_col_idx) {
+                let cell_left = self.column_measure.first_pixel_from_vis(vis_col_idx);
+                let selected = (&self.selection).get_cell_status(CellAddress::new(vis_row_idx, vis_col_idx));
 
-        let cols: Vec<usize> = cols.collect();
-        log::info!("Drawing row {}, {:?}, {:?}", row_idx, row_top, cols);
+                let cell_rect = Rect::from_origin_size(
+                    Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
+                    Size::new(
+                        self.column_measure
+                            .pixels_length_for_vis(vis_col_idx)
+                            .unwrap_or(0.),
+                        self.row_measure
+                            .pixels_length_for_vis(vis_row_idx)
+                            .unwrap_or(0.),
+                    ),
+                );
+                let padded_rect = cell_rect.inset(-rtc.cell_padding);
 
-        for col_idx in cols {
-            log::info!("Drawing cell {:?}", (row_idx, col_idx) );
-            let cell_left = self.column_measure.first_pixel_from_index(col_idx);
-            let selected = (&self.selection).get_cell_status(row_idx, col_idx);
-
-            let cell_rect = Rect::from_origin_size(
-                Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
-                Size::new(
-                    self.column_measure
-                        .pixels_length_for_index(col_idx)
-                        .unwrap_or(0.),
-                    self.row_measure
-                        .pixels_length_for_index(row_idx)
-                        .unwrap_or(0.),
-                ),
-            );
-            let padded_rect = cell_rect.inset(-rtc.cell_padding);
-
-            ctx.with_save(|ctx| {
-                let layout_origin = padded_rect.origin().to_vec2();
-                ctx.clip(padded_rect);
-                ctx.transform(Affine::translate(layout_origin));
-                ctx.with_child_ctx(padded_rect, |ctxt| {
-                    self.columns.paint(ctxt, row_idx, col_idx, row, env);
+                ctx.with_save(|ctx| {
+                    let layout_origin = padded_rect.origin().to_vec2();
+                    ctx.clip(padded_rect);
+                    ctx.transform(Affine::translate(layout_origin));
+                    ctx.with_child_ctx(padded_rect, |ctxt| {
+                        self.cell_delegate.paint(ctxt, log_row_idx, log_col_idx, row, env);
+                    });
                 });
-            });
 
-            if selected.into() {
-                ctx.stroke(
-                    cell_rect,
-                    &Color::rgb(0, 0, 0xFF),
-                    rtc.cell_border_thickness,
-                );
-            } else {
-                ctx.stroke_bottom_left_border(
-                    &cell_rect,
-                    &rtc.cells_border,
-                    rtc.cell_border_thickness,
-                );
+                if selected.into() {
+                    ctx.stroke(
+                        cell_rect,
+                        &Color::rgb(0, 0, 0xFF),
+                        rtc.cell_border_thickness,
+                    );
+                } else {
+                    ctx.stroke_bottom_left_border(
+                        &cell_rect,
+                        &rtc.cells_border,
+                        rtc.cell_border_thickness,
+                    );
+                }
+            }else{
+                log::warn!("Could not find logical column for {:?}", vis_col_idx)
             }
         }
     }
@@ -208,8 +223,8 @@ impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData>,
-    ColDel: ColumnsBehaviour<RowData, TableData>,
+    TableData: TableRows<Item = RowData, Idx=LogIdx>,
+    ColDel: CellsDelegate<RowData, TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -230,10 +245,10 @@ where
                     {
                         match axis {
                             TableAxis::Rows => {
-                                self.row_measure.set_pixel_length_for_idx(*idx, *length)
+                                self.row_measure.set_pixel_length_for_vis(*idx, *length)
                             }
                             TableAxis::Columns => {
-                                self.column_measure.set_pixel_length_for_idx(*idx, *length)
+                                self.column_measure.set_pixel_length_for_vis(*idx, *length)
                             }
                         };
                         ctx.request_layout();
@@ -257,13 +272,16 @@ where
     ) {
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(_env);
+            // Todo: column moves
             self.column_measure
-                .set_axis_properties(rtc.cell_border_thickness, self.columns.len());
+                .set_axis_properties(rtc.cell_border_thickness, self.cell_delegate.len(), &Remap::Pristine);
+
+            self.remap_spec_rows = self.cell_delegate.initial_spec();
+            self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
             self.row_measure
-                .set_axis_properties(rtc.cell_border_thickness, _data.len());
+                .set_axis_properties(rtc.cell_border_thickness, _data.len(), &self.remap_rows);
             self.resolved_config = Some(rtc);
-            self.remap_spec_rows = self.columns.initial_spec();
-            self.remap_rows = self.columns.remap(_data, &self.remap_spec_rows);
+
         }
     }
 
@@ -277,8 +295,8 @@ where
         if let Some(rtc) = &self.resolved_config {
             if _old_data.len() != _data.len() {
                 // need to deal with reordering and key columns etc
-                self.row_measure.set_axis_properties(rtc.cell_border_thickness, _data.len());
-                self.remap_rows = self.columns.remap(_data, &self.remap_spec_rows);
+                self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
+                self.row_measure.set_axis_properties(rtc.cell_border_thickness, _data.len(), &self.remap_rows);
             }
 
             // Columns update from data
@@ -300,7 +318,7 @@ where
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
-        self.columns.init(ctx, env); // TODO reduce calls? Invalidate on some changes
+        self.cell_delegate.init(ctx, env); // TODO reduce calls? Invalidate on some changes
 
         let rtc = self.config.resolve(env);
         let rect = ctx.region().to_rect();
@@ -308,20 +326,11 @@ where
         ctx.fill(rect, &rtc.cells_background);
 
         let cell_rect = CellRect::new(
-            self.row_measure.index_range_from_pixels(rect.y0, rect.y1),
+            self.row_measure.vis_range_from_pixels(rect.y0, rect.y1),
             self.column_measure
-                .index_range_from_pixels(rect.x0, rect.x1),
+                .vis_range_from_pixels(rect.x0, rect.x1),
         );
 
-        log::info!("Cell rect {:?}", cell_rect);
-
-        match &self.remap_rows {
-            Remap::Selected(details) => {
-                let details_copy = details;
-                let items = RemappedItems::new(data, &details_copy);
-                self.paint_cells(ctx, &items, env, &rtc, &cell_rect)
-            }
-            _ => self.paint_cells(ctx, data, env, &rtc, &cell_rect),
-        }
+        self.paint_cells(ctx, data, env, &rtc, &cell_rect)
     }
 }

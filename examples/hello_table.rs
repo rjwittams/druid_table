@@ -1,8 +1,6 @@
 use std::fmt::Debug;
 
-use druid_table::{
-    column, CellRender, CellRenderExt, DataCompare, SortDirection, TableBuilder, TextCell,
-};
+use druid_table::{column, CellRender, CellRenderExt, DataCompare, SortDirection, TableBuilder, TextCell, LogIdx};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -60,7 +58,7 @@ impl DataCompare<f64> for PieCell {
 impl CellRender<f64> for PieCell {
     fn init(&mut self, _ctx: &mut PaintCtx, _env: &Env) {}
 
-    fn paint(&self, ctx: &mut PaintCtx, _row_idx: usize, _col_idx: usize, data: &f64, _env: &Env) {
+    fn paint(&self, ctx: &mut PaintCtx, _row_idx: LogIdx, _col_idx: LogIdx, data: &f64, _env: &Env) {
         let rect = ctx.region().to_rect().with_origin(Point::ORIGIN);
 
         //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
@@ -90,7 +88,7 @@ fn build_root_widget() -> impl Widget<TableState> {
         )
         .with(
             column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
-                .sort(SortDirection::Ascending),
+                .sort(SortDirection::Ascending)
         )
         .with_column(
             "Greeting 2 with very long column name",
@@ -113,9 +111,9 @@ fn build_root_widget() -> impl Widget<TableState> {
 
     let buttons = Flex::row()
         .with_child(Button::new("Add row").on_click(|_, data: &mut Vector<HelloRow>, _|{
-            data.push_front(HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.));
+            data.push_back(HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.));
         }))
-        .with_child(Button::new("Remove row").on_click(|_, data: &mut Vector<HelloRow>, _|{ data.pop_front(); }))
+        .with_child(Button::new("Remove row").on_click(|_, data: &mut Vector<HelloRow>, _|{ data.pop_back(); }))
         .align_left();
     Flex::column().with_child(buttons).with_flex_child(table, 1.).lens(TableState::items)
 }

@@ -6,16 +6,14 @@ use druid::{
     LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{
-    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, TableAxis,
-};
+use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, TableAxis, VisIdx, LogIdx};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::ItemsUse;
-use crate::numbers_table::NumbersTable;
+use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{IndicesSelection, SELECT_INDICES};
-use crate::ItemsLen;
+use crate::{ItemsLen, Remap};
 
 pub trait HeadersFromData<Headers: ItemsUse> {
     type TableData;
@@ -72,12 +70,12 @@ impl<TableData> HeadersFromIndices<TableData> {
     }
 }
 
-impl<TableData: ItemsLen> HeadersFromData<NumbersTable> for HeadersFromIndices<TableData> {
+impl<TableData: ItemsLen> HeadersFromData<LogIdxTable> for HeadersFromIndices<TableData> {
     type TableData = TableData;
     type Header = usize;
 
-    fn get_headers(&self, table_data: &TableData) -> NumbersTable {
-        NumbersTable::new(table_data.len())
+    fn get_headers(&self, table_data: &TableData) -> LogIdxTable {
+        LogIdxTable::new(table_data.len())
     }
 }
 
@@ -97,7 +95,7 @@ where
     headers_source: HeadersSource,
     headers: Option<Headers>,
     header_render: Render,
-    dragging: Option<usize>,
+    dragging: Option<VisIdx>,
     selection: IndicesSelection,
     phantom_td: PhantomData<TableData>,
     phantom_h: PhantomData<Header>,
@@ -144,9 +142,9 @@ where
         self.measure_adjustment_handlers.push(Box::new(handler))
     }
 
-    fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, idx: usize, pixel: f64) {
-        let length = self.measure.set_far_pixel_for_idx(idx, pixel);
-        let adjustment = AxisMeasureAdjustment::LengthChanged(self.axis, idx, length);
+    fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
+        let length = self.measure.set_far_pixel_for_vis(vis_idx, pixel);
+        let adjustment = AxisMeasureAdjustment::LengthChanged(self.axis, vis_idx, length);
         for handler in &self.measure_adjustment_handlers {
             (handler)(ctx, &adjustment)
         }
@@ -159,7 +157,7 @@ impl<TableData, Header, Headers, HeadersSource, Render, Measure> Widget<TableDat
 where
     TableData: Data,
     Header: Data,
-    Headers: ItemsUse<Item = Header>,
+    Headers: ItemsUse<Item = Header, Idx= LogIdx>,
     HeadersSource: HeadersFromData<Headers, TableData = TableData>,
     Render: CellRender<Header>,
     Measure: AxisMeasure,
@@ -184,7 +182,7 @@ where
                 } else {
                     let mut cursor = &Cursor::Arrow;
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                        if idx > 0 {
+                        if idx > VisIdx(0) {
                             cursor = if self.measure.can_resize(idx - 1) {
                                 self.axis.resize_cursor()
                             } else {
@@ -199,7 +197,7 @@ where
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                    if idx > 0 && self.measure.can_resize(idx - 1) {
+                    if idx > VisIdx(0) && self.measure.can_resize(idx - 1) {
                         self.dragging = Some(idx - 1)
                     }
                 }
@@ -229,6 +227,7 @@ where
                 self.measure.set_axis_properties(
                     rtc.cell_border_thickness,
                     self.headers.as_ref().unwrap().len(),
+                    &Remap::Pristine // TODO: Column reordering..
                 );
                 self.resolved_config = Some(rtc);
             }
@@ -247,6 +246,7 @@ where
                 self.measure.set_axis_properties(
                     rtc.cell_border_thickness,
                     self.headers.as_ref().unwrap().len(),
+                        &Remap::Pristine // TODO: Column reordering..
                 );
                 ctx.request_layout();
             }
@@ -285,13 +285,13 @@ where
 
             let selected_border = Color::rgb(0xFF, 0, 0);
             let (p0, p1) = self.axis.pixels_from_rect(&rect);
-            let (start_main, end_main) = self.measure.index_range_from_pixels(p0, p1);
+            let (start_main, end_main) = self.measure.vis_range_from_pixels(p0, p1);
 
             let header_render = &mut self.header_render;
 
-            for main_idx in start_main..=end_main {
-                let first_pix = self.measure.first_pixel_from_index(main_idx).unwrap_or(0.);
-                let length_pix = self.measure.pixels_length_for_index(main_idx).unwrap_or(0.);
+            for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
+                let first_pix = self.measure.first_pixel_from_vis(vis_main_idx).unwrap_or(0.);
+                let length_pix = self.measure.pixels_length_for_vis(vis_main_idx).unwrap_or(0.);
                 let origin = self.axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
                 let size = self
@@ -299,24 +299,27 @@ where
                     .size(length_pix, rtc.cross_axis_length(&self.axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                headers.use_item(main_idx, |col_name| {
-                    ctx.with_save(|ctx| {
-                        let layout_origin = padded_rect.origin().to_vec2();
-                        ctx.clip(padded_rect);
-                        ctx.transform(Affine::translate(layout_origin));
-                        ctx.with_child_ctx(padded_rect, |ctxt| {
-                            header_render.paint(ctxt, 0, main_idx, col_name, env);
+                if let Some(log_main_idx) = Remap::Pristine.get_log_idx(vis_main_idx) { // TODO: use proper remap
+                    headers.use_item(log_main_idx, |col_name| {
+                        ctx.with_save(|ctx| {
+                            let layout_origin = padded_rect.origin().to_vec2();
+                            ctx.clip(padded_rect);
+                            ctx.transform(Affine::translate(layout_origin));
+                            ctx.with_child_ctx(padded_rect, |ctxt| {
+                                //TODO: These indexes are wrong but not used
+                                header_render.paint(ctxt, LogIdx(0), log_main_idx, col_name, env);
+                            });
                         });
                     });
-                });
-                if self.selection.index_selected(main_idx) {
-                    ctx.stroke(padded_rect, &selected_border, 2.);
-                } else {
-                    ctx.stroke_bottom_left_border(
-                        &cell_rect,
-                        &rtc.cells_border,
-                        rtc.cell_border_thickness,
-                    );
+                    if self.selection.vis_index_selected(vis_main_idx) {
+                        ctx.stroke(padded_rect, &selected_border, 2.);
+                    } else {
+                        ctx.stroke_bottom_left_border(
+                            &cell_rect,
+                            &rtc.cells_border,
+                            rtc.cell_border_thickness,
+                        );
+                    }
                 }
             }
         }
