@@ -1,7 +1,5 @@
 use crate::cells::*;
-use crate::columns::{
-    CellDelegate, CellRender, CellRenderExt, DataCompare, TableColumn, TextCell,
-};
+use crate::columns::{CellDelegate, CellRender, CellRenderExt, DataCompare, TableColumn, TextCell};
 
 use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::config::TableConfig;

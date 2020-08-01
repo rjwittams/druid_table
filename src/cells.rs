@@ -47,6 +47,7 @@ where
     phantom_td: PhantomData<TableData>,
 }
 
+#[derive(Debug)]
 struct CellRect {
     start_row: usize,
     end_row: usize,
@@ -127,8 +128,10 @@ where
         rect: &CellRect,
     ) {
         for row_idx in rect.start_row..=rect.end_row {
-            let row_top = self.row_measure.first_pixel_from_index(row_idx);
 
+            let row_top = self.row_measure.first_pixel_from_index(row_idx);
+            let cols: Vec<usize> =  (rect.start_col..=rect.end_col).collect();
+            log::info!("Drawing row {}, {:?}, {:?}", row_idx, row_top, cols);
             data.use_item(row_idx, |row| {
                 self.paint_row(
                     ctx,
@@ -137,7 +140,7 @@ where
                     &mut (rect.start_col..=rect.end_col).into_iter(),
                     row_idx,
                     row_top,
-                    row
+                    row,
                 )
             });
         }
@@ -148,12 +151,17 @@ where
         ctx: &mut PaintCtx,
         env: &Env,
         rtc: &ResolvedTableConfig,
-        rows: &mut impl Iterator<Item=usize>,
+        cols: &mut impl Iterator<Item = usize>,
         row_idx: usize,
         row_top: Option<f64>,
-        row: &RowData
+        row: &RowData,
     ) {
-        for col_idx in rows {
+
+        let cols: Vec<usize> = cols.collect();
+        log::info!("Drawing row {}, {:?}, {:?}", row_idx, row_top, cols);
+
+        for col_idx in cols {
+            log::info!("Drawing cell {:?}", (row_idx, col_idx) );
             let cell_left = self.column_measure.first_pixel_from_index(col_idx);
             let selected = (&self.selection).get_cell_status(row_idx, col_idx);
 
@@ -266,6 +274,15 @@ where
         _data: &TableData,
         _env: &Env,
     ) {
+        if let Some(rtc) = &self.resolved_config {
+            if _old_data.len() != _data.len() {
+                // need to deal with reordering and key columns etc
+                self.row_measure.set_axis_properties(rtc.cell_border_thickness, _data.len());
+                self.remap_rows = self.columns.remap(_data, &self.remap_spec_rows);
+            }
+
+            // Columns update from data
+        }
     }
 
     fn layout(
@@ -290,11 +307,13 @@ where
 
         ctx.fill(rect, &rtc.cells_background);
 
-        // TODO:
         let cell_rect = CellRect::new(
             self.row_measure.index_range_from_pixels(rect.y0, rect.y1),
-            self.column_measure.index_range_from_pixels(rect.x0, rect.x1),
+            self.column_measure
+                .index_range_from_pixels(rect.x0, rect.x1),
         );
+
+        log::info!("Cell rect {:?}", cell_rect);
 
         match &self.remap_rows {
             Remap::Selected(details) => {

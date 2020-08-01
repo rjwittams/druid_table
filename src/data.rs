@@ -39,7 +39,9 @@ impl<T: Clone> ItemsLen for Vector<T> {
 impl<RowData: Data> ItemsUse for Vector<RowData> {
     type Item = RowData;
     fn use_item<V>(&self, idx: usize, f: impl FnOnce(&RowData) -> V) -> Option<V> {
-        self.get(idx).map(move |x| f(x))
+        let option = self.get(idx);
+        log::info!("Using idx {} is_none{} len {}", idx, option.is_none(), self.len());
+        option.map(move |x| f(x))
     }
 }
 

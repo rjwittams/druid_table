@@ -29,6 +29,10 @@ impl<T, CR: CellRender<T>> ManyColumns<T, CR> {
 }
 
 impl<T, CR: CellRender<T>> CellRender<T> for ManyColumns<T, CR> {
+    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
+        self.inner.init(ctx, env);
+    }
+
     fn paint(&self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         self.inner.paint(ctx, row_idx, col_idx, data, env)
     }

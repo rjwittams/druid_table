@@ -13,6 +13,7 @@ use druid::{
 use druid::{Color, Value};
 use std::cmp::Ordering;
 use std::f64::consts::PI;
+use druid::widget::{Button, Flex};
 
 #[macro_use]
 extern crate log;
@@ -107,7 +108,16 @@ fn build_root_widget() -> impl Widget<TableState> {
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
 
-    table_builder.build_widget().lens(TableState::items)
+    let table = table_builder.build_widget();
+    // Need a wrapper widget to get selection/scroll events out of it
+
+    let buttons = Flex::row()
+        .with_child(Button::new("Add row").on_click(|_, data: &mut Vector<HelloRow>, _|{
+            data.push_front(HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.));
+        }))
+        .with_child(Button::new("Remove row").on_click(|_, data: &mut Vector<HelloRow>, _|{ data.pop_front(); }))
+        .align_left();
+    Flex::column().with_child(buttons).with_flex_child(table, 1.).lens(TableState::items)
 }
 
 pub fn main() {

@@ -269,8 +269,17 @@ impl AxisMeasure for StoredAxisMeasure {
 
     fn set_axis_properties(&mut self, border: f64, len: usize) {
         self.border = border;
-        self.pixel_lengths = vec![self.default_pixels; len];
-        // TODO: handle resize
+
+        let old_len = self.pixel_lengths.len();
+        if old_len > len {
+            self.pixel_lengths.truncate(len)
+        }else if old_len < len{
+            let extra = vec![self.default_pixels; (len - old_len)];
+            self.pixel_lengths.extend_from_slice( &extra[..] );
+            assert_eq!(self.pixel_lengths.len(), len);
+        }
+
+        // TODO: handle renumbering / remapping. Erk.
         self.build_maps()
     }
 
