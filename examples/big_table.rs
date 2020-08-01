@@ -1,9 +1,6 @@
-use druid_table::{
-    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices,
-    ItemsLen, ItemsUse, SuppliedHeaders, TableConfig, TextCell,
-};
+use druid_table::{build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen, ItemsUse, SuppliedHeaders, TableConfig, TextCell, Remapper, TableRows, Remap, RemapSpec};
 
-use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc};
+use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc, Data};
 use druid_table::numbers_table::NumbersTable;
 use std::marker::PhantomData;
 
@@ -48,6 +45,12 @@ impl<CR: CellRender<usize>> ItemsUse for ManyColumns<usize, CR> {
         } else {
             None
         }
+    }
+}
+
+impl <RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData>> Remapper<RowData, TableData> for ManyColumns<RowData, CR>{
+    fn remap(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
+        Remap::Pristine
     }
 }
 

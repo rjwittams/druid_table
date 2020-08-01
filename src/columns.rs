@@ -1,20 +1,39 @@
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+use std::ops::{DerefMut, Deref};
 
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
+use std::cmp::Ordering;
+use std::fmt::{Debug, Formatter};
+use std::fmt;
+use crate::data::{SortSpec, SortDirection};
 
-pub trait CellRender<T> {
-    fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
+pub trait CellDelegate<RowData>: CellRender<RowData> + DataCompare<RowData> {
 
 }
 
-impl<T> CellRender<T> for Box<dyn CellRender<T>> {
+
+impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         self.deref_mut().paint(ctx, row_idx, col_idx, data, env);
     }
 }
+
+impl <T> DataCompare<T> for Box<dyn CellDelegate<T>>{
+    fn compare(&self, a: &T, b: &T) -> Ordering {
+        self.deref().compare(a, b)
+    }
+}
+
+impl <RowData, T> CellDelegate<RowData> for T where T: CellRender<RowData> + DataCompare<RowData>{}
+
+
+pub trait CellRender<T> {
+    fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env);
+}
+
+
 
 impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
@@ -28,7 +47,6 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
 pub struct Wrapped<T, U, W, I> {
     inner: I,
     wrapper: W,
-    // The following is a workaround for otherwise getting E0207.
     phantom_u: PhantomData<U>,
     phantom_t: PhantomData<T>,
 }
@@ -65,6 +83,10 @@ pub trait CellRenderExt<T: Data>: CellRender<T> + Sized + 'static {
 
 impl<T: Data, CR: CellRender<T> + 'static> CellRenderExt<T> for CR {}
 
+pub trait DataCompare<Item>{
+    fn compare(&self, a: &Item, b: &Item)->Ordering;
+}
+
 impl<T, U, L, CR> CellRender<T> for LensWrapped<T, U, L, CR>
 where
     T: Data,
@@ -80,6 +102,22 @@ where
     }
 }
 
+impl<T, U, L, DC> DataCompare<T> for LensWrapped<T, U, L, DC>
+    where
+        T: Data,
+        U: Data,
+        L: Lens<T, U>,
+        DC: DataCompare<U>{
+
+    fn compare(&self, a: &T, b: &T) -> Ordering {
+        self.0.wrapper.with(a, |a|{
+            self.0.wrapper.with(b, |b|{
+                self.0.inner.compare(a, b)
+            })
+        })
+    }
+}
+
 impl<T, U, F, CR> CellRender<T> for FuncWrapped<T, U, F, CR>
 where
     T: Data,
@@ -91,6 +129,19 @@ where
         let inner = &mut self.0.inner;
         let inner_data = (self.0.wrapper)(data);
         inner.paint(ctx, row_idx, col_idx, &inner_data, env);
+    }
+}
+
+impl<T, U, F, DC> DataCompare<T>  for FuncWrapped<T, U, F, DC>
+    where
+        T: Data,
+        U: Data,
+        F: Fn(&T) -> U,
+        DC: DataCompare<U>{
+    fn compare(&self, a: &T, b: &T) -> Ordering {
+        let a = (self.0.wrapper)(a);
+        let b = (self.0.wrapper)(b);
+        self.0.inner.compare(&a, &b)
     }
 }
 
@@ -171,11 +222,28 @@ impl CellRender<String> for TextCell {
     }
 }
 
-pub(crate) struct TableColumn<T: Data, CR: CellRender<T>> {
+impl DataCompare<String> for TextCell{
+    fn compare(&self, a: &String, b: &String) -> Ordering {
+        a.cmp(b)
+    }
+}
+
+
+pub struct TableColumn<T: Data, CD: CellDelegate<T>> {
     pub(crate) header: String,
-    cell_render: CR,
-    width: TableColumnWidth,
+    cell_delegate: CD,
+    pub(crate) width: TableColumnWidth,
+    pub(crate) sort_fixed: bool,
+    pub(crate) sort_dir: Option<SortDirection>,
     phantom_: PhantomData<T>,
+}
+
+
+impl <T: Data, CD: CellDelegate<T>> Debug for TableColumn<T, CD>{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TableColumn").field("header", &self.header)
+            .finish()
+    }
 }
 
 pub struct TableColumnWidth {
@@ -217,11 +285,17 @@ where
     }
 }
 
-impl<T: Data, CR: CellRender<T>> TableColumn<T, CR> {
-    pub fn new(header: impl Into<String>, cell_render: CR) -> Self {
+pub fn column<T: Data, CD: CellDelegate<T> + 'static>(header: impl Into<String>, cell_delegate: CD) ->TableColumn<T, Box<dyn CellDelegate<T>>>{
+    TableColumn::new(header, Box::new(cell_delegate))
+}
+
+impl<T: Data, CD: CellDelegate<T>> TableColumn<T, CD> {
+    pub fn new(header: impl Into<String>, cell_delegate: CD) -> Self {
         TableColumn {
             header: header.into(),
-            cell_render,
+            cell_delegate,
+            sort_fixed: false,
+            sort_dir: None,
             width: TableColumnWidth::default(),
             phantom_: PhantomData::default(),
         }
@@ -231,10 +305,26 @@ impl<T: Data, CR: CellRender<T>> TableColumn<T, CR> {
         self.width = width.into();
         self
     }
+
+    pub fn sort<S: Into<SortDirection>>(mut self, sort: S)->Self{
+        self.sort_dir = Some(sort.into());
+        self
+    }
+
+    pub fn fix_sort(mut self)->Self{
+        self.sort_fixed = true;
+        self
+    }
 }
 
-impl<T: Data, CR: CellRender<T>> CellRender<T> for TableColumn<T, CR> {
+impl<T: Data, CR: CellDelegate<T>> CellRender<T> for TableColumn<T, CR> {
     fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
-        self.cell_render.paint(ctx, row_idx, col_idx, data, env)
+        self.cell_delegate.paint(ctx, row_idx, col_idx, data, env)
+    }
+}
+
+impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
+    fn compare(&self, a: &T, b: &T) -> Ordering {
+        self.cell_delegate.compare(a, b)
     }
 }

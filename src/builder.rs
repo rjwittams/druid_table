@@ -1,20 +1,22 @@
-use crate::cell_render::{CellRender, CellRenderExt, TableColumn, TextCell};
+use crate::columns::{CellRender, CellRenderExt, TableColumn, TextCell, CellDelegate, FuncWrapped, DataCompare};
 use crate::cells::*;
 
 use crate::axis_measure::{AxisMeasure, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::config::TableConfig;
-use crate::data::{ItemsLen, ItemsUse, TableRows};
+use crate::data::{ItemsLen, ItemsUse, TableRows, Remapper, RemapSpec, Remap, SortSpec, RemapDetails};
 use crate::headings::{HeadersFromData, HeadersFromIndices, Headings, SuppliedHeaders};
 use crate::selection::SELECT_INDICES;
 use druid::widget::prelude::*;
 use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
 use druid::{theme, Data, WidgetExt};
 use std::marker::PhantomData;
+use std::cmp::Ordering;
+
 
 pub struct TableBuilder<RowData: Data, TableData: Data> {
-    table_columns: Vec<TableColumn<RowData, Box<dyn CellRender<RowData>>>>,
-    column_header_render: Box<dyn CellRender<String>>,
-    row_header_render: Box<dyn CellRender<usize>>,
+    table_columns: Vec<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>,
+    column_header_delegate: Box<dyn CellDelegate<String>>,
+    row_header_delegate: Box<dyn CellDelegate<usize>>,
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
 }
@@ -27,34 +29,107 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> Default
     }
 }
 
+struct ProvidedColumns<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>> {
+    cols: Vec::<TableColumn<RowData, ColumnType>>,
+    phantom_td: PhantomData<TableData>
+}
+
+impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>  ProvidedColumns<RowData, TableData, ColumnType> {
+    pub fn new(cols: Vec<TableColumn<RowData, ColumnType>>) -> Self {
+        ProvidedColumns { cols, phantom_td: Default::default() }
+    }
+}
+
+
+impl<RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>  ItemsLen for ProvidedColumns<RowData, TableData, ColumnType>{
+    fn len(&self) -> usize {
+        self.cols.len()
+    }
+}
+
+impl <RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>  CellRender<RowData> for ProvidedColumns<RowData, TableData, ColumnType>{
+    fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &RowData, env: &Env) {
+        self.cols.paint(ctx, row_idx, col_idx, data, env);
+    }
+}
+
+impl <RowData: Data, TableData: TableRows<Item = RowData>, ColumnType: CellDelegate<RowData>>  Remapper<RowData, TableData> for ProvidedColumns<RowData, TableData, ColumnType>{
+    fn sort_fixed(&self, idx: usize) -> bool {
+        self.cols.get(idx).map(|c|c.sort_fixed).unwrap_or(false)
+    }
+
+    fn initial_spec(&self) -> RemapSpec {
+        let mut spec = RemapSpec::default();
+        // Todo order
+        for (idx, col) in self.cols.iter().enumerate(){
+            if let Some(dir) = &col.sort_dir {
+                spec.add_sort(SortSpec::new(idx, dir.clone()))
+            }
+        }
+        spec
+    }
+
+    fn remap(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
+        if remap_spec.is_empty() {
+            Remap::Pristine
+        }else{
+            let mut idxs:Vec<usize> =  (0usize..table_data.len()).collect(); //TODO Give up if too big?
+            idxs.sort_by(|a, b|{
+                table_data.use_item(*a, |a|{
+                    table_data.use_item(*b, |b|{
+                        for SortSpec{idx, direction} in &remap_spec.sort_by{
+                            let col = self.cols.get(*idx).unwrap();
+                            log::info!("col {} {:?}", idx, col);
+                            let ord = col.compare(a, b);
+                            if ord != Ordering::Equal{
+                                return direction.apply(ord)
+                            }
+                        }
+                        Ordering::Equal
+                    }).unwrap()
+                }).unwrap()
+            });
+            Remap::Selected(RemapDetails::Full(idxs))
+        }
+    }
+}
+
 impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, TableData> {
     pub fn new() -> TableBuilder<RowData, TableData> {
         TableBuilder {
-            table_columns: Vec::<TableColumn<RowData, Box<dyn CellRender<RowData>>>>::new(),
-            row_header_render: Box::new(
+            table_columns: Vec::<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>::new(),
+            row_header_delegate: Box::new(
                 TextCell::new()
                     .text_color(theme::PRIMARY_LIGHT)
-                    .on_result_of(|br: &usize| br.to_string()),
+                    .on_result_of(|br: &usize| br.to_string())
             ),
-            column_header_render: Box::new(TextCell::new().text_color(theme::PRIMARY_LIGHT)),
+            column_header_delegate: Box::new(TextCell::new().text_color(theme::PRIMARY_LIGHT)),
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
         }
     }
 
-    pub fn with_column<CR: CellRender<RowData> + 'static>(
+    pub fn with(
         mut self,
-        header: impl Into<String>,
-        cell_render: CR,
+        col: TableColumn<RowData, Box<dyn CellDelegate<RowData>>>
     ) -> Self {
-        self.add_column(header, cell_render);
+        self.table_columns.push(col);
         self
     }
 
-    pub fn add_column<CR: CellRender<RowData> + 'static>(
+    pub fn with_column<CD: CellDelegate<RowData> + 'static>(
+        mut self,
+        header: impl Into<String>,
+        cell_delegate: CD,
+    ) -> Self {
+        self.add_column(header, cell_delegate);
+        self
+    }
+
+    pub fn add_column<CD: CellDelegate<RowData> + 'static>(
         &mut self,
         header: impl Into<String>,
-        cell_render: CR,
+        cell_render: CD,
     ) {
         self.table_columns
             .push(TableColumn::new(header, Box::new(cell_render)));
@@ -73,15 +148,15 @@ impl<RowData: Data, TableData: TableRows<Item = RowData>> TableBuilder<RowData, 
         let row_build = AxisBuild::new(
             HeadersFromIndices::<TableData>::new(),
             row_measure,
-            self.row_header_render,
+            self.row_header_delegate,
         );
         let col_build = AxisBuild::new(
             SuppliedHeaders::new(column_headers),
             column_measure,
-            self.column_header_render,
+            self.column_header_delegate,
         );
 
-        build_table(self.table_columns, row_build, col_build, self.table_config)
+        build_table(ProvidedColumns::new(self.table_columns), row_build, col_build, self.table_config)
     }
 }
 
@@ -156,9 +231,9 @@ pub fn build_table<
     TableData: TableRows<Item = RowData>,
     RowT: AxisBuildT<TableData = TableData>,
     ColT: AxisBuildT<TableData = TableData>,
-    CellAreaRender: CellRender<RowData> + ItemsLen + 'static,
+    ColDel: ColumnsBehaviour<RowData, TableData> + 'static
 >(
-    cell_area_render: CellAreaRender,
+    columns_delegate: ColDel,
     row_t: RowT,
     col_t: ColT,
     table_config: TableConfig,
@@ -190,7 +265,7 @@ pub fn build_table<
         table_config.clone(),
         col.measure,
         row.measure.clone(),
-        cell_area_render,
+        columns_delegate,
     );
     cells.add_selection_handler(move |ctx, table_sel| {
         ctx.submit_command(

@@ -9,7 +9,7 @@ use druid::{
 use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, TableAxis,
 };
-use crate::cell_render::CellRender;
+use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::ItemsUse;
 use crate::numbers_table::NumbersTable;
@@ -211,7 +211,7 @@ where
                     self.dragging = None;
                 }
             }
-            e => log::info!("Event {:?}", e),
+            _ => (),
         }
     }
 
@@ -235,7 +235,7 @@ where
             LifeCycle::HotChanged(false) => {
                 self.dragging = None;
             }
-            _ => log::info!("Lifecycle {:?}", event),
+            _ => {}
         }
         _ctx.children_changed()
     }

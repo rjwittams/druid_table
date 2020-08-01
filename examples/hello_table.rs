@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell};
+use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell, DataCompare, column, SortDirection};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -10,6 +10,7 @@ use druid::{
 };
 use druid::{Color, Value};
 use std::f64::consts::PI;
+use std::cmp::Ordering;
 
 #[macro_use]
 extern crate log;
@@ -47,6 +48,12 @@ struct TableState {
 
 struct PieCell {}
 
+impl DataCompare<f64> for PieCell{
+    fn compare(&self, a: &f64, b: &f64) -> Ordering {
+        f64::partial_cmp(a,b).unwrap_or(Ordering::Equal)
+    }
+}
+
 impl CellRender<f64> for PieCell {
     fn paint(
         &mut self,
@@ -83,7 +90,7 @@ fn build_root_widget() -> impl Widget<TableState> {
             "Westernised",
             TextCell::new().font_size(17.).lens(HelloRow::westernised),
         )
-        .with_column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
+        .with(column("Who knows?", PieCell {}.lens(HelloRow::who_knows) ).sort(SortDirection::Ascending)  )
         .with_column(
             "Greeting 2 with very long column name",
             TextCell::new()
@@ -117,7 +124,7 @@ pub fn main() {
     let initial_state = TableState {
         items: vector![
             HelloRow::new("English", "Hello", "Hello", 99.1),
-            HelloRow::new("Français", "Bonjour", "Bonjour", 91.9),
+            HelloRow::new("Français", "Bonjour", "Bonjour", 95.0),
             HelloRow::new("Espanol", "Hola", "Hola", 95.0),
             HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85.),
             HelloRow::new("Hindi", "नमस्ते", "namaste", 74.),

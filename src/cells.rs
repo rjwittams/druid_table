@@ -7,17 +7,30 @@ use druid::{
 };
 
 use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE};
-use crate::cell_render::CellRender;
+use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{ItemsLen, TableRows};
+use crate::data::{ItemsLen, RemapSpec, Remapper, TableRows, RemappedItems, SortSpec, SortDirection};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{SelectionHandler, SingleCell, TableSelection};
+use crate::{Remap, ItemsUse};
 
-pub struct Cells<RowData, TableData, Render, RowMeasure, ColumnMeasure>
+pub trait ColumnsBehaviour<RowData: Data, TableData: TableRows<Item = RowData>>:
+    CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>
+{
+}
+
+impl<RowData: Data, TableData: TableRows<Item = RowData>, T> ColumnsBehaviour<RowData, TableData>
+    for T
+where
+    T: CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>,
+{
+}
+
+pub struct Cells<RowData, TableData, ColBehaviour, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: Data,
-    Render: CellRender<RowData> + ItemsLen,
+    TableData: TableRows<Item = RowData>,
+    ColBehaviour: ColumnsBehaviour<RowData, TableData>, // The length is the number of columns
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -27,17 +40,19 @@ where
     selection_handlers: Vec<Box<SelectionHandler>>,
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
-    cell_render: Render,
+    columns: ColBehaviour,
+    remap_spec_rows: RemapSpec,
+    remap_rows: Remap,
     phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<RowData, TableData, Render, RowMeasure, ColumnMeasure>
-    Cells<RowData, TableData, Render, RowMeasure, ColumnMeasure>
+impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+    Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: Data,
-    Render: CellRender<RowData> + ItemsLen,
+    TableData: TableRows<Item = RowData>,
+    ColDel: ColumnsBehaviour<RowData, TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -45,8 +60,8 @@ where
         config: TableConfig,
         column_measure: ColumnMeasure,
         row_measure: RowMeasure,
-        cell_render: Render,
-    ) -> Cells<RowData, TableData, Render, RowMeasure, ColumnMeasure> {
+        columns: ColDel,
+    ) -> Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> {
         Cells {
             config,
             resolved_config: None,
@@ -54,7 +69,9 @@ where
             selection: TableSelection::NoSelection,
             column_measure,
             row_measure,
-            cell_render,
+            remap_spec_rows:  RemapSpec::default(),
+            remap_rows: Remap::Pristine,
+            columns,
             phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
@@ -82,14 +99,77 @@ where
         );
         Some(SingleCell::new(r?, c?))
     }
+
+    fn paint_cells(&mut self, ctx: &mut PaintCtx, data: &impl ItemsUse<Item=RowData>, env: &Env, rtc: &ResolvedTableConfig, start_row: usize, end_row: usize, start_col: usize, end_col: usize) {
+        for row_idx in start_row..=end_row {
+            let row_top = self.row_measure.first_pixel_from_index(row_idx);
+
+            data.use_item(row_idx, |row| {
+                self.paint_row(ctx, env, &rtc, start_col, end_col, row_idx, row_top, row)
+            });
+        }
+    }
+
+    fn paint_row(
+        &mut self,
+        ctx: &mut PaintCtx,
+        env: &Env,
+        rtc: &ResolvedTableConfig,
+        start_col: usize,
+        end_col: usize,
+        row_idx: usize,
+        row_top: Option<f64>,
+        row: &RowData,
+    ) {
+        for col_idx in start_col..=end_col {
+            let cell_left = self.column_measure.first_pixel_from_index(col_idx);
+            let selected = (&self.selection).get_cell_status(row_idx, col_idx);
+
+            let cell_rect = Rect::from_origin_size(
+                Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
+                Size::new(
+                    self.column_measure
+                        .pixels_length_for_index(col_idx)
+                        .unwrap_or(0.),
+                    self.row_measure
+                        .pixels_length_for_index(row_idx)
+                        .unwrap_or(0.),
+                ),
+            );
+            let padded_rect = cell_rect.inset(-rtc.cell_padding);
+
+            ctx.with_save(|ctx| {
+                let layout_origin = padded_rect.origin().to_vec2();
+                ctx.clip(padded_rect);
+                ctx.transform(Affine::translate(layout_origin));
+                ctx.with_child_ctx(padded_rect, |ctxt| {
+                    self.columns.paint(ctxt, row_idx, col_idx, row, env);
+                });
+            });
+
+            if selected.into() {
+                ctx.stroke(
+                    cell_rect,
+                    &Color::rgb(0, 0, 0xFF),
+                    rtc.cell_border_thickness,
+                );
+            } else {
+                ctx.stroke_bottom_left_border(
+                    &cell_rect,
+                    &rtc.cells_border,
+                    rtc.cell_border_thickness,
+                );
+            }
+        }
+    }
 }
 
-impl<RowData, TableData, Render, RowMeasure, ColumnMeasure> Widget<TableData>
-    for Cells<RowData, TableData, Render, RowMeasure, ColumnMeasure>
+impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
+    for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
     TableData: TableRows<Item = RowData>,
-    Render: CellRender<RowData> + ItemsLen,
+    ColDel: ColumnsBehaviour<RowData, TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -138,10 +218,12 @@ where
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(_env);
             self.column_measure
-                .set_axis_properties(rtc.cell_border_thickness, self.cell_render.len());
+                .set_axis_properties(rtc.cell_border_thickness, self.columns.len());
             self.row_measure
                 .set_axis_properties(rtc.cell_border_thickness, _data.len());
             self.resolved_config = Some(rtc);
+            self.remap_spec_rows = self.columns.initial_spec();
+            self.remap_rows = self.columns.remap(_data, &self.remap_spec_rows);
         }
     }
 
@@ -179,51 +261,16 @@ where
             .column_measure
             .index_range_from_pixels(rect.x0, rect.x1);
 
-        for row_idx in start_row..=end_row {
-            let row_top = self.row_measure.first_pixel_from_index(row_idx);
-
-            data.use_item(row_idx, |row| {
-                for col_idx in start_col..=end_col {
-                    let cell_left = self.column_measure.first_pixel_from_index(col_idx);
-                    let selected = (&self.selection).get_cell_status(row_idx, col_idx);
-
-                    let cell_rect = Rect::from_origin_size(
-                        Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
-                        Size::new(
-                            self.column_measure
-                                .pixels_length_for_index(col_idx)
-                                .unwrap_or(0.),
-                            self.row_measure
-                                .pixels_length_for_index(row_idx)
-                                .unwrap_or(0.),
-                        ),
-                    );
-                    let padded_rect = cell_rect.inset(-rtc.cell_padding);
-
-                    ctx.with_save(|ctx| {
-                        let layout_origin = padded_rect.origin().to_vec2();
-                        ctx.clip(padded_rect);
-                        ctx.transform(Affine::translate(layout_origin));
-                        ctx.with_child_ctx(padded_rect, |ctxt| {
-                            self.cell_render.paint(ctxt, row_idx, col_idx, row, env);
-                        });
-                    });
-
-                    if selected.into() {
-                        ctx.stroke(
-                            cell_rect,
-                            &Color::rgb(0, 0, 0xFF),
-                            rtc.cell_border_thickness,
-                        );
-                    } else {
-                        ctx.stroke_bottom_left_border(
-                            &cell_rect,
-                            &rtc.cells_border,
-                            rtc.cell_border_thickness,
-                        );
-                    }
-                }
-            });
+        match &self.remap_rows{
+            Remap::Selected(details)=>{
+                let details_copy = details.clone(); // TODO defeat the borrow checker
+                let items = &RemappedItems::new(data, &details_copy);
+                self.paint_cells(ctx, items, env, &rtc, start_row, end_row, start_col, end_col)
+            }
+            _=>self.paint_cells(ctx, data, env, &rtc, start_row, end_row, start_col, end_col)
         }
+
+
     }
 }
+
