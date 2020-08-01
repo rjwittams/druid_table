@@ -9,10 +9,12 @@ use druid::{
 use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{ItemsLen, RemapSpec, Remapper, TableRows, RemappedItems, SortSpec, SortDirection};
+use crate::data::{
+    ItemsLen, RemapSpec, RemappedItems, Remapper, SortDirection, SortSpec, TableRows,
+};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{SelectionHandler, SingleCell, TableSelection};
-use crate::{Remap, ItemsUse};
+use crate::{ItemsUse, Remap};
 
 pub trait ColumnsBehaviour<RowData: Data, TableData: TableRows<Item = RowData>>:
     CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>
@@ -69,7 +71,7 @@ where
             selection: TableSelection::NoSelection,
             column_measure,
             row_measure,
-            remap_spec_rows:  RemapSpec::default(),
+            remap_spec_rows: RemapSpec::default(),
             remap_rows: Remap::Pristine,
             columns,
             phantom_rd: PhantomData::default(),
@@ -100,7 +102,17 @@ where
         Some(SingleCell::new(r?, c?))
     }
 
-    fn paint_cells(&mut self, ctx: &mut PaintCtx, data: &impl ItemsUse<Item=RowData>, env: &Env, rtc: &ResolvedTableConfig, start_row: usize, end_row: usize, start_col: usize, end_col: usize) {
+    fn paint_cells(
+        &self,
+        ctx: &mut PaintCtx,
+        data: &impl ItemsUse<Item = RowData>,
+        env: &Env,
+        rtc: &ResolvedTableConfig,
+        start_row: usize,
+        end_row: usize,
+        start_col: usize,
+        end_col: usize,
+    ) {
         for row_idx in start_row..=end_row {
             let row_top = self.row_measure.first_pixel_from_index(row_idx);
 
@@ -111,7 +123,7 @@ where
     }
 
     fn paint_row(
-        &mut self,
+        &self,
         ctx: &mut PaintCtx,
         env: &Env,
         rtc: &ResolvedTableConfig,
@@ -251,6 +263,8 @@ where
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
+        self.columns.init(ctx, env); // TODO reduce calls? Invalidate on some changes
+
         let rtc = self.config.resolve(env);
         let rect = ctx.region().to_rect();
 
@@ -261,16 +275,15 @@ where
             .column_measure
             .index_range_from_pixels(rect.x0, rect.x1);
 
-        match &self.remap_rows{
-            Remap::Selected(details)=>{
-                let details_copy = details.clone(); // TODO defeat the borrow checker
-                let items = &RemappedItems::new(data, &details_copy);
-                self.paint_cells(ctx, items, env, &rtc, start_row, end_row, start_col, end_col)
+        match &self.remap_rows {
+            Remap::Selected(details) => {
+                let details_copy = details;
+                let items = RemappedItems::new(data, &details_copy);
+                self.paint_cells(
+                    ctx, &items, env, &rtc, start_row, end_row, start_col, end_col,
+                )
             }
-            _=>self.paint_cells(ctx, data, env, &rtc, start_row, end_row, start_col, end_col)
+            _ => self.paint_cells(ctx, data, env, &rtc, start_row, end_row, start_col, end_col),
         }
-
-
     }
 }
-

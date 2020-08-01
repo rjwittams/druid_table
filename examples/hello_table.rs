@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 
-use druid_table::{CellRender, CellRenderExt, TableBuilder, TextCell, DataCompare, column, SortDirection};
+use druid_table::{
+    column, CellRender, CellRenderExt, DataCompare, SortDirection, TableBuilder, TextCell,
+};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -9,8 +11,8 @@ use druid::{
     Widget, WidgetExt, WindowDesc,
 };
 use druid::{Color, Value};
-use std::f64::consts::PI;
 use std::cmp::Ordering;
+use std::f64::consts::PI;
 
 #[macro_use]
 extern crate log;
@@ -48,21 +50,16 @@ struct TableState {
 
 struct PieCell {}
 
-impl DataCompare<f64> for PieCell{
+impl DataCompare<f64> for PieCell {
     fn compare(&self, a: &f64, b: &f64) -> Ordering {
-        f64::partial_cmp(a,b).unwrap_or(Ordering::Equal)
+        f64::partial_cmp(a, b).unwrap_or(Ordering::Equal)
     }
 }
 
 impl CellRender<f64> for PieCell {
-    fn paint(
-        &mut self,
-        ctx: &mut PaintCtx,
-        _row_idx: usize,
-        _col_idx: usize,
-        data: &f64,
-        _env: &Env,
-    ) {
+    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {}
+
+    fn paint(&self, ctx: &mut PaintCtx, _row_idx: usize, _col_idx: usize, data: &f64, _env: &Env) {
         let rect = ctx.region().to_rect().with_origin(Point::ORIGIN);
 
         //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
@@ -90,7 +87,10 @@ fn build_root_widget() -> impl Widget<TableState> {
             "Westernised",
             TextCell::new().font_size(17.).lens(HelloRow::westernised),
         )
-        .with(column("Who knows?", PieCell {}.lens(HelloRow::who_knows) ).sort(SortDirection::Ascending)  )
+        .with(
+            column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
+                .sort(SortDirection::Ascending),
+        )
         .with_column(
             "Greeting 2 with very long column name",
             TextCell::new()

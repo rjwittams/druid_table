@@ -1,6 +1,10 @@
-use druid_table::{build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices, ItemsLen, ItemsUse, SuppliedHeaders, TableConfig, TextCell, Remapper, TableRows, Remap, RemapSpec};
+use druid_table::{
+    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices,
+    ItemsLen, ItemsUse, Remap, RemapSpec, Remapper, SuppliedHeaders, TableConfig, TableRows,
+    TextCell,
+};
 
-use druid::{AppLauncher, Color, Env, PaintCtx, Widget, WindowDesc, Data};
+use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::NumbersTable;
 use std::marker::PhantomData;
 
@@ -25,7 +29,7 @@ impl<T, CR: CellRender<T>> ManyColumns<T, CR> {
 }
 
 impl<T, CR: CellRender<T>> CellRender<T> for ManyColumns<T, CR> {
-    fn paint(&mut self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
+    fn paint(&self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
         self.inner.paint(ctx, row_idx, col_idx, data, env)
     }
 }
@@ -48,7 +52,17 @@ impl<CR: CellRender<usize>> ItemsUse for ManyColumns<usize, CR> {
     }
 }
 
-impl <RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData>> Remapper<RowData, TableData> for ManyColumns<RowData, CR>{
+impl<RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData>>
+    Remapper<RowData, TableData> for ManyColumns<RowData, CR>
+{
+    fn sort_fixed(&self, idx: usize) -> bool {
+        true
+    }
+
+    fn initial_spec(&self) -> RemapSpec {
+        RemapSpec::default()
+    }
+
     fn remap(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
         Remap::Pristine
     }

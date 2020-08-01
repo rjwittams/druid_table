@@ -278,6 +278,7 @@ where
 
     fn paint(&mut self, ctx: &mut PaintCtx, _data: &TableData, env: &Env) {
         if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
+            self.header_render.init(ctx, env);
             let rect = ctx.region().to_rect();
 
             ctx.fill(rect, &rtc.header_background);

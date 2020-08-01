@@ -1,7 +1,7 @@
 mod axis_measure;
 mod builder;
-mod columns;
 mod cells;
+mod columns;
 mod config;
 mod data;
 mod headings;
@@ -11,9 +11,9 @@ mod selection;
 
 pub use axis_measure::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, ADJUST_AXIS_MEASURE};
 pub use builder::{build_table, AxisBuild, TableBuilder};
-pub use columns::{CellRender, CellRenderExt, TextCell, DataCompare, column};
 pub use cells::Cells;
+pub use columns::{column, CellRender, CellRenderExt, DataCompare, TextCell};
 pub use config::TableConfig;
-pub use data::{ItemsLen, ItemsUse, TableRows, Remapper, RemapSpec, Remap, SortDirection};
+pub use data::{ItemsLen, ItemsUse, Remap, RemapSpec, Remapper, SortDirection, TableRows};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection, SELECT_INDICES};
