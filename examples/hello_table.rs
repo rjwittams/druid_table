@@ -1,9 +1,13 @@
 use std::fmt::Debug;
 
-use druid_table::{column, CellRender, CellRenderExt, DataCompare, SortDirection, TableBuilder, TextCell, LogIdx};
+use druid_table::{
+    column, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx, ShowHeadings,
+    SortDirection, Table, TableAxis, TableBuilder, TextCell,
+};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
+use druid::widget::{Button, CrossAxisAlignment, Flex, Label, RadioGroup, Split, ViewSwitcher};
 use druid::{
     AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext,
     Widget, WidgetExt, WindowDesc,
@@ -11,7 +15,6 @@ use druid::{
 use druid::{Color, Value};
 use std::cmp::Ordering;
 use std::f64::consts::PI;
-use druid::widget::{Button, Flex};
 
 #[macro_use]
 extern crate log;
@@ -45,6 +48,7 @@ impl HelloRow {
 #[derive(Clone, Data, Lens)]
 struct TableState {
     items: Vector<HelloRow>,
+    show_headings: ShowHeadings,
 }
 
 struct PieCell {}
@@ -58,7 +62,14 @@ impl DataCompare<f64> for PieCell {
 impl CellRender<f64> for PieCell {
     fn init(&mut self, _ctx: &mut PaintCtx, _env: &Env) {}
 
-    fn paint(&self, ctx: &mut PaintCtx, _row_idx: LogIdx, _col_idx: LogIdx, data: &f64, _env: &Env) {
+    fn paint(
+        &self,
+        ctx: &mut PaintCtx,
+        _row_idx: LogIdx,
+        _col_idx: LogIdx,
+        data: &f64,
+        _env: &Env,
+    ) {
         let rect = ctx.region().to_rect().with_origin(Point::ORIGIN);
 
         //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
@@ -75,8 +86,61 @@ impl CellRender<f64> for PieCell {
     }
 }
 
-fn build_root_widget() -> impl Widget<TableState> {
+fn build_main_widget() -> impl Widget<TableState> {
+    // Need a wrapper widget to get selection/scroll events out of it
+    let row =|| HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.);
+
+    let buttons = Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(Label::new("Modify table"))
+        .with_child(
+            Flex::column()
+                .with_child(
+                    Button::new("Add row")
+                        .on_click(move |_, data: &mut Vector<HelloRow>, _| {
+                            data.push_back(row());
+                        })
+                        .expand_width(),
+                )
+                .with_child(
+                    Button::new("Remove row")
+                        .on_click(|_, data: &mut Vector<HelloRow>, _| {
+                            data.pop_back();
+                        })
+                        .expand_width(),
+                ),
+        )
+        .lens(TableState::items);
+    let headings_control = Flex::column()
+        .with_child(Label::new("Headings to show:"))
+        .with_child(RadioGroup::new(vec![
+            ("Just cells", ShowHeadings::JustCells),
+            ("Column headings", ShowHeadings::One(TableAxis::Columns)),
+            ("Row headings", ShowHeadings::One(TableAxis::Rows)),
+            ("Both", ShowHeadings::Both),
+        ]))
+        .lens(TableState::show_headings);
+    let sidebar = Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(buttons)
+        .with_child(headings_control)
+        .align_left();
+
+    let vs = ViewSwitcher::new(
+        |ts: &TableState, _| ts.show_headings.clone(),
+        |sh, _, _| Box::new(build_table(sh.clone()).lens(TableState::items)),
+    );
+
+    Split::columns(vs, sidebar)
+        .split_point(0.8)
+        .draggable(true)
+        .min_size(180.0)
+}
+
+fn build_table(show_headings: ShowHeadings) -> Table<DefaultTableArgs<Vector<HelloRow>>> {
+    log::info!("Create table {:?}", show_headings);
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
+        .headings(show_headings)
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
         .with_column(
             "Greeting",
@@ -88,7 +152,7 @@ fn build_root_widget() -> impl Widget<TableState> {
         )
         .with(
             column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
-                .sort(SortDirection::Ascending)
+                .sort(SortDirection::Ascending),
         )
         .with_column(
             "Greeting 2 with very long column name",
@@ -106,16 +170,9 @@ fn build_root_widget() -> impl Widget<TableState> {
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
 
-    let table = table_builder.build_widget();
-    // Need a wrapper widget to get selection/scroll events out of it
+    let table = Table::new(table_builder.build_args());
 
-    let buttons = Flex::row()
-        .with_child(Button::new("Add row").on_click(|_, data: &mut Vector<HelloRow>, _|{
-            data.push_back(HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.));
-        }))
-        .with_child(Button::new("Remove row").on_click(|_, data: &mut Vector<HelloRow>, _|{ data.pop_back(); }))
-        .align_left();
-    Flex::column().with_child(buttons).with_flex_child(table, 1.).lens(TableState::items)
+    table
 }
 
 pub fn main() {
@@ -124,9 +181,9 @@ pub fn main() {
     info!("Hello table");
 
     // describe the main window
-    let main_window = WindowDesc::new(build_root_widget)
+    let main_window = WindowDesc::new(build_main_widget)
         .title(WINDOW_TITLE)
-        .window_size((400.0, 300.0));
+        .window_size((800.0, 500.0));
 
     // create the initial app state
     let initial_state = TableState {
@@ -141,6 +198,7 @@ pub fn main() {
             HelloRow::new("Russian", "Привет", "Privet", 42.),
             HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.),
         ],
+        show_headings: ShowHeadings::Both,
     };
 
     // start the application

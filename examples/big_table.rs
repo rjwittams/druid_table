@@ -1,7 +1,7 @@
 use druid_table::{
-    build_table, AxisBuild, CellRender, CellRenderExt, FixedAxisMeasure, HeadersFromIndices,
-    ItemsLen, ItemsUse, Remap, RemapSpec, Remapper, SuppliedHeaders, TableConfig, TableRows,
-    TextCell,
+    CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices,
+    IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table,
+    TableArgs, TableConfig, TextCell,
 };
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
@@ -12,54 +12,77 @@ use std::marker::PhantomData;
 extern crate log;
 
 #[derive(Clone)]
-struct ManyColumns<T, CR: CellRender<T>> {
+struct BigTableCells<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
+{
     inner: CR,
     columns: usize,
-    phantom_t: PhantomData<T>,
+    phantom_rd: PhantomData<RowData>,
+    phantom_td: PhantomData<TableData>,
 }
 
-impl<T, CR: CellRender<T>> ManyColumns<T, CR> {
-    fn new(inner: CR, columns: usize) -> ManyColumns<T, CR> {
-        ManyColumns {
+impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
+    BigTableCells<RowData, TableData, CR>
+{
+    fn new(inner: CR, columns: usize) -> BigTableCells<RowData, TableData, CR> {
+        BigTableCells {
             inner,
             columns,
-            phantom_t: PhantomData::default(),
+            phantom_rd: PhantomData::default(),
+            phantom_td: PhantomData::default(),
         }
     }
 }
 
-impl<T, CR: CellRender<T>> CellRender<T> for ManyColumns<T, CR> {
+impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
+    CellRender<RowData> for BigTableCells<RowData, TableData, CR>
+{
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.inner.init(ctx, env);
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: usize, col_idx: usize, data: &T, env: &Env) {
+    fn paint(
+        &self,
+        ctx: &mut PaintCtx,
+        row_idx: LogIdx,
+        col_idx: LogIdx,
+        data: &RowData,
+        env: &Env,
+    ) {
         self.inner.paint(ctx, row_idx, col_idx, data, env)
     }
 }
 
-impl<T, CR: CellRender<T>> ItemsLen for ManyColumns<T, CR> {
-    fn len(&self) -> usize {
-        self.columns
-    }
-}
+impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
+    for BigTableCells<LogIdx, TableData, CR>
+{
+    type Item = LogIdx;
+    type Idx = LogIdx;
 
-impl<CR: CellRender<usize>> ItemsUse for ManyColumns<usize, CR> {
-    type Item = usize;
-
-    fn use_item<V>(&self, idx: usize, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
-        if idx < self.columns {
+    fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
+        if idx.0 < self.columns {
             Some(f(&idx))
         } else {
             None
         }
     }
+
+    fn idx_len(&self) -> usize {
+        self.columns
+    }
 }
 
-impl<RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData>>
-    Remapper<RowData, TableData> for ManyColumns<RowData, CR>
+impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
+    CellsDelegate<RowData, TableData> for BigTableCells<RowData, TableData, CR>
 {
-    fn sort_fixed(&self, idx: usize) -> bool {
+    fn number_of_columns_in_data(&self, data: &TableData) -> usize {
+        self.columns
+    }
+}
+
+impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowData>>
+    Remapper<RowData, TableData> for BigTableCells<RowData, TableData, CR>
+{
+    fn sort_fixed(&self, _idx: usize) -> bool {
         true
     }
 
@@ -75,34 +98,35 @@ impl<RowData: Data, CR: CellRender<RowData>, TableData: TableRows<Item = RowData
 fn build_root_widget() -> impl Widget<LogIdxTable> {
     let table_config = TableConfig::new();
 
-    let inner_render = TextCell::new().on_result_of(|br: &usize| br.to_string());
+    let inner_render = TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string());
 
     let columns = 1_000_000_000;
-    let rows = AxisBuild::new(
+    let rows = HeaderBuild::new(
         HeadersFromIndices::new(),
-        FixedAxisMeasure::new(25.),
         TextCell::new()
             .text_color(Color::WHITE)
-            .on_result_of(|br: &usize| br.to_string()),
+            .on_result_of(|br: &LogIdx| br.0.to_string()),
     );
 
-    let cols = AxisBuild::new(
-        SuppliedHeaders::new(ManyColumns::new(inner_render, columns)),
-        FixedAxisMeasure::new(100.),
+    let headers = BigTableCells::<_, LogIdxTable, _>::new(inner_render, columns);
+    let cols = HeaderBuild::new(
+        SuppliedHeaders::new(headers),
         TextCell::new()
             .text_color(Color::WHITE)
-            .on_result_of(|br: &usize| br.to_string()),
+            .on_result_of(|br: &LogIdx| br.0.to_string()),
     );
 
-    build_table(
-        ManyColumns::new(
-            TextCell::new().on_result_of(|br: &usize| br.to_string()),
+    Table::new(TableArgs::new(
+        BigTableCells::new(
+            TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
             columns,
         ),
-        rows,
-        cols,
+        FixedAxisMeasure::new(25.),
+        FixedAxisMeasure::new(100.),
+        Some(rows),
+        Some(cols),
         table_config,
-    )
+    ))
 }
 
 pub fn main() {

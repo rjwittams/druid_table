@@ -6,19 +6,22 @@ use druid::{
     LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, TableAxis, VisIdx, LogIdx};
+use crate::axis_measure::{
+    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
+};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::ItemsUse;
+use crate::data::IndexedItems;
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{IndicesSelection, SELECT_INDICES};
-use crate::{ItemsLen, Remap};
+use crate::Remap;
 
-pub trait HeadersFromData<Headers: ItemsUse> {
-    type TableData;
-    type Header; // Headers::Item ;
-    fn get_headers(&self, table_data: &Self::TableData) -> Headers;
+pub trait HeadersFromData {
+    type TableData: Data;
+    type Header: Data;
+    type Headers: IndexedItems<Item = Self::Header, Idx = LogIdx>;
+    fn get_headers(&self, table_data: &Self::TableData) -> Self::Headers;
 }
 
 pub struct SuppliedHeaders<Headers, TableData> {
@@ -35,11 +38,14 @@ impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
     }
 }
 
-impl<Headers: ItemsUse + Clone, TableData> HeadersFromData<Headers>
+impl<Headers: IndexedItems<Idx = LogIdx> + Clone, TableData: Data> HeadersFromData
     for SuppliedHeaders<Headers, TableData>
+where
+    Headers::Item: Data,
 {
     type TableData = TableData;
     type Header = Headers::Item;
+    type Headers = Headers;
     fn get_headers(&self, _table_data: &Self::TableData) -> Headers {
         self.headers.clone()
     }
@@ -70,22 +76,20 @@ impl<TableData> HeadersFromIndices<TableData> {
     }
 }
 
-impl<TableData: ItemsLen> HeadersFromData<LogIdxTable> for HeadersFromIndices<TableData> {
+impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<TableData> {
     type TableData = TableData;
-    type Header = usize;
+    type Header = LogIdx;
+    type Headers = LogIdxTable;
 
     fn get_headers(&self, table_data: &TableData) -> LogIdxTable {
-        LogIdxTable::new(table_data.len())
+        LogIdxTable::new(table_data.idx_len())
     }
 }
 
-pub struct Headings<TableData, Header, Headers, HeadersSource, Render, Measure>
+pub struct Headings<HeadersSource, Render, Measure>
 where
-    TableData: Data,
-    Header: Data,
-    Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
-    Render: CellRender<Header>,
+    HeadersSource: HeadersFromData,
+    Render: CellRender<HeadersSource::Header>,
     Measure: AxisMeasure,
 {
     axis: TableAxis,
@@ -93,23 +97,17 @@ where
     resolved_config: Option<ResolvedTableConfig>,
     measure: Measure,
     headers_source: HeadersSource,
-    headers: Option<Headers>,
+    headers: Option<HeadersSource::Headers>,
     header_render: Render,
     dragging: Option<VisIdx>,
     selection: IndicesSelection,
-    phantom_td: PhantomData<TableData>,
-    phantom_h: PhantomData<Header>,
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
 }
 
-impl<TableData, Header, Headers, HeadersSource, Render, Measure>
-    Headings<TableData, Header, Headers, HeadersSource, Render, Measure>
+impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
 where
-    TableData: Data,
-    Header: Data,
-    Headers: ItemsUse<Item = Header>,
-    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
-    Render: CellRender<Header>,
+    HeadersSource: HeadersFromData,
+    Render: CellRender<HeadersSource::Header>,
     Measure: AxisMeasure,
 {
     pub fn new(
@@ -118,7 +116,7 @@ where
         measure: Measure,
         headers_source: HeadersSource,
         header_render: Render,
-    ) -> Headings<TableData, Header, Headers, HeadersSource, Render, Measure> {
+    ) -> Headings<HeadersSource, Render, Measure> {
         Headings {
             axis,
             config,
@@ -129,8 +127,6 @@ where
             header_render,
             dragging: None,
             selection: IndicesSelection::NoSelection,
-            phantom_td: PhantomData::default(),
-            phantom_h: PhantomData::default(),
             measure_adjustment_handlers: Default::default(),
         }
     }
@@ -152,17 +148,20 @@ where
     }
 }
 
-impl<TableData, Header, Headers, HeadersSource, Render, Measure> Widget<TableData>
-    for Headings<TableData, Header, Headers, HeadersSource, Render, Measure>
+impl<HeadersSource, Render, Measure> Widget<HeadersSource::TableData>
+    for Headings<HeadersSource, Render, Measure>
 where
-    TableData: Data,
-    Header: Data,
-    Headers: ItemsUse<Item = Header, Idx= LogIdx>,
-    HeadersSource: HeadersFromData<Headers, TableData = TableData>,
-    Render: CellRender<Header>,
+    HeadersSource: HeadersFromData,
+    Render: CellRender<HeadersSource::Header>,
     Measure: AxisMeasure,
 {
-    fn event(&mut self, ctx: &mut EventCtx, _event: &Event, _data: &mut TableData, _env: &Env) {
+    fn event(
+        &mut self,
+        ctx: &mut EventCtx,
+        _event: &Event,
+        _data: &mut HeadersSource::TableData,
+        _env: &Env,
+    ) {
         match _event {
             Event::Command(ref cmd) => {
                 if cmd.is(SELECT_INDICES) {
@@ -217,7 +216,7 @@ where
         &mut self,
         _ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        data: &TableData,
+        data: &HeadersSource::TableData,
         env: &Env,
     ) {
         match event {
@@ -226,8 +225,8 @@ where
                 self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
                 self.measure.set_axis_properties(
                     rtc.cell_border_thickness,
-                    self.headers.as_ref().unwrap().len(),
-                    &Remap::Pristine // TODO: Column reordering..
+                    self.headers.as_ref().unwrap().idx_len(),
+                    &Remap::Pristine, // TODO: Column reordering..
                 );
                 self.resolved_config = Some(rtc);
             }
@@ -239,14 +238,20 @@ where
         _ctx.children_changed()
     }
 
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableData, data: &TableData, _env: &Env) {
+    fn update(
+        &mut self,
+        ctx: &mut UpdateCtx,
+        old_data: &HeadersSource::TableData,
+        data: &HeadersSource::TableData,
+        _env: &Env,
+    ) {
         if let Some(rtc) = &self.resolved_config {
             if !old_data.same(data) {
                 self.headers = Some(self.headers_source.get_headers(data));
                 self.measure.set_axis_properties(
                     rtc.cell_border_thickness,
-                    self.headers.as_ref().unwrap().len(),
-                        &Remap::Pristine // TODO: Column reordering..
+                    self.headers.as_ref().unwrap().idx_len(),
+                    &Remap::Pristine, // TODO: Column reordering..
                 );
                 ctx.request_layout();
             }
@@ -257,7 +262,7 @@ where
         &mut self,
         _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        _data: &TableData,
+        _data: &HeadersSource::TableData,
         _env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
@@ -276,7 +281,7 @@ where
         )
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, _data: &TableData, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, _data: &HeadersSource::TableData, env: &Env) {
         if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
             self.header_render.init(ctx, env);
             let rect = ctx.region().to_rect();
@@ -290,8 +295,14 @@ where
             let header_render = &mut self.header_render;
 
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
-                let first_pix = self.measure.first_pixel_from_vis(vis_main_idx).unwrap_or(0.);
-                let length_pix = self.measure.pixels_length_for_vis(vis_main_idx).unwrap_or(0.);
+                let first_pix = self
+                    .measure
+                    .first_pixel_from_vis(vis_main_idx)
+                    .unwrap_or(0.);
+                let length_pix = self
+                    .measure
+                    .pixels_length_for_vis(vis_main_idx)
+                    .unwrap_or(0.);
                 let origin = self.axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
                 let size = self
@@ -299,8 +310,9 @@ where
                     .size(length_pix, rtc.cross_axis_length(&self.axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                if let Some(log_main_idx) = Remap::Pristine.get_log_idx(vis_main_idx) { // TODO: use proper remap
-                    headers.use_item(log_main_idx, |col_name| {
+                if let Some(log_main_idx) = Remap::Pristine.get_log_idx(vis_main_idx) {
+                    // TODO: use proper remap
+                    headers.with(log_main_idx, |col_name| {
                         ctx.with_save(|ctx| {
                             let layout_origin = padded_rect.origin().to_vec2();
                             ctx.clip(padded_rect);

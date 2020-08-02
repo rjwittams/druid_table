@@ -1,16 +1,16 @@
-use druid::{Cursor, EventCtx, Point, Rect, Selector, Size, Data};
+use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
+use crate::data::{RemapDetails, SortSpec};
+use crate::Remap;
+use druid::{Cursor, Data, EventCtx, Point, Rect, Selector, Size};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
-use TableAxis::*;
-use crate::Remap;
-use crate::data::{RemapDetails, SortSpec};
-use std::ops::{Add, Sub, RangeInclusive};
 use std::iter::Map;
+use std::ops::{Add, Range, RangeInclusive, Sub};
+use TableAxis::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
     Rows,
     Columns,
@@ -68,10 +68,10 @@ impl TableAxis {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum AxisMeasureAdjustment {
     LengthChanged(TableAxis, VisIdx, f64),
-    RemapChanged(TableAxis, Remap)
+    RemapChanged(TableAxis, Remap),
 }
 
 pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
@@ -82,16 +82,19 @@ pub type AxisMeasureAdjustmentHandler = dyn Fn(&mut EventCtx, &AxisMeasureAdjust
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
 pub struct VisIdx(pub(crate) usize);
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
-pub struct LogIdx(pub(crate) usize);
+pub struct LogIdx(pub usize);
 
-impl VisIdx{
+impl VisIdx {
     // Todo work out how to support custom range
-    pub fn range_inc_iter(from_inc: VisIdx, to_inc: VisIdx) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+    pub fn range_inc_iter(
+        from_inc: VisIdx,
+        to_inc: VisIdx,
+    ) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
         ((from_inc.0)..=(to_inc.0)).into_iter().map(VisIdx)
     }
 }
 
-impl Add<usize> for VisIdx{
+impl Add<usize> for VisIdx {
     type Output = Self;
 
     fn add(self, rhs: usize) -> Self::Output {
@@ -99,7 +102,7 @@ impl Add<usize> for VisIdx{
     }
 }
 
-impl Sub<usize> for VisIdx{
+impl Sub<usize> for VisIdx {
     type Output = Self;
 
     fn sub(self, rhs: usize) -> Self::Output {
@@ -292,14 +295,15 @@ impl StoredAxisMeasure {
         let mut cur = 0.;
         self.vis_pix_lengths.clear();
         match &self.remap {
-            Remap::Selected(RemapDetails::Full(vis_to_log))=>{
-                for log_idx in vis_to_log{
-                    self.vis_pix_lengths.push( self.log_pix_lengths[log_idx.0] );
+            Remap::Selected(RemapDetails::Full(vis_to_log)) => {
+                for log_idx in vis_to_log {
+                    self.vis_pix_lengths.push(self.log_pix_lengths[log_idx.0]);
                 }
             }
-            _=>self.vis_pix_lengths.extend_from_slice( &self.log_pix_lengths )
+            _ => self
+                .vis_pix_lengths
+                .extend_from_slice(&self.log_pix_lengths),
         }
-
 
         self.first_pixels.clear();
         self.pixels_to_vis.clear();
@@ -321,13 +325,12 @@ impl AxisMeasure for StoredAxisMeasure {
         self.border = border;
         self.remap = remap.clone(); // Todo: pass by ref where needed? Or make the measure own it
 
-
         let old_len = self.log_pix_lengths.len();
         if old_len > len {
             self.log_pix_lengths.truncate(len)
-        }else if old_len < len{
+        } else if old_len < len {
             let extra = vec![self.default_pixels; len - old_len];
-            self.log_pix_lengths.extend_from_slice( &extra[..] );
+            self.log_pix_lengths.extend_from_slice(&extra[..]);
             assert_eq!(self.log_pix_lengths.len(), len);
         }
 
@@ -373,7 +376,7 @@ impl AxisMeasure for StoredAxisMeasure {
             if let Some(place) = self.log_pix_lengths.get_mut(log_idx.0) {
                 *place = length;
                 self.build_maps(); // TODO : modify efficiently instead of rebuilding
-                return length
+                return length;
             }
         }
         0.
@@ -386,11 +389,11 @@ impl AxisMeasure for StoredAxisMeasure {
 
 #[cfg(test)]
 mod test {
-    use crate::{AxisMeasure, FixedAxisMeasure, StoredAxisMeasure, Remap};
+    use crate::axis_measure::VisIdx;
+    use crate::{AxisMeasure, FixedAxisMeasure, Remap, StoredAxisMeasure};
     use float_ord::FloatOrd;
     use std::collections::HashSet;
     use std::fmt::Debug;
-    use crate::axis_measure::VisIdx;
 
     #[test]
     fn fixed_axis() {
@@ -419,8 +422,14 @@ mod test {
             vec![VisIdx(1), VisIdx(2), VisIdx(2)]
         );
 
-        assert_eq!(ax.vis_range_from_pixels(105.0, 295.0), (VisIdx(1), VisIdx(2)));
-        assert_eq!(ax.vis_range_from_pixels(100.0, 300.0), (VisIdx(1), VisIdx(3)));
+        assert_eq!(
+            ax.vis_range_from_pixels(105.0, 295.0),
+            (VisIdx(1), VisIdx(2))
+        );
+        assert_eq!(
+            ax.vis_range_from_pixels(100.0, 300.0),
+            (VisIdx(1), VisIdx(3))
+        );
         let lengths = (1usize..=3)
             .into_iter()
             .map(|i| FloatOrd(ax.pixels_length_for_vis(VisIdx(i)).unwrap()))

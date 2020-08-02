@@ -1,7 +1,9 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::data::SortDirection;
+use crate::axis_measure::LogIdx;
+use crate::data::{RemapDetails, SortDirection, SortSpec};
+use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper};
 use druid::kurbo::Line;
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
@@ -9,7 +11,6 @@ use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use crate::axis_measure::LogIdx;
 
 pub trait CellDelegate<RowData>: CellRender<RowData> + DataCompare<RowData> {}
 
@@ -365,5 +366,117 @@ impl<T: Data, CR: CellDelegate<T>> CellRender<T> for TableColumn<T, CR> {
 impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
     fn compare(&self, a: &T, b: &T) -> Ordering {
         self.cell_delegate.compare(a, b)
+    }
+}
+
+pub struct ProvidedColumns<
+    TableData: IndexedData,
+    ColumnType: CellDelegate<TableData::Item>,
+> where TableData::Item: Data {
+    cols: Vec<TableColumn<TableData::Item, ColumnType>>,
+    phantom_td: PhantomData<TableData>,
+}
+
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
+    ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+{
+    pub fn new(cols: Vec<TableColumn<TableData::Item, ColumnType>>) -> Self {
+        ProvidedColumns {
+            cols,
+            phantom_td: Default::default(),
+        }
+    }
+}
+
+impl<
+        TableData: IndexedData<Idx = LogIdx>,
+        ColumnType: CellDelegate<TableData::Item>,
+    > Remapper<TableData> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+{
+    fn sort_fixed(&self, idx: usize) -> bool {
+        self.cols.get(idx).map(|c| c.sort_fixed).unwrap_or(false)
+    }
+
+    fn initial_spec(&self) -> RemapSpec {
+        let mut spec = RemapSpec::default();
+
+        // Put the columns in sort order
+        let mut in_order: Vec<(usize, &TableColumn<TableData::Item, ColumnType>)> =
+            self.cols.iter().enumerate().collect();
+        in_order.sort_by(|(_, a), (_, b)| match (a.sort_order, b.sort_order) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), _) => Ordering::Greater,
+            (_, Some(_)) => Ordering::Less,
+            _ => Ordering::Equal,
+        });
+
+        // Then add the ones which have a
+        for (idx, dir) in in_order
+            .into_iter()
+            .map(|(idx, c)| c.sort_dir.as_ref().map(|c| (idx, c)))
+            .flatten()
+        {
+            spec.add_sort(SortSpec::new(idx, dir.clone()))
+        }
+        spec
+    }
+
+    fn remap(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
+        if remap_spec.is_empty() {
+            Remap::Pristine
+        } else {
+            //Todo: Filter
+            let mut idxs: Vec<LogIdx> = (0usize..table_data.idx_len()).map(LogIdx).collect(); //TODO Give up if too big?
+            idxs.sort_by(|a, b| {
+                table_data
+                    .with(*a, |a| {
+                        table_data
+                            .with(*b, |b| {
+                                for SortSpec { idx, direction } in &remap_spec.sort_by {
+                                    let col = self.cols.get(*idx).unwrap();
+                                    let ord = col.compare(a, b);
+                                    if ord != Ordering::Equal {
+                                        return direction.apply(ord);
+                                    }
+                                }
+                                Ordering::Equal
+                            })
+                            .unwrap()
+                    })
+                    .unwrap()
+            });
+            Remap::Selected(RemapDetails::Full(idxs))
+        }
+    }
+}
+
+impl<
+        TableData: IndexedData<Idx = LogIdx>,
+        ColumnType: CellDelegate<TableData::Item>,
+    > CellRender<TableData::Item> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+{
+    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
+        self.cols.init(ctx, env)
+    }
+
+    fn paint(
+        &self,
+        ctx: &mut PaintCtx,
+        row_idx: LogIdx,
+        col_idx: LogIdx,
+        data: &TableData::Item,
+        env: &Env,
+    ) {
+        self.cols.paint(ctx, row_idx, col_idx, data, env);
+    }
+}
+
+impl<
+        TableData: IndexedData<Idx = LogIdx>,
+        ColumnType: CellDelegate<TableData::Item>,
+    > CellsDelegate<TableData> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+{
+    fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
+        self.cols.len()
     }
 }

@@ -1,14 +1,14 @@
-use crate::axis_measure::{TableAxis, VisIdx, LogIdx};
+use crate::axis_measure::{LogIdx, TableAxis, VisIdx};
 use druid::{EventCtx, Selector};
 use std::fmt::Debug;
 
-#[derive(Eq,PartialEq, Debug, Clone)]
-pub struct CellAddress<T: Copy + Debug>{
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct CellAddress<T: Copy + Debug> {
     row: T,
-    col: T
+    col: T,
 }
 
-impl <T: Copy+ Debug> CellAddress<T> {
+impl<T: Copy + Debug> CellAddress<T> {
     pub(crate) fn new(row: T, col: T) -> CellAddress<T> {
         CellAddress { row, col }
     }
@@ -23,10 +23,8 @@ impl <T: Copy+ Debug> CellAddress<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SingleCell {
     pub vis: CellAddress<VisIdx>,
-    pub log: CellAddress<LogIdx>
+    pub log: CellAddress<LogIdx>,
 }
-
-
 
 impl SingleCell {
     pub fn new(vis: CellAddress<VisIdx>, log: CellAddress<LogIdx>) -> Self {
@@ -45,7 +43,7 @@ pub enum IndicesSelection {
 impl IndicesSelection {
     pub(crate) fn vis_index_selected(&self, vis_idx: VisIdx) -> bool {
         match self {
-            IndicesSelection::Single(sel_vis,_ )  => *sel_vis == vis_idx,
+            IndicesSelection::Single(sel_vis, _) => *sel_vis == vis_idx,
             _ => false,
         }
     }
@@ -84,15 +82,15 @@ impl TableSelection {
     pub fn to_axis_selection(&self, axis: TableAxis) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.vis.main(axis), sc.log.main(axis)),
+            TableSelection::SingleCell(sc) => {
+                IndicesSelection::Single(sc.vis.main(axis), sc.log.main(axis))
+            }
         }
     }
 
     pub(crate) fn get_cell_status(&self, address: CellAddress<VisIdx>) -> SelectionStatus {
         match self {
-            TableSelection::SingleCell(sc) if address == sc.vis => {
-                SelectionStatus::Primary
-            }
+            TableSelection::SingleCell(sc) if address == sc.vis => SelectionStatus::Primary,
             _ => SelectionStatus::NotSelected,
         }
     }

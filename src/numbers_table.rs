@@ -1,6 +1,6 @@
-use crate::{ItemsLen, ItemsUse};
-use druid::{Data, Lens};
 use crate::axis_measure::LogIdx;
+use crate::IndexedItems;
+use druid::{Data, Lens};
 
 #[derive(Debug, Data, Clone, Lens)]
 pub struct LogIdxTable {
@@ -13,20 +13,18 @@ impl LogIdxTable {
     }
 }
 
-impl ItemsLen for LogIdxTable {
-    fn len(&self) -> usize {
-        self.rows
-    }
-}
-
-impl ItemsUse for LogIdxTable {
+impl IndexedItems for LogIdxTable {
     type Item = LogIdx;
     type Idx = LogIdx;
-    fn use_item<V>(&self, idx: LogIdx, f: impl FnOnce(&LogIdx) -> V) -> Option<V> {
+    fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&LogIdx) -> V) -> Option<V> {
         if idx.0 < self.rows {
             Some(f(&idx))
         } else {
             None
         }
+    }
+
+    fn idx_len(&self) -> usize {
+        self.rows
     }
 }

@@ -6,33 +6,29 @@ use druid::{
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, TableAxis, ADJUST_AXIS_MEASURE, VisIdx, LogIdx};
+use crate::axis_measure::{
+    AxisMeasure, AxisMeasureAdjustment, LogIdx, TableAxis, VisIdx, ADJUST_AXIS_MEASURE,
+};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{ItemsLen, RemapSpec, Remapper, TableRows};
+use crate::data::{IndexedData, RemapSpec, Remapper};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{SelectionHandler, SingleCell, TableSelection, CellAddress};
-use crate::{ItemsUse, Remap};
-use std::ops::RangeInclusive;
+use crate::selection::{CellAddress, SelectionHandler, SingleCell, TableSelection};
+use crate::{IndexedItems, Remap};
 use std::iter::Map;
+use std::ops::RangeInclusive;
 
-pub trait CellsDelegate<RowData: Data, TableData: TableRows<Item = RowData>>:
-    CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>
+pub trait CellsDelegate<TableData: IndexedData >: CellRender<TableData::Item> + Remapper<TableData>
+where TableData::Item : Data
 {
-}
-
-impl<RowData: Data, TableData: TableRows<Item = RowData>, T> CellsDelegate<RowData, TableData>
-    for T
-where
-    T: CellRender<RowData> + ItemsLen + Remapper<RowData, TableData>,
-{
+    fn number_of_columns_in_data(&self, data: &TableData) -> usize;
 }
 
 pub struct Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData, Idx=LogIdx>,
-    CellDel: CellsDelegate<RowData, TableData>, // The length is the number of columns
+    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    CellDel: CellsDelegate<TableData>, // The length is the number of columns
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -59,7 +55,10 @@ struct CellRect {
 }
 
 impl CellRect {
-    fn new((start_row, end_row): (VisIdx, VisIdx), (start_col, end_col): (VisIdx, VisIdx)) -> CellRect {
+    fn new(
+        (start_row, end_row): (VisIdx, VisIdx),
+        (start_col, end_col): (VisIdx, VisIdx),
+    ) -> CellRect {
         CellRect {
             start_row,
             end_row,
@@ -77,12 +76,12 @@ impl CellRect {
     }
 }
 
-impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
-    Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+impl<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
+    Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData, Idx=LogIdx>,
-    ColDel: CellsDelegate<RowData, TableData>,
+    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    CellDel: CellsDelegate<TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -90,8 +89,8 @@ where
         config: TableConfig,
         column_measure: ColumnMeasure,
         row_measure: RowMeasure,
-        columns: ColDel,
-    ) -> Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> {
+        cells_delegate: CellDel,
+    ) -> Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure> {
         Cells {
             config,
             resolved_config: None,
@@ -101,7 +100,7 @@ where
             row_measure,
             remap_spec_rows: RemapSpec::default(),
             remap_rows: Remap::Pristine,
-            cell_delegate: columns,
+            cell_delegate: cells_delegate,
             phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
@@ -127,25 +126,26 @@ where
             self.row_measure.vis_from_pixel(pos.y),
             self.column_measure.vis_from_pixel(pos.x),
         );
-        let log_row = r.and_then( |r|self.remap_rows.get_log_idx(r));
-        let log_col = c.and_then(|c|Remap::Pristine.get_log_idx(c));  // TODO! Moving columns
-        Some(SingleCell::new(CellAddress::new (r?, c?), CellAddress::new(log_row?, log_col?)))
+        let log_row = r.and_then(|r| self.remap_rows.get_log_idx(r));
+        let log_col = c.and_then(|c| Remap::Pristine.get_log_idx(c)); // TODO! Moving columns
+        Some(SingleCell::new(
+            CellAddress::new(r?, c?),
+            CellAddress::new(log_row?, log_col?),
+        ))
     }
 
     fn paint_cells(
         &self,
         ctx: &mut PaintCtx,
-        data: &impl ItemsUse<Item = RowData, Idx = LogIdx>,
+        data: &impl IndexedItems<Item = RowData, Idx = LogIdx>,
         env: &Env,
         rtc: &ResolvedTableConfig,
         rect: &CellRect,
     ) {
-        log::info!("Remap {:?}", self.remap_rows);
         for vis_row_idx in rect.rows() {
             let row_top = self.row_measure.first_pixel_from_vis(vis_row_idx);
             if let Some(log_row_idx) = self.remap_rows.get_log_idx(vis_row_idx) {
-                log::info!("Row: {:?} {:?}", log_row_idx, vis_row_idx);
-                data.use_item(log_row_idx, |row| {
+                data.with(log_row_idx, |row| {
                     self.paint_row(
                         ctx,
                         env,
@@ -175,7 +175,8 @@ where
         for vis_col_idx in cols {
             if let Some(log_col_idx) = Remap::Pristine.get_log_idx(vis_col_idx) {
                 let cell_left = self.column_measure.first_pixel_from_vis(vis_col_idx);
-                let selected = (&self.selection).get_cell_status(CellAddress::new(vis_row_idx, vis_col_idx));
+                let selected =
+                    (&self.selection).get_cell_status(CellAddress::new(vis_row_idx, vis_col_idx));
 
                 let cell_rect = Rect::from_origin_size(
                     Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
@@ -195,7 +196,8 @@ where
                     ctx.clip(padded_rect);
                     ctx.transform(Affine::translate(layout_origin));
                     ctx.with_child_ctx(padded_rect, |ctxt| {
-                        self.cell_delegate.paint(ctxt, log_row_idx, log_col_idx, row, env);
+                        self.cell_delegate
+                            .paint(ctxt, log_row_idx, log_col_idx, row, env);
                     });
                 });
 
@@ -212,7 +214,7 @@ where
                         rtc.cell_border_thickness,
                     );
                 }
-            }else{
+            } else {
                 log::warn!("Could not find logical column for {:?}", vis_col_idx)
             }
         }
@@ -223,8 +225,8 @@ impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
-    TableData: TableRows<Item = RowData, Idx=LogIdx>,
-    ColDel: CellsDelegate<RowData, TableData>,
+    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    ColDel: CellsDelegate<TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
@@ -267,39 +269,50 @@ where
         &mut self,
         _ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        _data: &TableData,
+        data: &TableData,
         _env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(_env);
-            // Todo: column moves
-            self.column_measure
-                .set_axis_properties(rtc.cell_border_thickness, self.cell_delegate.len(), &Remap::Pristine);
+            // Todo: column moves / hiding etc
+            self.column_measure.set_axis_properties(
+                rtc.cell_border_thickness,
+                self.cell_delegate.number_of_columns_in_data(data),
+                &Remap::Pristine,
+            );
 
             self.remap_spec_rows = self.cell_delegate.initial_spec();
-            self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
-            self.row_measure
-                .set_axis_properties(rtc.cell_border_thickness, _data.len(), &self.remap_rows);
+            self.remap_rows = self.cell_delegate.remap(data, &self.remap_spec_rows);
+            self.row_measure.set_axis_properties(
+                rtc.cell_border_thickness,
+                data.idx_len(),
+                &self.remap_rows,
+            );
             self.resolved_config = Some(rtc);
-
         }
     }
 
-    fn update(
-        &mut self,
-        _ctx: &mut UpdateCtx,
-        _old_data: &TableData,
-        _data: &TableData,
-        _env: &Env,
-    ) {
+    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableData, data: &TableData, _env: &Env) {
         if let Some(rtc) = &self.resolved_config {
-            if _old_data.len() != _data.len() {
-                // need to deal with reordering and key columns etc
-                self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
-                self.row_measure.set_axis_properties(rtc.cell_border_thickness, _data.len(), &self.remap_rows);
-            }
+            if !old_data.same(data) {
+                // Reapply sorting / filtering. May need to rate limit
+                // and/or have some async way to notify back that sort is complete
+                if !self.remap_spec_rows.is_empty() {
+                    self.remap_rows = self.cell_delegate.remap(data, &self.remap_spec_rows);
+                }
 
-            // Columns update from data
+                if old_data.idx_len() != data.idx_len() {
+                    // need to deal with reordering and key columns etc
+
+                    self.row_measure.set_axis_properties(
+                        rtc.cell_border_thickness,
+                        data.idx_len(),
+                        &self.remap_rows,
+                    );
+                    ctx.request_layout(); // TODO: Work out if needed - if we were filling our area before
+                }
+                // Columns update from data
+            }
         }
     }
 
@@ -327,8 +340,7 @@ where
 
         let cell_rect = CellRect::new(
             self.row_measure.vis_range_from_pixels(rect.y0, rect.y1),
-            self.column_measure
-                .vis_range_from_pixels(rect.x0, rect.x1),
+            self.column_measure.vis_range_from_pixels(rect.x0, rect.x1),
         );
 
         self.paint_cells(ctx, data, env, &rtc, &cell_rect)
