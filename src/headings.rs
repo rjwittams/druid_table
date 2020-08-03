@@ -6,9 +6,7 @@ use druid::{
     LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{
-    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
-};
+use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::IndexedItems;
@@ -101,7 +99,7 @@ where
     header_render: Render,
     dragging: Option<VisIdx>,
     selection: IndicesSelection,
-    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
+    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
 }
 
 impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
@@ -127,7 +125,7 @@ where
             header_render,
             dragging: None,
             selection: IndicesSelection::NoSelection,
-            measure_adjustment_handlers: Default::default(),
+            measure_adjustment_handlers: Default::default()
         }
     }
 
@@ -139,11 +137,14 @@ where
     }
 
     fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
-        let length = self.measure.set_far_pixel_for_vis(vis_idx, pixel);
+        let length = self.measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
+
         let adjustment = AxisMeasureAdjustment::LengthChanged(self.axis, vis_idx, length);
         for handler in &self.measure_adjustment_handlers {
             (handler)(ctx, &adjustment)
         }
+
+        // TODO : this might be overkill if we knew that we we bigger that the viewport - repaint would work
         ctx.request_layout();
     }
 }
@@ -175,40 +176,46 @@ where
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.dragging {
                     self.set_pix_length_for_axis(ctx, idx, pix_main);
+
                     if me.buttons.is_empty() {
                         self.dragging = None;
+                    } else{
+                        ctx.set_cursor(self.axis.resize_cursor());
                     }
                 } else {
-                    let mut cursor = &Cursor::Arrow;
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
                         if idx > VisIdx(0) {
-                            cursor = if self.measure.can_resize(idx - 1) {
+                            let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
                                 self.axis.resize_cursor()
                             } else {
                                 &Cursor::NotAllowed
                             };
-                            ctx.set_handled()
+                            ctx.set_handled();
+                            ctx.set_cursor(cursor);
                         }
                     }
-                    ctx.set_cursor(cursor);
+
                 }
             }
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                    if idx > VisIdx(0) && self.measure.can_resize(idx - 1) {
-                        self.dragging = Some(idx - 1)
+                    if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
+                        self.dragging = Some(idx - VisOffset(1));
+                        ctx.set_active(true);
+                        ctx.set_cursor(self.axis.resize_cursor());
                     }
                 }
             }
             Event::MouseUp(me) => {
-                let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.dragging {
+                    let pix_main = self.axis.main_pixel_from_point(&me.pos);
                     self.set_pix_length_for_axis(ctx, idx, pix_main);
                     self.dragging = None;
+                    ctx.set_active(false);
                 }
             }
-            _ => (),
+             _ => (),
         }
     }
 
@@ -230,12 +237,11 @@ where
                 );
                 self.resolved_config = Some(rtc);
             }
-            LifeCycle::HotChanged(false) => {
-                self.dragging = None;
-            }
+            // LifeCycle::HotChanged(false) => {
+            //     self.dragging = None;
+            // }
             _ => {}
         }
-        _ctx.children_changed()
     }
 
     fn update(

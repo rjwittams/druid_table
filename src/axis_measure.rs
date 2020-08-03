@@ -12,8 +12,8 @@ use TableAxis::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
-    Rows,
-    Columns,
+    Rows, // Rows means the Y axis. A single row spans the X axis, but rows stack downwards.
+    Columns, // The X axis. A column is vertical, but columns go along horizontally
 }
 
 impl TableAxis {
@@ -21,6 +21,13 @@ impl TableAxis {
         match self {
             Rows => Columns,
             Columns => Rows,
+        }
+    }
+
+    pub fn length_from_size(&self, size: &Size) -> f64 {
+        match self {
+            Rows => size.height,
+            Columns => size.width,
         }
     }
 
@@ -80,7 +87,11 @@ pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
 pub type AxisMeasureAdjustmentHandler = dyn Fn(&mut EventCtx, &AxisMeasureAdjustment);
 
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
-pub struct VisIdx(pub(crate) usize);
+pub struct VisIdx(pub usize);
+
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
+pub struct VisOffset(pub isize);
+
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
 pub struct LogIdx(pub usize);
 
@@ -94,19 +105,20 @@ impl VisIdx {
     }
 }
 
-impl Add<usize> for VisIdx {
+impl Add<VisOffset> for VisIdx {
     type Output = Self;
 
-    fn add(self, rhs: usize) -> Self::Output {
-        VisIdx(self.0 + rhs)
+    fn add(self, rhs: VisOffset) -> Self::Output {
+        // TODO this is dodgy
+        VisIdx( ((self.0 as isize) + rhs.0 ).max(0) as usize )
     }
 }
 
-impl Sub<usize> for VisIdx {
+impl Sub<VisOffset> for VisIdx {
     type Output = Self;
 
-    fn sub(self, rhs: usize) -> Self::Output {
-        VisIdx(self.0 - rhs)
+    fn sub(self, rhs: VisOffset) -> Self::Output {
+        VisIdx( ((self.0 as isize) - rhs.0 ).max(0) as usize )
     }
 }
 
@@ -126,13 +138,13 @@ pub trait AxisMeasure: Clone {
         let idx = self.vis_from_pixel(pixel)?;
         let idx_border_middle = self.first_pixel_from_vis(idx).unwrap_or(0.) - self.border() / 2.;
         let next_border_middle = self
-            .first_pixel_from_vis(idx + 1)
+            .first_pixel_from_vis(idx + VisOffset(1))
             .unwrap_or_else(|| self.total_pixel_length())
             - self.border() / 2.;
         if f64::abs(pixel - idx_border_middle) < MOUSE_MOVE_EPSILON {
             Some(idx)
         } else if f64::abs(pixel - next_border_middle) < MOUSE_MOVE_EPSILON {
-            Some(idx + 1)
+            Some(idx + VisOffset(1))
         } else {
             None
         }

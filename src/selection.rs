@@ -1,21 +1,37 @@
-use crate::axis_measure::{LogIdx, TableAxis, VisIdx};
+use crate::axis_measure::{LogIdx, TableAxis, VisIdx, VisOffset};
 use druid::{EventCtx, Selector};
 use std::fmt::Debug;
+use std::ops::{Index, IndexMut};
+use crate::Remap;
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct CellAddress<T: Copy + Debug> {
-    row: T,
-    col: T,
+    pub row: T,
+    pub col: T,
 }
 
 impl<T: Copy + Debug> CellAddress<T> {
     pub(crate) fn new(row: T, col: T) -> CellAddress<T> {
         CellAddress { row, col }
     }
-    fn main(&self, axis: TableAxis) -> T {
+}
+
+impl <T: Copy + Debug> Index<TableAxis> for CellAddress<T>{
+    type Output = T;
+
+    fn index(&self, axis: TableAxis) -> &Self::Output {
         match axis {
-            TableAxis::Rows => self.row,
-            TableAxis::Columns => self.col,
+            TableAxis::Rows => &self.row,
+            TableAxis::Columns => &self.col,
+        }
+    }
+}
+
+impl <T: Copy + Debug> IndexMut<TableAxis> for CellAddress<T> {
+    fn index_mut(&mut self, axis: TableAxis) -> &mut Self::Output {
+        match axis {
+            TableAxis::Rows => &mut self.row,
+            TableAxis::Columns =>&mut self.col,
         }
     }
 }
@@ -59,6 +75,41 @@ pub enum TableSelection {
     //  Discontiguous
 }
 
+
+pub trait CellDemap{
+    fn move_cell_by(&self, vis: &CellAddress<VisIdx>, axis:TableAxis, amount:VisOffset)->CellAddress<VisIdx>;
+    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) ->Option<LogIdx>;
+    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) ->Option<CellAddress<LogIdx>>;
+}
+
+pub trait TableSelectionMod{
+    fn new_selection(&self, sel : & TableSelection)->Option<TableSelection>;
+}
+
+impl <F: Fn(&TableSelection)->Option<TableSelection>> TableSelectionMod for F{
+    fn new_selection(&self, sel: &TableSelection)->Option<TableSelection> {
+        self(sel)
+    }
+}
+
+impl TableSelection {
+    pub fn move_focus(&self, axis: TableAxis, amount: VisOffset, cell_demap: &impl CellDemap )->Option<TableSelection>{
+        match self{
+            Self::NoSelection => {
+                let vis_origin = CellAddress::new(VisIdx(0), VisIdx(0));
+                cell_demap.get_log_cell(&vis_origin)
+                    .map(|log| TableSelection::SingleCell( SingleCell::new(vis_origin, log)))
+            },
+            Self::SingleCell(SingleCell{vis, ..}) => {
+                let new_vis = cell_demap.move_cell_by(vis, axis, amount);
+                cell_demap.get_log_cell(&new_vis)
+                    .map(|log|TableSelection::SingleCell( SingleCell::new(new_vis, log) ))
+            }
+        }
+    }
+}
+
+
 #[derive(Debug, PartialEq)]
 pub enum SelectionStatus {
     NotSelected,
@@ -83,7 +134,7 @@ impl TableSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
             TableSelection::SingleCell(sc) => {
-                IndicesSelection::Single(sc.vis.main(axis), sc.log.main(axis))
+                IndicesSelection::Single(sc.vis[axis], sc.log[axis])
             }
         }
     }

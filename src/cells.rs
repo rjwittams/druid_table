@@ -1,22 +1,18 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{
-    Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
-};
+use druid::{Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, KbKey};
 
-use crate::axis_measure::{
-    AxisMeasure, AxisMeasureAdjustment, LogIdx, TableAxis, VisIdx, ADJUST_AXIS_MEASURE,
-};
+use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, LogIdx, TableAxis, VisIdx, ADJUST_AXIS_MEASURE, VisOffset};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedData, RemapSpec, Remapper};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{CellAddress, SelectionHandler, SingleCell, TableSelection};
+use crate::selection::{CellAddress, SelectionHandler, SingleCell, TableSelection, CellDemap, TableSelectionMod};
 use crate::{IndexedItems, Remap};
 use std::iter::Map;
 use std::ops::RangeInclusive;
+use druid::platform_menus::win::file::new;
 
 pub trait CellsDelegate<TableData: IndexedData >: CellRender<TableData::Item> + Remapper<TableData>
 where TableData::Item : Data
@@ -118,6 +114,7 @@ where
         for sh in &self.selection_handlers {
             sh(ctx, &self.selection)
         }
+        log::info!("New selection {:?}", &self.selection);
         ctx.request_paint();
     }
 
@@ -132,6 +129,13 @@ where
             CellAddress::new(r?, c?),
             CellAddress::new(log_row?, log_col?),
         ))
+    }
+
+    fn measured_size(&mut self) -> Size {
+        Size::new(
+            self.column_measure.total_pixel_length(),
+            self.row_measure.total_pixel_length(),
+        )
     }
 
     fn paint_cells(
@@ -219,7 +223,21 @@ where
             }
         }
     }
+
+    fn remap_for_axis(&self, axis: TableAxis)-> &Remap{
+        match axis {
+            TableAxis::Rows=>&self.remap_rows,
+            TableAxis::Columns=>&Remap::Pristine
+        }
+    }
+
+    fn change_selection(&mut self, ctx: &mut EventCtx, f: &impl TableSelectionMod){
+        if let Some(new_sel) = f.new_selection(&self.selection){
+            self.set_selection(ctx, new_sel);
+        }
+    }
 }
+
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
@@ -238,6 +256,7 @@ where
                 if let Some(cell) = self.find_cell(&me.pos) {
                     new_selection = Some(cell.into())
                     // TODO: Modifier keys ask current selection to add this cell
+
                 }
             }
             Event::Command(cmd) => {
@@ -256,12 +275,23 @@ where
                         ctx.request_layout();
                     }
                 }
-            }
+            },
+            Event::KeyDown(ke)=>{
+                log::info!("Key down {:?}", ke);
+                match &ke.key {
+                    KbKey::ArrowDown=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Rows, VisOffset(1), self)),
+                    KbKey::ArrowUp=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Rows, VisOffset(-1), self)),
+                    KbKey::ArrowRight=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Columns, VisOffset(1), self)),
+                    KbKey::ArrowLeft=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Columns, VisOffset(-1), self)),
+                    _=>{}
+                }
+            },
             _ => (),
         }
 
         if let Some(sel) = new_selection {
             self.set_selection(ctx, sel);
+            ctx.request_focus();
         }
     }
 
@@ -324,10 +354,7 @@ where
         _env: &Env,
     ) -> Size {
         bc.debug_check("TableCells");
-        bc.constrain(Size::new(
-            self.column_measure.total_pixel_length(),
-            self.row_measure.total_pixel_length(),
-        ))
+        bc.constrain(self.measured_size())
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
@@ -336,13 +363,41 @@ where
         let rtc = self.config.resolve(env);
         let rect = ctx.region().to_rect();
 
-        ctx.fill(rect, &rtc.cells_background);
+        let draw_rect = rect.intersect(Rect::from_origin_size(Point::ZERO, self.measured_size()));
+
+        ctx.fill(draw_rect, &rtc.cells_background);
 
         let cell_rect = CellRect::new(
-            self.row_measure.vis_range_from_pixels(rect.y0, rect.y1),
-            self.column_measure.vis_range_from_pixels(rect.x0, rect.x1),
+            self.row_measure.vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            self.column_measure.vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
         self.paint_cells(ctx, data, env, &rtc, &cell_rect)
+    }
+}
+
+impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> CellDemap
+for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> where
+RowData: Data,
+TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+ColDel: CellsDelegate<TableData>,
+ColumnMeasure: AxisMeasure,
+RowMeasure: AxisMeasure,
+{
+    fn move_cell_by(&self, vis: &CellAddress<VisIdx>, axis: TableAxis, amount: VisOffset) -> CellAddress<VisIdx> {
+        let mut new_vis = vis.clone();
+        new_vis[axis] = vis[axis]  + amount;
+        new_vis
+    }
+
+    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
+        let remap = self.remap_for_axis(axis);
+        return remap.get_log_idx(*vis);
+    }
+
+    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) -> Option<CellAddress<LogIdx>> {
+        self.get_log_idx(TableAxis::Rows,&vis.row).map(|row| {
+            self.get_log_idx(TableAxis::Columns, &vis.col).map(|col| CellAddress::new(row, col))
+        }).flatten()
     }
 }

@@ -8,7 +8,7 @@ use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems, Remap, RemapDetails, RemapSpec, Remapper, SortSpec};
 use crate::headings::{HeadersFromData, HeadersFromIndices, Headings, SuppliedHeaders};
 use crate::numbers_table::LogIdxTable;
-use crate::selection::SELECT_INDICES;
+use crate::selection::{SELECT_INDICES, CellAddress};
 use crate::table::{HeaderBuildT, TableArgs};
 use crate::{HeaderBuild, Table};
 use druid::widget::prelude::*;
@@ -16,6 +16,13 @@ use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO
 use druid::{theme, Data, WidgetExt};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
+use std::cell::Cell;
+
+#[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
+pub enum AxisMeasurements{
+    Fixed,
+    Adjustable
+}
 
 pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>,
@@ -24,6 +31,7 @@ pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
+    measurements: CellAddress<AxisMeasurements>
 }
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>> Default
@@ -57,7 +65,7 @@ pub type DefaultTableArgs<TableData: IndexedData<Idx=LogIdx> > = TableArgs<
     StoredAxisMeasure,
     HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellDelegate<LogIdx>>>,
     HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellDelegate<String>>>,
-    ProvidedColumns<TableData, Box<dyn CellDelegate<TableData::Item>>>>;
+    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>>;
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     TableBuilder<RowData, TableData>
@@ -74,6 +82,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
+            measurements: CellAddress::new(AxisMeasurements::Adjustable, AxisMeasurements::Adjustable)
         }
     }
 
@@ -103,6 +112,11 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     ) {
         self.table_columns
             .push(TableColumn::new(header, Box::new(cell_render)));
+    }
+
+    pub fn measuring(mut self, axis: TableAxis, measure: AxisMeasurements)->Self{
+        self.measurements[axis] = measure;
+        self
     }
 
     pub fn build_args(self) -> DefaultTableArgs<TableData> {

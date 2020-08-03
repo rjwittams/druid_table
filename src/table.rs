@@ -6,7 +6,8 @@ use crate::{
     ADJUST_AXIS_MEASURE, SELECT_INDICES,
 };
 use druid::widget::{CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
-use druid::{BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod, InternalLifeCycle};
+use druid::{BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
+            LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod};
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -341,7 +342,7 @@ impl<Args: TableArgsT> Table<Args> {
                 )),
             )
         } else {
-            TableChild::new(ids, WidgetPod::new(Box::new(widget.center())))
+            TableChild::new(ids, WidgetPod::new(Box::new(widget)))
         }
     }
 }
@@ -362,7 +363,9 @@ impl<Args: TableArgsT> Widget<Args::TableData> for Table<Args> {
         env: &Env,
     ) {
         match event {
-            LifeCycle::WidgetAdded | LifeCycle::Internal(InternalLifeCycle::RouteWidgetAdded) => {
+            LifeCycle::WidgetAdded
+         //   | LifeCycle::Internal(InternalLifeCycle::RouteWidgetAdded)
+            => {
                 if self.args.is_some() {
                     let mut args = None;
                     std::mem::swap(&mut self.args, &mut args);

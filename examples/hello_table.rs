@@ -7,7 +7,7 @@ use druid_table::{
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::widget::{Button, CrossAxisAlignment, Flex, Label, RadioGroup, Split, ViewSwitcher};
+use druid::widget::{Button, CrossAxisAlignment, Flex, Label, RadioGroup, Split, ViewSwitcher, MainAxisAlignment};
 use druid::{
     AppLauncher, Data, Env, KeyOrValue, Lens, LocalizedString, PaintCtx, Point, RenderContext,
     Widget, WidgetExt, WindowDesc,
@@ -92,7 +92,7 @@ fn build_main_widget() -> impl Widget<TableState> {
 
     let buttons = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(Label::new("Modify table"))
+        .with_child(Label::new("Modify table:").padding(5.))
         .with_child(
             Flex::column()
                 .with_child(
@@ -108,11 +108,11 @@ fn build_main_widget() -> impl Widget<TableState> {
                             data.pop_back();
                         })
                         .expand_width(),
-                ),
+                ).padding(5.0).fix_width(150.0),
         )
         .lens(TableState::items);
     let headings_control = Flex::column()
-        .with_child(Label::new("Headings to show:"))
+        .with_child(Label::new("Headings to show:").padding(5.))
         .with_child(RadioGroup::new(vec![
             ("Just cells", ShowHeadings::JustCells),
             ("Column headings", ShowHeadings::One(TableAxis::Columns)),
@@ -121,10 +121,10 @@ fn build_main_widget() -> impl Widget<TableState> {
         ]))
         .lens(TableState::show_headings);
     let sidebar = Flex::column()
-        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .main_axis_alignment(MainAxisAlignment::Start)
+        .cross_axis_alignment(CrossAxisAlignment::End)
         .with_child(buttons)
-        .with_child(headings_control)
-        .align_left();
+        .with_child(headings_control);
 
     let vs = ViewSwitcher::new(
         |ts: &TableState, _| ts.show_headings.clone(),
