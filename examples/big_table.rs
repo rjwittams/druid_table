@@ -72,7 +72,7 @@ impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
 }
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
-    CellsDelegate<RowData, TableData> for BigTableCells<RowData, TableData, CR>
+    CellsDelegate<TableData> for BigTableCells<RowData, TableData, CR>
 {
     fn number_of_columns_in_data(&self, data: &TableData) -> usize {
         self.columns
@@ -80,7 +80,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowDa
 }
 
 impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowData>>
-    Remapper<RowData, TableData> for BigTableCells<RowData, TableData, CR>
+    Remapper<TableData> for BigTableCells<RowData, TableData, CR>
 {
     fn sort_fixed(&self, _idx: usize) -> bool {
         true

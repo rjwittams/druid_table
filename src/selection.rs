@@ -1,7 +1,7 @@
 use crate::axis_measure::{LogIdx, TableAxis, VisIdx, VisOffset};
 use druid::{EventCtx, Selector};
 use std::fmt::Debug;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, Add};
 use crate::Remap;
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -13,6 +13,18 @@ pub struct CellAddress<T: Copy + Debug> {
 impl<T: Copy + Debug> CellAddress<T> {
     pub(crate) fn new(row: T, col: T) -> CellAddress<T> {
         CellAddress { row, col }
+    }
+}
+
+trait CellAddressMove<O> {
+    fn move_by(&self, axis: TableAxis, amount: O) -> Self;
+}
+
+impl <O, T: Add<O, Output=T> + Copy + Debug> CellAddressMove<O> for CellAddress<T> {
+    fn move_by(&self, axis: TableAxis, amount: O) -> CellAddress<T> {
+        let mut moved = (*self).clone();
+        moved[axis] = self[axis]  + amount;
+        moved
     }
 }
 
@@ -46,7 +58,24 @@ impl SingleCell {
     pub fn new(vis: CellAddress<VisIdx>, log: CellAddress<LogIdx>) -> Self {
         SingleCell { vis, log }
     }
+
+
 }
+
+// Represents a Row or Column. Better name would be nice!
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SingleAxisSlice {
+    pub axis: TableAxis,
+    pub vis: VisIdx,
+    pub log: LogIdx
+}
+
+impl SingleAxisSlice {
+    pub fn new(axis: TableAxis, vis: VisIdx, log: LogIdx) -> Self {
+        SingleAxisSlice { axis, vis, log }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub enum IndicesSelection {
@@ -69,7 +98,7 @@ impl IndicesSelection {
 pub enum TableSelection {
     NoSelection,
     SingleCell(SingleCell),
-    //  SingleColumn
+    SingleSlice(SingleAxisSlice),
     //  SingleRow
     //  Range
     //  Discontiguous
@@ -77,9 +106,13 @@ pub enum TableSelection {
 
 
 pub trait CellDemap{
-    fn move_cell_by(&self, vis: &CellAddress<VisIdx>, axis:TableAxis, amount:VisOffset)->CellAddress<VisIdx>;
     fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) ->Option<LogIdx>;
-    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) ->Option<CellAddress<LogIdx>>;
+
+    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) -> Option<CellAddress<LogIdx>> {
+        self.get_log_idx(TableAxis::Rows,&vis.row).map(|row| {
+            self.get_log_idx(TableAxis::Columns, &vis.col).map(|col| CellAddress::new(row, col))
+        }).flatten()
+    }
 }
 
 pub trait TableSelectionMod{
@@ -101,9 +134,13 @@ impl TableSelection {
                     .map(|log| TableSelection::SingleCell( SingleCell::new(vis_origin, log)))
             },
             Self::SingleCell(SingleCell{vis, ..}) => {
-                let new_vis = cell_demap.move_cell_by(vis, axis, amount);
+                let new_vis = vis.move_by(axis, amount);
                 cell_demap.get_log_cell(&new_vis)
                     .map(|log|TableSelection::SingleCell( SingleCell::new(new_vis, log) ))
+            },
+            Self::SingleSlice(slice) => {
+               // let new_slice = cell_demap
+                Some(self.clone())
             }
         }
     }
@@ -133,8 +170,13 @@ impl TableSelection {
     pub fn to_axis_selection(&self, axis: TableAxis) -> IndicesSelection {
         match self {
             TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(sc) => {
-                IndicesSelection::Single(sc.vis[axis], sc.log[axis])
+            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.vis[axis], sc.log[axis]),
+            Self::SingleSlice(single)=>{
+                    if single.axis == axis {
+                        IndicesSelection::Single(single.vis, single.log)
+                    }else{
+                        IndicesSelection::NoSelection
+                    }
             }
         }
     }

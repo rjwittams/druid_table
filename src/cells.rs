@@ -384,20 +384,12 @@ ColDel: CellsDelegate<TableData>,
 ColumnMeasure: AxisMeasure,
 RowMeasure: AxisMeasure,
 {
-    fn move_cell_by(&self, vis: &CellAddress<VisIdx>, axis: TableAxis, amount: VisOffset) -> CellAddress<VisIdx> {
-        let mut new_vis = vis.clone();
-        new_vis[axis] = vis[axis]  + amount;
-        new_vis
-    }
+
 
     fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
         let remap = self.remap_for_axis(axis);
         return remap.get_log_idx(*vis);
     }
 
-    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) -> Option<CellAddress<LogIdx>> {
-        self.get_log_idx(TableAxis::Rows,&vis.row).map(|row| {
-            self.get_log_idx(TableAxis::Columns, &vis.col).map(|col| CellAddress::new(row, col))
-        }).flatten()
-    }
+
 }
