@@ -116,13 +116,15 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
             .on_result_of(|br: &LogIdx| br.0.to_string()),
     );
 
+    let row_m = FixedAxisMeasure::new(25.);
+    let col_m = FixedAxisMeasure::new(100.);
     Table::new(TableArgs::new(
         BigTableCells::new(
             TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
             columns,
         ),
-        FixedAxisMeasure::new(25.),
-        FixedAxisMeasure::new(100.),
+        (row_m.clone(), row_m),
+        (col_m.clone(), col_m),
         Some(rows),
         Some(cols),
         table_config,

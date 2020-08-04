@@ -278,10 +278,18 @@ where
                 if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
                     cmd.get(ADJUST_AXIS_MEASURE)
                 {
+
                     match axis {
-                        TableAxis::Rows => self.row_measure.set_pixel_length_for_vis(*idx, *length),
+                        TableAxis::Rows =>{
+                            // If we share the measure through Rc Refcell, we don't need to update it
+                            if !self.row_measure.shared(){
+                                self.row_measure.set_pixel_length_for_vis(*idx, *length);
+                            }
+                        },
                         TableAxis::Columns => {
-                            self.column_measure.set_pixel_length_for_vis(*idx, *length)
+                            if !self.column_measure.shared() {
+                                self.column_measure.set_pixel_length_for_vis(*idx, *length);
+                            }
                         }
                     };
                     ctx.request_layout();

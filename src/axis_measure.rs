@@ -158,6 +158,10 @@ pub trait AxisMeasure {
             None
         }
     }
+
+    fn shared(&self)->bool{
+        false
+    }
 }
 
 impl AxisMeasure for Rc<RefCell<dyn AxisMeasure>> {
@@ -199,6 +203,10 @@ impl AxisMeasure for Rc<RefCell<dyn AxisMeasure>> {
 
     fn can_resize(&self, idx: VisIdx) -> bool {
         self.deref().borrow().can_resize(idx)
+    }
+
+    fn shared(&self) -> bool {
+        true
     }
 }
 
