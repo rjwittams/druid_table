@@ -7,20 +7,29 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::iter::Map;
-use std::ops::{Add, Range, RangeInclusive, Sub};
+use std::ops::{Add, Range, RangeInclusive, Sub, Deref};
 use TableAxis::*;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
-    Rows, // Rows means the Y axis. A single row spans the X axis, but rows stack downwards.
+    Rows,    // Rows means the Y axis. A single row spans the X axis, but rows stack downwards.
     Columns, // The X axis. A column is vertical, but columns go along horizontally
 }
 
+// Acts as an enum map
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct AxisPair<T: Copy + Debug + Default> {
+    pub row: T,
+    pub col: T,
+}
+
 impl TableAxis {
-    pub fn cross_axis(&self) -> TableAxis {
+    pub fn cross_axis(&self) -> &TableAxis {
         match self {
-            Rows => Columns,
-            Columns => Rows,
+            Rows => &Columns,
+            Columns => &Rows,
         }
     }
 
@@ -86,13 +95,13 @@ pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
 
 pub type AxisMeasureAdjustmentHandler = dyn Fn(&mut EventCtx, &AxisMeasureAdjustment);
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
 pub struct VisIdx(pub usize);
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
 pub struct VisOffset(pub isize);
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
 pub struct LogIdx(pub usize);
 
 impl VisIdx {
@@ -110,7 +119,7 @@ impl Add<VisOffset> for VisIdx {
 
     fn add(self, rhs: VisOffset) -> Self::Output {
         // TODO this is dodgy
-        VisIdx( ((self.0 as isize) + rhs.0 ).max(0) as usize )
+        VisIdx(((self.0 as isize) + rhs.0).max(0) as usize)
     }
 }
 
@@ -118,15 +127,15 @@ impl Sub<VisOffset> for VisIdx {
     type Output = Self;
 
     fn sub(self, rhs: VisOffset) -> Self::Output {
-        VisIdx( ((self.0 as isize) - rhs.0 ).max(0) as usize )
+        VisIdx(((self.0 as isize) - rhs.0).max(0) as usize)
     }
 }
 
-pub trait AxisMeasure: Clone {
+pub trait AxisMeasure {
     fn border(&self) -> f64;
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap);
     fn total_pixel_length(&self) -> f64;
-    fn vis_from_pixel(&self, pixel: f64) -> Option<VisIdx>;
+    fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx>;
     fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx);
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64>;
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64>;
@@ -135,7 +144,7 @@ pub trait AxisMeasure: Clone {
     fn can_resize(&self, idx: VisIdx) -> bool;
 
     fn pixel_near_border(&self, pixel: f64) -> Option<VisIdx> {
-        let idx = self.vis_from_pixel(pixel)?;
+        let idx = self.vis_idx_from_pixel(pixel)?;
         let idx_border_middle = self.first_pixel_from_vis(idx).unwrap_or(0.) - self.border() / 2.;
         let next_border_middle = self
             .first_pixel_from_vis(idx + VisOffset(1))
@@ -148,6 +157,48 @@ pub trait AxisMeasure: Clone {
         } else {
             None
         }
+    }
+}
+
+impl AxisMeasure for Rc<RefCell<dyn AxisMeasure>> {
+    fn border(&self) -> f64 {
+        self.deref().borrow().border()
+    }
+
+    fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
+        self.deref().borrow_mut().set_axis_properties(border, len, remap)
+    }
+
+    fn total_pixel_length(&self) -> f64 {
+        self.deref().borrow().total_pixel_length()
+    }
+
+    fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
+        self.deref().borrow().vis_idx_from_pixel(pixel)
+    }
+
+    fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
+        self.deref().borrow().vis_range_from_pixels(p0, p1)
+    }
+
+    fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
+        self.deref().borrow().first_pixel_from_vis(idx)
+    }
+
+    fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
+        self.deref().borrow().pixels_length_for_vis(idx)
+    }
+
+    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
+        self.deref().borrow_mut().set_far_pixel_for_vis(idx, pixel)
+    }
+
+    fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64 {
+        self.deref().borrow_mut().set_pixel_length_for_vis(idx, length)
+    }
+
+    fn can_resize(&self, idx: VisIdx) -> bool {
+        self.deref().borrow().can_resize(idx)
     }
 }
 
@@ -190,7 +241,7 @@ impl AxisMeasure for FixedAxisMeasure {
         self.full_pixels_per_unit() * (self.len as f64)
     }
 
-    fn vis_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
+    fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
         let index = (pixel / self.full_pixels_per_unit()).floor() as usize;
         if index < self.len {
             Some(VisIdx(index))
@@ -200,8 +251,8 @@ impl AxisMeasure for FixedAxisMeasure {
     }
 
     fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
-        let start = self.vis_from_pixel(p0);
-        let end = self.vis_from_pixel(p1);
+        let start = self.vis_idx_from_pixel(p0);
+        let end = self.vis_idx_from_pixel(p1);
 
         let start = start.unwrap_or(VisIdx(0));
         let end = end.unwrap_or(VisIdx(self.len - 1));
@@ -249,20 +300,7 @@ pub struct StoredAxisMeasure {
     total_pixel_length: f64,
 }
 
-struct DebugFn<'a, F: Fn(&mut Formatter) -> fmt::Result>(&'a F);
 
-impl<'a, F: Fn(&mut Formatter) -> fmt::Result> Debug for DebugFn<'a, F> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let func = self.0;
-        (func)(f)
-    }
-}
-
-macro_rules! debug_fn {
-    ($content: expr) => {
-        &DebugFn(&$content)
-    };
-}
 
 impl Debug for StoredAxisMeasure {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
@@ -354,7 +392,7 @@ impl AxisMeasure for StoredAxisMeasure {
         self.total_pixel_length
     }
 
-    fn vis_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
+    fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
         self.pixels_to_vis
             .range(..=FloatOrd(pixel))
             .next_back()
@@ -363,8 +401,8 @@ impl AxisMeasure for StoredAxisMeasure {
 
     fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
         (
-            self.vis_from_pixel(p0).unwrap_or(VisIdx(0)),
-            self.vis_from_pixel(p1)
+            self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0)),
+            self.vis_idx_from_pixel(p1)
                 .unwrap_or(VisIdx(self.vis_pix_lengths.len() - 1)),
         )
     }
@@ -419,17 +457,17 @@ mod test {
         ax.set_axis_properties(1.0, 4, &Remap::Pristine);
         println!("Axis:{:#?}", ax);
         assert_eq!(ax.total_pixel_length(), 400.);
-        assert_eq!(ax.vis_from_pixel(350.0), Some(VisIdx(3)));
+        assert_eq!(ax.vis_idx_from_pixel(350.0), Some(VisIdx(3)));
         assert_eq!(ax.first_pixel_from_vis(VisIdx(0)), Some(0.));
-        assert_eq!(ax.vis_from_pixel(0.0), Some(VisIdx(0)));
-        assert_eq!(ax.vis_from_pixel(100.0), Some(VisIdx(1)));
-        assert_eq!(ax.vis_from_pixel(1.0), Some(VisIdx(0)));
+        assert_eq!(ax.vis_idx_from_pixel(0.0), Some(VisIdx(0)));
+        assert_eq!(ax.vis_idx_from_pixel(100.0), Some(VisIdx(1)));
+        assert_eq!(ax.vis_idx_from_pixel(1.0), Some(VisIdx(0)));
         assert_eq!(ax.first_pixel_from_vis(VisIdx(1)), Some(100.0));
 
         assert_eq!(
             (199..=201)
                 .into_iter()
-                .map(|n| ax.vis_from_pixel(n as f64).unwrap())
+                .map(|n| ax.vis_idx_from_pixel(n as f64).unwrap())
                 .collect::<Vec<VisIdx>>(),
             vec![VisIdx(1), VisIdx(2), VisIdx(2)]
         );

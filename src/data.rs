@@ -182,7 +182,10 @@ impl Default for RemapSpec {
     }
 }
 
-pub trait Remapper<TableData: IndexedData> where TableData::Item : Data {
+pub trait Remapper<TableData: IndexedData>
+where
+    TableData::Item: Data,
+{
     // This takes our normal data and a spec, and returns a remapped view of it if required
     fn sort_fixed(&self, idx: usize) -> bool;
     fn initial_spec(&self) -> RemapSpec;

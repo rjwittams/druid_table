@@ -3,25 +3,34 @@ use crate::columns::{
     CellDelegate, CellRender, CellRenderExt, DataCompare, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{AxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE};
+use crate::axis_measure::{
+    AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis, ADJUST_AXIS_MEASURE,
+};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems, Remap, RemapDetails, RemapSpec, Remapper, SortSpec};
 use crate::headings::{HeadersFromData, HeadersFromIndices, Headings, SuppliedHeaders};
 use crate::numbers_table::LogIdxTable;
-use crate::selection::{SELECT_INDICES, CellAddress};
+use crate::selection::SELECT_INDICES;
 use crate::table::{HeaderBuildT, TableArgs};
-use crate::{HeaderBuild, Table};
+use crate::{HeaderBuild, Table, FixedAxisMeasure};
 use druid::widget::prelude::*;
 use druid::widget::{Align, CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
-use druid::{theme, Data, WidgetExt};
+use druid::{theme, Data, WidgetExt, KeyOrValue};
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
-use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
-pub enum AxisMeasurements{
+pub enum AxisMeasurements {
     Fixed,
-    Adjustable
+    Adjustable,
+}
+
+impl Default for AxisMeasurements {
+    fn default() -> Self {
+        AxisMeasurements::Adjustable
+    }
 }
 
 pub struct TableBuilder<RowData: Data, TableData: Data> {
@@ -31,7 +40,7 @@ pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
-    measurements: CellAddress<AxisMeasurements>
+    measurements: AxisPair<AxisMeasurements>,
 }
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>> Default
@@ -59,13 +68,16 @@ impl ShowHeadings {
     }
 }
 
-pub type DefaultTableArgs<TableData: IndexedData<Idx=LogIdx> > = TableArgs<
+type DynAxisMeasure = Rc<RefCell<dyn AxisMeasure>>;
+
+pub type DefaultTableArgs<TableData: IndexedData<Idx = LogIdx>> = TableArgs<
     TableData,
-    StoredAxisMeasure,
-    StoredAxisMeasure,
+    DynAxisMeasure,
+    DynAxisMeasure,
     HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellDelegate<LogIdx>>>,
     HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellDelegate<String>>>,
-    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>>;
+    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>,
+>;
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     TableBuilder<RowData, TableData>
@@ -82,8 +94,13 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
-            measurements: CellAddress::new(AxisMeasurements::Adjustable, AxisMeasurements::Adjustable)
+            measurements: AxisPair::new(AxisMeasurements::Adjustable, AxisMeasurements::Adjustable),
         }
+    }
+
+    pub fn border(mut self, thickness: impl Into<KeyOrValue<f64>>) -> Self {
+        self.table_config.cell_border_thickness = thickness.into();
+        self
     }
 
     pub fn headings(mut self, show_headings: ShowHeadings) -> Self {
@@ -114,9 +131,16 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             .push(TableColumn::new(header, Box::new(cell_render)));
     }
 
-    pub fn measuring(mut self, axis: TableAxis, measure: AxisMeasurements)->Self{
+    pub fn measuring(mut self, axis: &TableAxis, measure: AxisMeasurements) -> Self {
         self.measurements[axis] = measure;
         self
+    }
+
+    pub fn build_measure(&self, axis:&TableAxis, size: f64)->DynAxisMeasure{
+        match self.measurements[axis]{
+            AxisMeasurements::Adjustable =>Rc::new(RefCell::new( StoredAxisMeasure::new(size))),
+            AxisMeasurements::Fixed=>Rc::new( RefCell::new(FixedAxisMeasure::new(size)))
+        }
     }
 
     pub fn build_args(self) -> DefaultTableArgs<TableData> {
@@ -126,8 +150,8 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             .map(|tc| tc.header.clone())
             .collect();
 
-        let column_measure = StoredAxisMeasure::new(100.);
-        let row_measure = StoredAxisMeasure::new(30.);
+        let column_measure =  self.build_measure(&TableAxis::Columns, 100.);
+        let row_measure = self.build_measure(&TableAxis::Rows, 30.);
 
         let row_build = if_opt!(
             self.show_headings.should_show(&TableAxis::Rows),
@@ -146,8 +170,8 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
 
         TableArgs::new(
             ProvidedColumns::new(self.table_columns),
-            row_measure,
-            column_measure,
+            (row_measure.clone(), row_measure),
+            (column_measure.clone(), column_measure),
             row_build,
             col_build,
             self.table_config,

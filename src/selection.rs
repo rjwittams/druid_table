@@ -1,37 +1,38 @@
-use crate::axis_measure::{LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::Remap;
 use druid::{EventCtx, Selector};
 use std::fmt::Debug;
-use std::ops::{Index, IndexMut, Add};
-use crate::Remap;
+use std::ops::{Add, Index, IndexMut};
 
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct CellAddress<T: Copy + Debug> {
-    pub row: T,
-    pub col: T,
-}
+impl<T: Copy + Debug + Default> AxisPair<T> {
+    pub fn new(row: T, col: T) -> AxisPair<T> {
+        AxisPair { row, col }
+    }
 
-impl<T: Copy + Debug> CellAddress<T> {
-    pub(crate) fn new(row: T, col: T) -> CellAddress<T> {
-        CellAddress { row, col }
+    pub fn new_for_axis(axis: &TableAxis, main: T, cross: T) -> AxisPair<T> {
+        let mut ca = AxisPair::new(Default::default(), Default::default());
+        ca[axis] = main;
+        ca[axis.cross_axis()] = cross;
+        ca
     }
 }
 
-trait CellAddressMove<O> {
-    fn move_by(&self, axis: TableAxis, amount: O) -> Self;
+trait AxisPairMove<O> {
+    fn move_by(&self, axis: &TableAxis, amount: O) -> Self;
 }
 
-impl <O, T: Add<O, Output=T> + Copy + Debug> CellAddressMove<O> for CellAddress<T> {
-    fn move_by(&self, axis: TableAxis, amount: O) -> CellAddress<T> {
+impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for AxisPair<T> {
+    fn move_by(&self, axis: &TableAxis, amount: O) -> AxisPair<T> {
         let mut moved = (*self).clone();
-        moved[axis] = self[axis]  + amount;
+        moved[axis] = self[axis] + amount;
         moved
     }
 }
 
-impl <T: Copy + Debug> Index<TableAxis> for CellAddress<T>{
+impl<T: Copy + Debug + Default> Index<&TableAxis> for AxisPair<T> {
     type Output = T;
 
-    fn index(&self, axis: TableAxis) -> &Self::Output {
+    fn index(&self, axis: &TableAxis) -> &Self::Output {
         match axis {
             TableAxis::Rows => &self.row,
             TableAxis::Columns => &self.col,
@@ -39,43 +40,39 @@ impl <T: Copy + Debug> Index<TableAxis> for CellAddress<T>{
     }
 }
 
-impl <T: Copy + Debug> IndexMut<TableAxis> for CellAddress<T> {
-    fn index_mut(&mut self, axis: TableAxis) -> &mut Self::Output {
+impl<T: Copy + Debug + Default> IndexMut<&TableAxis> for AxisPair<T> {
+    fn index_mut(&mut self, axis: &TableAxis) -> &mut Self::Output {
         match axis {
             TableAxis::Rows => &mut self.row,
-            TableAxis::Columns =>&mut self.col,
+            TableAxis::Columns => &mut self.col,
         }
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SingleCell {
-    pub vis: CellAddress<VisIdx>,
-    pub log: CellAddress<LogIdx>,
+    pub vis: AxisPair<VisIdx>,
+    pub log: AxisPair<LogIdx>,
 }
 
 impl SingleCell {
-    pub fn new(vis: CellAddress<VisIdx>, log: CellAddress<LogIdx>) -> Self {
+    pub fn new(vis: AxisPair<VisIdx>, log: AxisPair<LogIdx>) -> Self {
         SingleCell { vis, log }
     }
-
-
 }
 
 // Represents a Row or Column. Better name would be nice!
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct SingleAxisSlice {
+pub struct SingleSlice {
     pub axis: TableAxis,
-    pub vis: VisIdx,
-    pub log: LogIdx
+    pub focus: SingleCell, // The cell we are focused on, that determines the slice
 }
 
-impl SingleAxisSlice {
-    pub fn new(axis: TableAxis, vis: VisIdx, log: LogIdx) -> Self {
-        SingleAxisSlice { axis, vis, log }
+impl SingleSlice {
+    pub fn new(axis: TableAxis, focus: SingleCell) -> Self {
+        SingleSlice { axis, focus }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub enum IndicesSelection {
@@ -98,54 +95,85 @@ impl IndicesSelection {
 pub enum TableSelection {
     NoSelection,
     SingleCell(SingleCell),
-    SingleSlice(SingleAxisSlice),
-    //  SingleRow
-    //  Range
+    SingleSlice(SingleSlice),
+    //  CellRange
+    //  SliceRange
     //  Discontiguous
 }
 
+pub trait CellDemap {
+    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx>;
 
-pub trait CellDemap{
-    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) ->Option<LogIdx>;
-
-    fn get_log_cell(&self, vis: &CellAddress<VisIdx>) -> Option<CellAddress<LogIdx>> {
-        self.get_log_idx(TableAxis::Rows,&vis.row).map(|row| {
-            self.get_log_idx(TableAxis::Columns, &vis.col).map(|col| CellAddress::new(row, col))
-        }).flatten()
+    fn get_log_cell(&self, vis: &AxisPair<VisIdx>) -> Option<AxisPair<LogIdx>> {
+        self.get_log_idx(TableAxis::Rows, &vis.row)
+            .map(|row| {
+                self.get_log_idx(TableAxis::Columns, &vis.col)
+                    .map(|col| AxisPair::new(row, col))
+            })
+            .flatten()
     }
 }
 
-pub trait TableSelectionMod{
-    fn new_selection(&self, sel : & TableSelection)->Option<TableSelection>;
+pub trait TableSelectionMod {
+    fn new_selection(&self, sel: &TableSelection) -> Option<TableSelection>;
 }
 
-impl <F: Fn(&TableSelection)->Option<TableSelection>> TableSelectionMod for F{
-    fn new_selection(&self, sel: &TableSelection)->Option<TableSelection> {
+impl<F: Fn(&TableSelection) -> Option<TableSelection>> TableSelectionMod for F {
+    fn new_selection(&self, sel: &TableSelection) -> Option<TableSelection> {
         self(sel)
     }
 }
 
 impl TableSelection {
-    pub fn move_focus(&self, axis: TableAxis, amount: VisOffset, cell_demap: &impl CellDemap )->Option<TableSelection>{
-        match self{
+    pub fn move_focus(
+        &self,
+        axis: &TableAxis,
+        amount: VisOffset,
+        cell_demap: &impl CellDemap,
+    ) -> Option<TableSelection> {
+        match self {
             Self::NoSelection => {
-                let vis_origin = CellAddress::new(VisIdx(0), VisIdx(0));
-                cell_demap.get_log_cell(&vis_origin)
-                    .map(|log| TableSelection::SingleCell( SingleCell::new(vis_origin, log)))
-            },
-            Self::SingleCell(SingleCell{vis, ..}) => {
-                let new_vis = vis.move_by(axis, amount);
-                cell_demap.get_log_cell(&new_vis)
-                    .map(|log|TableSelection::SingleCell( SingleCell::new(new_vis, log) ))
-            },
-            Self::SingleSlice(slice) => {
-               // let new_slice = cell_demap
-                Some(self.clone())
+                let vis_origin = AxisPair::new(VisIdx(0), VisIdx(0));
+                cell_demap
+                    .get_log_cell(&vis_origin)
+                    .map(|log| TableSelection::SingleCell(SingleCell::new(vis_origin, log)))
             }
+            Self::SingleCell(SingleCell { vis, .. }) => {
+                let new_vis = vis.move_by(axis, amount);
+                cell_demap
+                    .get_log_cell(&new_vis)
+                    .map(|log| TableSelection::SingleCell(SingleCell::new(new_vis, log)))
+            }
+            Self::SingleSlice(slice) => Some(self.clone()),
+        }
+    }
+
+    pub fn extend_in_axis(
+        &self,
+        axis: TableAxis,
+        cell_demap: &impl CellDemap,
+    ) -> Option<TableSelection> {
+        // TODO: handle width of ranges and extend all of the cross axis that is covered
+        self.focus()
+            .map(|vis_focus| {
+                cell_demap.get_log_cell(vis_focus).map(|log_focus| {
+                    TableSelection::SingleSlice(SingleSlice::new(
+                        axis,
+                        SingleCell::new(vis_focus.clone(), log_focus),
+                    ))
+                })
+            })
+            .flatten()
+    }
+
+    pub fn focus(&self) -> Option<&AxisPair<VisIdx>> {
+        match self {
+            Self::NoSelection => None,
+            Self::SingleCell(SingleCell { vis, .. }) => Some(vis),
+            Self::SingleSlice(SingleSlice { focus, .. }) => Some(&focus.vis),
         }
     }
 }
-
 
 #[derive(Debug, PartialEq)]
 pub enum SelectionStatus {
@@ -154,6 +182,7 @@ pub enum SelectionStatus {
     AlsoSelected,
 }
 
+// TODO delete
 impl From<SelectionStatus> for bool {
     fn from(ss: SelectionStatus) -> Self {
         ss != SelectionStatus::NotSelected
@@ -167,23 +196,35 @@ impl From<SingleCell> for TableSelection {
 }
 
 impl TableSelection {
-    pub fn to_axis_selection(&self, axis: TableAxis) -> IndicesSelection {
+    pub fn to_axis_selection(&self, for_axis: &TableAxis) -> IndicesSelection {
         match self {
-            TableSelection::NoSelection => IndicesSelection::NoSelection,
-            TableSelection::SingleCell(sc) => IndicesSelection::Single(sc.vis[axis], sc.log[axis]),
-            Self::SingleSlice(single)=>{
-                    if single.axis == axis {
-                        IndicesSelection::Single(single.vis, single.log)
-                    }else{
-                        IndicesSelection::NoSelection
-                    }
+            Self::NoSelection => IndicesSelection::NoSelection,
+            Self::SingleCell(sc) => IndicesSelection::Single(sc.vis[for_axis], sc.log[for_axis]),
+            Self::SingleSlice(SingleSlice { axis, focus }) => {
+                if for_axis == axis {
+                    IndicesSelection::Single(focus.vis[axis], focus.log[axis])
+                } else {
+                    IndicesSelection::NoSelection
+                }
             }
         }
     }
 
-    pub(crate) fn get_cell_status(&self, address: CellAddress<VisIdx>) -> SelectionStatus {
+    pub(crate) fn get_cell_status(&self, address: &AxisPair<VisIdx>) -> SelectionStatus {
         match self {
-            TableSelection::SingleCell(sc) if address == sc.vis => SelectionStatus::Primary,
+            TableSelection::SingleCell(sc) if address == &sc.vis => SelectionStatus::Primary,
+            TableSelection::SingleSlice(SingleSlice {
+                focus: SingleCell { vis, .. },
+                axis,
+            }) => {
+                if vis == address {
+                    SelectionStatus::Primary
+                } else if vis[axis] == address[axis] {
+                    SelectionStatus::AlsoSelected
+                } else {
+                    SelectionStatus::NotSelected
+                }
+            }
             _ => SelectionStatus::NotSelected,
         }
     }

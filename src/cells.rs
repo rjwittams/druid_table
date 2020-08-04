@@ -1,21 +1,33 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, KbKey};
+use druid::{
+    Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
+    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+};
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, LogIdx, TableAxis, VisIdx, ADJUST_AXIS_MEASURE, VisOffset};
+use crate::axis_measure::{
+    AxisMeasure, AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset,
+    ADJUST_AXIS_MEASURE,
+};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedData, RemapSpec, Remapper};
+use crate::headings::{HeaderClicked, HEADER_CLICKED};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{CellAddress, SelectionHandler, SingleCell, TableSelection, CellDemap, TableSelectionMod};
+use crate::selection::{
+    CellDemap, SelectionHandler, SelectionStatus, SingleCell, SingleSlice, TableSelection,
+    TableSelectionMod,
+};
 use crate::{IndexedItems, Remap};
+use druid::platform_menus::win::file::new;
 use std::iter::Map;
 use std::ops::RangeInclusive;
-use druid::platform_menus::win::file::new;
 
-pub trait CellsDelegate<TableData: IndexedData >: CellRender<TableData::Item> + Remapper<TableData>
-where TableData::Item : Data
+pub trait CellsDelegate<TableData: IndexedData>:
+    CellRender<TableData::Item> + Remapper<TableData>
+where
+    TableData::Item: Data,
 {
     fn number_of_columns_in_data(&self, data: &TableData) -> usize;
 }
@@ -120,14 +132,14 @@ where
 
     fn find_cell(&self, pos: &Point) -> Option<SingleCell> {
         let (r, c) = (
-            self.row_measure.vis_from_pixel(pos.y),
-            self.column_measure.vis_from_pixel(pos.x),
+            self.row_measure.vis_idx_from_pixel(pos.y),
+            self.column_measure.vis_idx_from_pixel(pos.x),
         );
         let log_row = r.and_then(|r| self.remap_rows.get_log_idx(r));
         let log_col = c.and_then(|c| Remap::Pristine.get_log_idx(c)); // TODO! Moving columns
         Some(SingleCell::new(
-            CellAddress::new(r?, c?),
-            CellAddress::new(log_row?, log_col?),
+            AxisPair::new(r?, c?),
+            AxisPair::new(log_row?, log_col?),
         ))
     }
 
@@ -180,7 +192,7 @@ where
             if let Some(log_col_idx) = Remap::Pristine.get_log_idx(vis_col_idx) {
                 let cell_left = self.column_measure.first_pixel_from_vis(vis_col_idx);
                 let selected =
-                    (&self.selection).get_cell_status(CellAddress::new(vis_row_idx, vis_col_idx));
+                    (&self.selection).get_cell_status(&AxisPair::new(vis_row_idx, vis_col_idx));
 
                 let cell_rect = Rect::from_origin_size(
                     Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
@@ -205,18 +217,23 @@ where
                     });
                 });
 
-                if selected.into() {
-                    ctx.stroke(
+                // TODO move selection painting out
+                match selected {
+                    SelectionStatus::Primary => ctx.stroke(
                         cell_rect,
                         &Color::rgb(0, 0, 0xFF),
                         rtc.cell_border_thickness,
-                    );
-                } else {
-                    ctx.stroke_bottom_left_border(
+                    ),
+                    SelectionStatus::AlsoSelected => ctx.stroke(
+                        cell_rect,
+                        &Color::rgb(0, 0xCC, 0xCC),
+                        rtc.cell_border_thickness,
+                    ),
+                    SelectionStatus::NotSelected => ctx.stroke_bottom_left_border(
                         &cell_rect,
                         &rtc.cells_border,
                         rtc.cell_border_thickness,
-                    );
+                    ),
                 }
             } else {
                 log::warn!("Could not find logical column for {:?}", vis_col_idx)
@@ -224,20 +241,19 @@ where
         }
     }
 
-    fn remap_for_axis(&self, axis: TableAxis)-> &Remap{
+    fn remap_for_axis(&self, axis: TableAxis) -> &Remap {
         match axis {
-            TableAxis::Rows=>&self.remap_rows,
-            TableAxis::Columns=>&Remap::Pristine
+            TableAxis::Rows => &self.remap_rows,
+            TableAxis::Columns => &Remap::Pristine,
         }
     }
 
-    fn change_selection(&mut self, ctx: &mut EventCtx, f: &impl TableSelectionMod){
-        if let Some(new_sel) = f.new_selection(&self.selection){
+    fn change_selection(&mut self, ctx: &mut EventCtx, f: &impl TableSelectionMod) {
+        if let Some(new_sel) = f.new_selection(&self.selection) {
             self.set_selection(ctx, new_sel);
         }
     }
 }
-
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
@@ -256,36 +272,65 @@ where
                 if let Some(cell) = self.find_cell(&me.pos) {
                     new_selection = Some(cell.into())
                     // TODO: Modifier keys ask current selection to add this cell
-
                 }
             }
             Event::Command(cmd) => {
-                if cmd.is(ADJUST_AXIS_MEASURE) {
-                    if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
-                        cmd.get(ADJUST_AXIS_MEASURE)
-                    {
-                        match axis {
-                            TableAxis::Rows => {
-                                self.row_measure.set_pixel_length_for_vis(*idx, *length)
-                            }
-                            TableAxis::Columns => {
-                                self.column_measure.set_pixel_length_for_vis(*idx, *length)
-                            }
-                        };
-                        ctx.request_layout();
-                    }
+                if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
+                    cmd.get(ADJUST_AXIS_MEASURE)
+                {
+                    match axis {
+                        TableAxis::Rows => self.row_measure.set_pixel_length_for_vis(*idx, *length),
+                        TableAxis::Columns => {
+                            self.column_measure.set_pixel_length_for_vis(*idx, *length)
+                        }
+                    };
+                    ctx.request_layout();
+                } else if let Some(HeaderClicked(axis, vis, section)) = cmd.get(HEADER_CLICKED) {
+                    let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
+                    self.get_log_cell(&vis_addr).map(|log_addr| {
+                        new_selection = Some(TableSelection::SingleSlice(SingleSlice::new(
+                            *axis,
+                            SingleCell::new(vis_addr, log_addr),
+                        )));
+                    });
                 }
-            },
-            Event::KeyDown(ke)=>{
+            }
+            Event::KeyDown(ke) => {
                 log::info!("Key down {:?}", ke);
                 match &ke.key {
-                    KbKey::ArrowDown=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Rows, VisOffset(1), self)),
-                    KbKey::ArrowUp=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Rows, VisOffset(-1), self)),
-                    KbKey::ArrowRight=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Columns, VisOffset(1), self)),
-                    KbKey::ArrowLeft=> new_selection = new_selection.or_else(||self.selection.move_focus(TableAxis::Columns, VisOffset(-1), self)),
-                    _=>{}
+                    KbKey::ArrowDown => {
+                        new_selection =
+                            self.selection
+                                .move_focus(&TableAxis::Rows, VisOffset(1), self)
+                    }
+                    KbKey::ArrowUp => {
+                        new_selection =
+                            self.selection
+                                .move_focus(&TableAxis::Rows, VisOffset(-1), self)
+                    }
+                    KbKey::ArrowRight => {
+                        new_selection =
+                            self.selection
+                                .move_focus(&TableAxis::Columns, VisOffset(1), self)
+                    }
+                    KbKey::ArrowLeft => {
+                        new_selection =
+                            self.selection
+                                .move_focus(&TableAxis::Columns, VisOffset(-1), self)
+                    }
+                    KbKey::Character(s) if s == " " => {
+                        // This is to match Excel
+                        if ke.mods.ctrl() {
+                            new_selection = self.selection.extend_in_axis(TableAxis::Columns, self)
+                        } else if ke.mods.shift() {
+                            new_selection = self.selection.extend_in_axis(TableAxis::Rows, self)
+                        }
+
+                        // TODO - when Ctrl + Shift, select full grid
+                    }
+                    _ => {}
                 }
-            },
+            }
             _ => (),
         }
 
@@ -368,8 +413,10 @@ where
         ctx.fill(draw_rect, &rtc.cells_background);
 
         let cell_rect = CellRect::new(
-            self.row_measure.vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
-            self.column_measure.vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
+            self.row_measure
+                .vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            self.column_measure
+                .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
         self.paint_cells(ctx, data, env, &rtc, &cell_rect)
@@ -377,19 +424,16 @@ where
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> CellDemap
-for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> where
-RowData: Data,
-TableData: IndexedData<Item = RowData, Idx = LogIdx>,
-ColDel: CellsDelegate<TableData>,
-ColumnMeasure: AxisMeasure,
-RowMeasure: AxisMeasure,
+    for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+where
+    RowData: Data,
+    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    ColDel: CellsDelegate<TableData>,
+    ColumnMeasure: AxisMeasure,
+    RowMeasure: AxisMeasure,
 {
-
-
     fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
         let remap = self.remap_for_axis(axis);
         return remap.get_log_idx(*vis);
     }
-
-
 }

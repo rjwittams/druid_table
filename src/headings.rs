@@ -3,10 +3,13 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{
     Affine, BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+    LifeCycleCtx, MouseEvent, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::axis_measure::{
+    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
+    VisOffset,
+};
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::IndexedItems;
@@ -84,6 +87,20 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum HeaderSection {
+    Main,
+    // Filter
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct HeaderClicked(pub TableAxis, pub VisIdx, pub HeaderSection);
+
+pub const HEADER_CLICKED: Selector<HeaderClicked> =
+    Selector::new("druid-builtin.table.header-clicked");
+
+pub type HeaderClickedHandler = dyn Fn(&mut EventCtx, &MouseEvent, &HeaderClicked);
+
 pub struct Headings<HeadersSource, Render, Measure>
 where
     HeadersSource: HeadersFromData,
@@ -99,7 +116,8 @@ where
     header_render: Render,
     dragging: Option<VisIdx>,
     selection: IndicesSelection,
-    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
+    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
+    header_clicked_handlers: Vec<Box<HeaderClickedHandler>>,
 }
 
 impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
@@ -125,7 +143,8 @@ where
             header_render,
             dragging: None,
             selection: IndicesSelection::NoSelection,
-            measure_adjustment_handlers: Default::default()
+            measure_adjustment_handlers: Default::default(),
+            header_clicked_handlers: Default::default(),
         }
     }
 
@@ -136,6 +155,13 @@ where
         self.measure_adjustment_handlers.push(Box::new(handler))
     }
 
+    pub fn add_header_clicked_handler(
+        &mut self,
+        handler: impl Fn(&mut EventCtx, &MouseEvent, &HeaderClicked) + 'static,
+    ) {
+        self.header_clicked_handlers.push(Box::new(handler))
+    }
+
     fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
         let length = self.measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
 
@@ -144,7 +170,7 @@ where
             (handler)(ctx, &adjustment)
         }
 
-        // TODO : this might be overkill if we knew that we we bigger that the viewport - repaint would work
+        // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
         ctx.request_layout();
     }
 }
@@ -168,7 +194,8 @@ where
                 if cmd.is(SELECT_INDICES) {
                     if let Some(index_selections) = cmd.get(SELECT_INDICES) {
                         self.selection = index_selections.clone();
-                        ctx.request_paint()
+                        ctx.request_paint();
+                        ctx.set_handled();
                     }
                 }
             }
@@ -179,9 +206,10 @@ where
 
                     if me.buttons.is_empty() {
                         self.dragging = None;
-                    } else{
+                    } else {
                         ctx.set_cursor(self.axis.resize_cursor());
                     }
+                    ctx.set_handled()
                 } else {
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
                         if idx > VisIdx(0) {
@@ -192,19 +220,28 @@ where
                             };
                             ctx.set_handled();
                             ctx.set_cursor(cursor);
+                            ctx.set_handled();
                         }
                     }
-
                 }
             }
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
+                //TODO: Combine lookups
                 if let Some(idx) = self.measure.pixel_near_border(pix_main) {
                     if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
                         self.dragging = Some(idx - VisOffset(1));
                         ctx.set_active(true);
                         ctx.set_cursor(self.axis.resize_cursor());
                     }
+                } else if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                    // TODO will need to remember/recreate text extents and other decorations in the cells
+                    // to handle more than just Main
+                    let clicked = HeaderClicked(self.axis, idx, HeaderSection::Main);
+                    for handler in &self.header_clicked_handlers {
+                        handler(ctx, me, &clicked);
+                    }
+                    ctx.set_handled()
                 }
             }
             Event::MouseUp(me) => {
@@ -215,7 +252,7 @@ where
                     ctx.set_active(false);
                 }
             }
-             _ => (),
+            _ => (),
         }
     }
 

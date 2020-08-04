@@ -369,16 +369,18 @@ impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
     }
 }
 
-pub struct ProvidedColumns<
-    TableData: IndexedData,
-    ColumnType: CellDelegate<TableData::Item>,
-> where TableData::Item: Data {
+pub struct ProvidedColumns<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
+where
+    TableData::Item: Data,
+{
     cols: Vec<TableColumn<TableData::Item, ColumnType>>,
     phantom_td: PhantomData<TableData>,
 }
 
 impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+    ProvidedColumns<TableData, ColumnType>
+where
+    TableData::Item: Data,
 {
     pub fn new(cols: Vec<TableColumn<TableData::Item, ColumnType>>) -> Self {
         ProvidedColumns {
@@ -388,10 +390,10 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     }
 }
 
-impl<
-        TableData: IndexedData<Idx = LogIdx>,
-        ColumnType: CellDelegate<TableData::Item>,
-    > Remapper<TableData> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+    Remapper<TableData> for ProvidedColumns<TableData, ColumnType>
+where
+    TableData::Item: Data,
 {
     fn sort_fixed(&self, idx: usize) -> bool {
         self.cols.get(idx).map(|c| c.sort_fixed).unwrap_or(false)
@@ -450,10 +452,10 @@ impl<
     }
 }
 
-impl<
-        TableData: IndexedData<Idx = LogIdx>,
-        ColumnType: CellDelegate<TableData::Item>,
-    > CellRender<TableData::Item> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+    CellRender<TableData::Item> for ProvidedColumns<TableData, ColumnType>
+where
+    TableData::Item: Data,
 {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.cols.init(ctx, env)
@@ -471,10 +473,10 @@ impl<
     }
 }
 
-impl<
-        TableData: IndexedData<Idx = LogIdx>,
-        ColumnType: CellDelegate<TableData::Item>,
-    > CellsDelegate<TableData> for ProvidedColumns<TableData, ColumnType> where TableData::Item : Data
+impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+    CellsDelegate<TableData> for ProvidedColumns<TableData, ColumnType>
+where
+    TableData::Item: Data,
 {
     fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
         self.cols.len()

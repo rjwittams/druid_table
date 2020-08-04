@@ -1,13 +1,15 @@
 use crate::axis_measure::TableAxis;
 use crate::cells::CellsDelegate;
-use crate::headings::HeadersFromData;
+use crate::headings::{HeadersFromData, HEADER_CLICKED};
 use crate::{
     AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, TableConfig,
     ADJUST_AXIS_MEASURE, SELECT_INDICES,
 };
 use druid::widget::{CrossAxisAlignment, Flex, Scroll, ScrollTo, SCROLL_TO};
-use druid::{BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
-            LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod};
+use druid::{
+    BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx,
+    Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
+};
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -62,11 +64,12 @@ pub struct TableArgs<
     RowH: HeaderBuildT<TableData = TableData>,
     ColH: HeaderBuildT<TableData = TableData>,
     CellsDel: CellsDelegate<TableData> + 'static,
-> where TableData::Item : Data
+> where
+    TableData::Item: Data,
 {
     cells_delegate: CellsDel,
-    row_m: RowM,
-    col_m: ColM,
+    row_m: (RowM, RowM),
+    col_m: (ColM, ColM),
     row_h: Option<RowH>,
     col_h: Option<ColH>,
     table_config: TableConfig,
@@ -84,8 +87,8 @@ impl<
 {
     pub fn new(
         cells_delegate: CellsDel,
-        row_m: RowM,
-        col_m: ColM,
+        row_m: (RowM, RowM),
+        col_m: (ColM, ColM),
         row_h: Option<RowH>,
         col_h: Option<ColH>,
         table_config: TableConfig,
@@ -104,7 +107,7 @@ impl<
 // This trait exists to move type parameters to associated types
 pub trait TableArgsT {
     type RowData: Data; // Required because associated type bounds are unstable
-    type TableData: IndexedData<Item=Self::RowData, Idx = LogIdx>;
+    type TableData: IndexedData<Item = Self::RowData, Idx = LogIdx>;
     type RowM: AxisMeasure + 'static;
     type ColM: AxisMeasure + 'static;
     type RowH: HeaderBuildT<TableData = Self::TableData>;
@@ -113,16 +116,8 @@ pub trait TableArgsT {
     type CellsDel: CellsDelegate<Self::TableData> + 'static;
     fn content(
         self,
-    ) -> TableArgs<
-        Self::TableData,
-        Self::RowM,
-        Self::ColM,
-        Self::RowH,
-        Self::ColH,
-        Self::CellsDel,
-    >;
+    ) -> TableArgs<Self::TableData, Self::RowM, Self::ColM, Self::RowH, Self::ColH, Self::CellsDel>;
 }
-
 
 impl<
         TableData: IndexedData<Idx = LogIdx>,
@@ -132,7 +127,8 @@ impl<
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
     > TableArgsT for TableArgs<TableData, RowM, ColM, RowH, ColH, CellsDel>
-where TableData::Item : Data
+where
+    TableData::Item: Data,
 {
     type RowData = TableData::Item;
     type TableData = TableData;
@@ -218,8 +214,8 @@ impl<Args: TableArgsT> Table<Args> {
         let cells_delegate = args.cells_delegate;
         let mut cells = Cells::new(
             table_config.clone(),
-            args.col_m.clone(),
-            args.row_m.clone(),
+            args.col_m.0,
+            args.row_m.0,
             cells_delegate,
         );
 
@@ -227,7 +223,7 @@ impl<Args: TableArgsT> Table<Args> {
         if let Some(AxisIds { headers, .. }) = ids.columns {
             cells.add_selection_handler(move |ctx, table_sel| {
                 ctx.submit_command(
-                    SELECT_INDICES.with(table_sel.to_axis_selection(TableAxis::Columns)),
+                    SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Columns)),
                     headers,
                 );
             });
@@ -236,7 +232,7 @@ impl<Args: TableArgsT> Table<Args> {
         if let Some(AxisIds { headers, .. }) = ids.rows {
             cells.add_selection_handler(move |ctx, table_sel| {
                 ctx.submit_command(
-                    SELECT_INDICES.with(table_sel.to_axis_selection(TableAxis::Rows)),
+                    SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Rows)),
                     headers,
                 );
             });
@@ -257,8 +253,8 @@ impl<Args: TableArgsT> Table<Args> {
         }
 
         Self::add_headings(
-            args.col_m,
-            args.row_m,
+            args.col_m.1,
+            args.row_m.1,
             args.col_h,
             args.row_h,
             table_config,
@@ -285,11 +281,13 @@ impl<Args: TableArgsT> Table<Args> {
                 source,
                 render,
             );
-            let ci = ids.cells;
+            let cells_id = ids.cells;
             col_headings.add_axis_measure_adjustment_handler(move |ctx, adj| {
-                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), ci);
+                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
             });
-
+            col_headings.add_header_clicked_handler(move |ctx, me, hc| {
+                ctx.submit_command(HEADER_CLICKED.with(hc.clone()), cells_id);
+            });
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll);
@@ -298,7 +296,7 @@ impl<Args: TableArgsT> Table<Args> {
                 .cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_child(ch_scroll)
                 .with_flex_child(widget, 1.);
-            Self::add_row_headings(table_config, true,row_m, row_h, ids, cells_column)
+            Self::add_row_headings(table_config, true, row_m, row_h, ids, cells_column)
         } else {
             Self::add_row_headings(table_config, false, row_m, row_h, ids, widget)
         }
@@ -316,9 +314,12 @@ impl<Args: TableArgsT> Table<Args> {
             let (source, render) = row_h.content();
             let mut row_headings =
                 Headings::new(TableAxis::Rows, table_config.clone(), row_m, source, render);
-            let ci = ids.cells;
+            let cells_id = ids.cells;
             row_headings.add_axis_measure_adjustment_handler(move |ctx, adj| {
-                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), ci);
+                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
+            });
+            row_headings.add_header_clicked_handler(move |ctx, me, hc| {
+                ctx.submit_command(HEADER_CLICKED.with(hc.clone()), cells_id);
             });
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))
@@ -326,7 +327,7 @@ impl<Args: TableArgsT> Table<Args> {
                 .with_id(scroll);
 
             let mut rh_col = Flex::column().cross_axis_alignment(CrossAxisAlignment::Start);
-            if corner_needed{
+            if corner_needed {
                 rh_col.add_spacer(table_config.col_header_height)
             }
             rh_col.add_flex_child(row_scroll, 1.);
@@ -349,7 +350,7 @@ impl<Args: TableArgsT> Table<Args> {
 
 impl<Args: TableArgsT> Widget<Args::TableData> for Table<Args> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut Args::TableData, env: &Env) {
-       // log::info!("Table event {:?}", event);
+        // log::info!("Table event {:?}", event);
         if let Some(child) = self.child.as_mut() {
             child.pod.event(ctx, event, data, env);
         }

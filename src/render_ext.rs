@@ -9,18 +9,21 @@ pub(crate) trait RenderContextExt: RenderContext {
         border: &impl IntoBrush<Self>,
         border_thickness: f64,
     ) {
+        let half_border = border_thickness / 2.;
+        let x_extent = cell_rect.x1 + half_border;
+        let y_extent = cell_rect.y1 + half_border;
         self.stroke(
             Line::new(
-                Point::new(cell_rect.x1, cell_rect.y0),
-                Point::new(cell_rect.x1, cell_rect.y1),
+                Point::new(x_extent, cell_rect.y0 - 0.5),
+                Point::new(x_extent, cell_rect.y1 + 0.5),
             ),
             border,
             border_thickness,
         );
         self.stroke(
             Line::new(
-                Point::new(cell_rect.x0, cell_rect.y1),
-                Point::new(cell_rect.x1, cell_rect.y1),
+                Point::new(cell_rect.x0, y_extent),
+                Point::new(cell_rect.x1 + border_thickness + 0.5, y_extent),
             ),
             border,
             border_thickness,
