@@ -418,7 +418,7 @@ where
                 ctx.stroke(
                     range_draw_rect,
                     &rtc.focus_color,
-                    rtc.cell_border_thickness * 1.5,
+                    (rtc.cell_border_thickness * 1.5).min(2.),
                 )
             }
         }

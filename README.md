@@ -6,7 +6,7 @@ This project was to learn rust.
 * Virtualized rows and columns, ie data does not have to reside in memory and there is nothing stored per row/column/cell (if fixed sizes are used).
 * Custom cell and header rendering
 * Columnns can be static or data derived
-* Selections (single cell right now)
+* Selections (single cell + row & column) with keyboard control
 * Sorting (multi column, asc/desc) - up front specified right now. Interactive soon.
 * Trait based design for customisation (and possible monomorphisation benefits) :
     * Data sources:

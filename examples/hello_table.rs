@@ -1,16 +1,13 @@
 use std::fmt::{Debug, Formatter};
 
 use druid_table::{
-    column, AxisMeasurements, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx,
+    column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx,
     ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
 };
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::widget::{
-    Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup, Split, Stepper,
-    ViewSwitcher,
-};
+use druid::widget::{Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup, Split, Stepper, ViewSwitcher, Checkbox, Container, SizedBox, Padding};
 use druid::{
     AppLauncher, Data, Env, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx, Point,
     RenderContext, Widget, WidgetExt, WindowDesc,
@@ -20,12 +17,11 @@ use float_ord::FloatOrd;
 use std::cmp::Ordering;
 use std::f64::consts::PI;
 use std::fmt;
+use druid::theme::PLACEHOLDER_COLOR;
 
 #[macro_use]
 extern crate log;
 
-#[macro_use]
-extern crate druid_table;
 
 const WINDOW_TITLE: LocalizedString<TableState> = LocalizedString::new("Hello Table!");
 
@@ -53,25 +49,17 @@ impl HelloRow {
     }
 }
 
-#[derive(Clone, Lens, Eq, PartialEq)]
+#[derive(Clone, Lens, Data, Debug)]
 struct Settings {
     show_headings: ShowHeadings,
-    border_thickness: FloatOrd<f64>,
+    border_thickness: f64,
+    row_fixed: bool,
+    col_fixed: bool
 }
 
-impl Data for Settings {
-    fn same(&self, other: &Self) -> bool {
-        self.show_headings.same(&other.show_headings)
-            && self.border_thickness == other.border_thickness
-    }
-}
-
-impl Debug for Settings {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Settings")
-            .field("show_headings", &self.show_headings)
-            .field("border_thickness", &self.border_thickness.0)
-            .finish()
+impl PartialEq for Settings{
+    fn eq(&self, other: &Self) -> bool {
+        self.same(other)
     }
 }
 
@@ -120,9 +108,10 @@ fn build_main_widget() -> impl Widget<TableState> {
     // Need a wrapper widget to get selection/scroll events out of it
     let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.);
 
+
     let buttons = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(Label::new("Modify table:").padding(5.))
+        .with_child(decor(Label::new("Modify table")))
         .with_child(
             Flex::column()
                 .with_child(
@@ -145,7 +134,7 @@ fn build_main_widget() -> impl Widget<TableState> {
         .lens(TableState::items);
     let headings_control = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(Label::new("Headings to show:").padding(5.))
+        .with_child(decor(Label::new("Headings to show")))
         .with_child(RadioGroup::new(vec![
             ("Just cells", ShowHeadings::JustCells),
             ("Column headings", ShowHeadings::One(TableAxis::Columns)),
@@ -155,7 +144,7 @@ fn build_main_widget() -> impl Widget<TableState> {
         .lens(TableState::settings.then(Settings::show_headings));
     let style = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(Label::new("Style"))
+        .with_child(decor(Label::new("Style")))
         .with_child(
             Flex::row()
                 .with_child(Label::new("Border thickness"))
@@ -164,17 +153,25 @@ fn build_main_widget() -> impl Widget<TableState> {
                 .with_child(Stepper::new().with_range(0., 20.0).with_step(0.5))
                 .lens(
                     TableState::settings
-                        .then(Settings::border_thickness)
-                        .map(|f| f.0, |f, u| *f = FloatOrd(u)),
+                        .then(Settings::border_thickness),
                 ),
         );
+
+    let measurements = Flex::column()
+        .cross_axis_alignment( CrossAxisAlignment::Start)
+        .with_child(decor(Label::new("Uniform axes")))
+        .with_child(Flex::row().with_child(Checkbox::new ("Rows").lens( Settings::row_fixed ) ))
+        .with_child(Flex::row().with_child(Checkbox::new ("Columns").lens( Settings::col_fixed ) ))
+        .lens(TableState::settings);
 
     let sidebar = Flex::column()
         .main_axis_alignment(MainAxisAlignment::Start)
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(buttons)
-        .with_child(headings_control)
-        .with_child(style)
+        .with_child(group(buttons) )
+        .with_child(group(headings_control))
+        .with_child(group(style))
+        .with_child( group(measurements ))
+        .with_flex_spacer(1.)
         .fix_width(200.0);
 
     let vs = ViewSwitcher::new(
@@ -189,12 +186,21 @@ fn build_main_widget() -> impl Widget<TableState> {
         .with_flex_child(vs, 1.)
 }
 
+fn decor<T: Data>(label: Label<T>) -> SizedBox<T> {
+    label.padding(5.).background(PLACEHOLDER_COLOR).expand_width()
+}
+
+fn group<T: Data, W: Widget<T> + 'static>(w: W) -> Padding<T> {
+    w.border(Color::WHITE, 0.5).padding(5.)
+}
+
 fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> {
     log::info!("Create table {:?}", settings);
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
+        .measuring_axis(&TableAxis::Rows, if settings.row_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual}  )
+        .measuring_axis(&TableAxis::Columns, if settings.col_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual} )
         .headings(settings.show_headings)
-        .border(settings.border_thickness.0)
-        .measuring(&TableAxis::Rows, AxisMeasurements::Fixed)
+        .border(settings.border_thickness)
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
         .with_column(
             "Greeting",
@@ -254,7 +260,9 @@ pub fn main() {
         ],
         settings: Settings {
             show_headings: ShowHeadings::Both,
-            border_thickness: FloatOrd(1.),
+            border_thickness: 1.,
+            row_fixed: false,
+            col_fixed: false
         },
     };
 

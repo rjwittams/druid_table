@@ -17,14 +17,14 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
-pub enum AxisMeasurements {
-    Fixed,
-    Adjustable,
+pub enum AxisMeasurementType {
+    Uniform,
+    Individual, /* O(n) in memory with number of items on the axis */
 }
 
-impl Default for AxisMeasurements {
+impl Default for AxisMeasurementType {
     fn default() -> Self {
-        AxisMeasurements::Adjustable
+        AxisMeasurementType::Individual
     }
 }
 
@@ -35,7 +35,7 @@ pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
-    measurements: AxisPair<AxisMeasurements>,
+    measurements: AxisPair<AxisMeasurementType>,
 }
 
 impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>> Default
@@ -89,7 +89,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
-            measurements: AxisPair::new(AxisMeasurements::Adjustable, AxisMeasurements::Adjustable),
+            measurements: AxisPair::new(AxisMeasurementType::Individual, AxisMeasurementType::Individual),
         }
     }
 
@@ -126,15 +126,22 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             .push(TableColumn::new(header, Box::new(cell_render)));
     }
 
-    pub fn measuring(mut self, axis: &TableAxis, measure: AxisMeasurements) -> Self {
+    pub fn measuring_axis(mut self, axis: &TableAxis, measure: AxisMeasurementType) -> Self {
         self.measurements[axis] = measure;
         self
     }
 
     pub fn build_measure(&self, axis: &TableAxis, size: f64) -> DynAxisMeasure {
+        log::info!("Measurements {:?} {:?}", axis, self.measurements);
         match self.measurements[axis] {
-            AxisMeasurements::Adjustable => Rc::new(RefCell::new(StoredAxisMeasure::new(size))),
-            AxisMeasurements::Fixed => Rc::new(RefCell::new(FixedAxisMeasure::new(size))),
+            AxisMeasurementType::Individual =>{
+                log::info!("Made stored {:?}", axis);
+                Rc::new(RefCell::new(StoredAxisMeasure::new(size)))
+            },
+            AxisMeasurementType::Uniform =>{
+                log::info!("Made fixed {:?}", axis);
+                Rc::new(RefCell::new(FixedAxisMeasure::new(size)))
+            },
         }
     }
 
