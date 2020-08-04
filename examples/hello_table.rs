@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug};
 
 use druid_table::{
     column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx,
@@ -7,13 +7,12 @@ use druid_table::{
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::widget::{Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup, Split, Stepper, ViewSwitcher, Checkbox, Container, SizedBox, Padding};
+use druid::widget::{Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup,  Stepper, ViewSwitcher, Checkbox, SizedBox, Padding};
 use druid::{
     AppLauncher, Data, Env, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx, Point,
     RenderContext, Widget, WidgetExt, WindowDesc,
 };
 use druid::{Color, Value};
-use float_ord::FloatOrd;
 use std::cmp::Ordering;
 use std::f64::consts::PI;
 use std::fmt;

@@ -35,7 +35,7 @@ where
 {
 }
 
-impl<RowData: Data> IndexedItems for Vector<RowData> {
+impl<RowData: Clone> IndexedItems for Vector<RowData> {
     type Item = RowData;
     type Idx = LogIdx;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
@@ -47,7 +47,7 @@ impl<RowData: Data> IndexedItems for Vector<RowData> {
     }
 }
 
-impl<RowData: Data> IndexedItems for Vec<RowData> {
+impl<RowData> IndexedItems for Vec<RowData> {
     type Item = RowData;
     type Idx = LogIdx;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
@@ -96,7 +96,7 @@ use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
 
 
-#[derive(Clone)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Copy)]
 pub enum SortDirection {
     Ascending,
     Descending,
@@ -109,7 +109,7 @@ impl SortDirection {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SortSpec {
     pub(crate) idx: usize, // must be the index in the underlying column order to work
     pub(crate) direction: SortDirection,
@@ -126,6 +126,7 @@ impl SortSpec {
     }
 }
 
+#[derive(Clone)]
 pub struct RemapSpec {
     pub(crate) sort_by: Vec<SortSpec>, // columns sorted
                                        // filters

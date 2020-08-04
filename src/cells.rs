@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints,  Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+    Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx,
+    PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
 use crate::axis_measure::{
@@ -12,14 +12,14 @@ use crate::axis_measure::{
 };
 use crate::columns::CellRender;
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{IndexedData, RemapSpec, Remapper};
-use crate::headings::{HeaderClicked, HEADER_CLICKED};
+use crate::data::{IndexedData, RemapSpec, Remapper, SortSpec};
+use crate::headings::{HeaderAction, HeaderActionType, HEADER_CLICKED};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{
-    CellDemap, CellRect, SelectionHandler, SingleCell, SingleSlice,
-    TableSelection
+    CellDemap, CellRect,  SingleCell, SingleSlice, TableSelection,
 };
-use crate::{IndexedItems, Remap};
+use crate::{IndexedItems, Remap, SortDirection};
+use crate::data::SortDirection::Ascending;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData>
@@ -28,6 +28,17 @@ where
 {
     fn number_of_columns_in_data(&self, data: &TableData) -> usize;
 }
+
+#[derive(Clone)]
+pub struct RemapChanged(pub TableAxis,pub RemapSpec, pub Option<Remap>);
+
+pub enum TableChange{
+    Selection(TableSelection),
+    Remap(RemapChanged)
+}
+
+pub type TableChangedHandler = dyn Fn(&mut EventCtx, &TableChange);
+
 
 pub struct Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
 where
@@ -40,7 +51,7 @@ where
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
     selection: TableSelection,
-    selection_handlers: Vec<Box<SelectionHandler>>,
+    change_handlers: Vec<Box<TableChangedHandler>>,
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
     cell_delegate: CellDel,
@@ -68,7 +79,7 @@ where
         Cells {
             config,
             resolved_config: None,
-            selection_handlers: Vec::new(),
+            change_handlers: Vec::new(),
             selection: TableSelection::NoSelection,
             column_measure,
             row_measure,
@@ -80,20 +91,24 @@ where
         }
     }
 
-    pub fn add_selection_handler(
+    pub fn add_change_handlers(
         &mut self,
-        selection_handler: impl Fn(&mut EventCtx, &TableSelection) + 'static,
+        selection_handler: impl Fn(&mut EventCtx, &TableChange) + 'static,
     ) {
-        self.selection_handlers.push(Box::new(selection_handler));
+        self.change_handlers.push(Box::new(selection_handler));
     }
 
     fn set_selection(&mut self, ctx: &mut EventCtx, selection: TableSelection) {
         self.selection = selection;
-        for sh in &self.selection_handlers {
-            sh(ctx, &self.selection)
-        }
-        log::info!("New selection {:?}", &self.selection);
+        let tc = TableChange::Selection(self.selection.clone());
+        self.call_change_handlers(ctx, &tc);
         ctx.request_paint();
+    }
+
+    fn call_change_handlers(&mut self, ctx: &mut EventCtx, tc: &TableChange) {
+        for sh in &self.change_handlers {
+            sh(ctx, tc)
+        }
     }
 
     fn find_cell(&self, pos: &Point) -> Option<SingleCell> {
@@ -197,7 +212,6 @@ where
             TableAxis::Columns => &Remap::Pristine,
         }
     }
-
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
@@ -237,14 +251,46 @@ where
                         }
                     };
                     ctx.request_layout();
-                } else if let Some(HeaderClicked(axis, vis, ..)) = cmd.get(HEADER_CLICKED) {
+                } else if let Some(HeaderAction(axis, vis, action)) = cmd.get(HEADER_CLICKED) {
                     let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
                     if let Some(log_addr) = self.get_log_cell(&vis_addr) {
-                        new_selection = Some(TableSelection::SingleSlice(SingleSlice::new(
-                            *axis,
-                            SingleCell::new(vis_addr, log_addr),
-                        )));
-                    };
+                        match action {
+                            HeaderActionType::Select => {
+                                new_selection = Some(TableSelection::SingleSlice(
+                                    SingleSlice::new(*axis, SingleCell::new(vis_addr, log_addr)),
+                                ));
+                            }
+                            HeaderActionType::ToggleSort{extend} => {
+                                ;
+                                // TODO: centralise remapping etc
+                                let sort_by = &mut self.remap_spec_rows.sort_by;
+                                let log_idx = log_addr[axis].0;
+
+                                match sort_by.last() {
+                                    Some(SortSpec { idx, direction }) if log_idx == *idx => {
+                                        let dir = direction.clone();
+                                        sort_by.pop();
+                                        if dir == SortDirection::Ascending{
+                                            sort_by.push( SortSpec::new(log_idx, SortDirection::Descending) );
+                                        }
+                                    }
+                                    _ => {
+                                        if !extend {
+                                            sort_by.clear();
+                                        }
+                                        sort_by.push(SortSpec::new(log_idx, SortDirection::Ascending));
+                                    }
+                                }
+                                log::info!("Sort by {} {:?}", extend, sort_by);
+
+                                self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
+                                let tc = TableChange::Remap(RemapChanged(*axis.cross_axis(),self.remap_spec_rows.clone(), None));
+                                self.call_change_handlers(ctx, &tc);
+
+                                ctx.request_paint();
+                            }
+                        }
+                    }
                 }
             }
             Event::KeyDown(ke) => {
@@ -371,11 +417,10 @@ where
                 .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
-        self.paint_cells(ctx, data, env,  &cell_rect);
+        self.paint_cells(ctx, data, env, &cell_rect);
 
         let selected = self.selection.get_drawable_selections(cell_rect);
 
-        log::info!("Drawable selections {:?}", &selected);
         let (max_x, max_y) = (
             self.column_measure.total_pixel_length(),
             self.row_measure.total_pixel_length(),

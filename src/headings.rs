@@ -15,8 +15,15 @@ use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::IndexedItems;
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::selection::{IndicesSelection, SELECT_INDICES};
-use crate::Remap;
+use crate::selection::{IndicesSelection};
+use crate::{Remap, RemapSpec};
+use crate::cells::RemapChanged;
+use std::collections::HashMap;
+
+pub const SELECT_INDICES: Selector<IndicesSelection> =
+    Selector::new("druid-builtin.table.select-indices");
+pub const REMAP_CHANGED: Selector<RemapChanged> =
+    Selector::new("druid-builtin.table.remap-changed");
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -88,18 +95,19 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum HeaderSection {
-    Main,
+pub enum HeaderActionType {
+    Select,
+    ToggleSort{extend: bool}
     // Filter
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct HeaderClicked(pub TableAxis, pub VisIdx, pub HeaderSection);
+pub struct HeaderAction(pub TableAxis, pub VisIdx, pub HeaderActionType);
 
-pub const HEADER_CLICKED: Selector<HeaderClicked> =
-    Selector::new("druid-builtin.table.header-clicked");
+pub const HEADER_CLICKED: Selector<HeaderAction> =
+    Selector::new("druid-builtin.table.header-action");
 
-pub type HeaderClickedHandler = dyn Fn(&mut EventCtx, &MouseEvent, &HeaderClicked);
+pub type HeaderActionHandler = dyn Fn(&mut EventCtx, &MouseEvent, &HeaderAction);
 
 pub struct Headings<HeadersSource, Render, Measure>
 where
@@ -117,7 +125,8 @@ where
     dragging: Option<VisIdx>,
     selection: IndicesSelection,
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
-    header_clicked_handlers: Vec<Box<HeaderClickedHandler>>,
+    header_action_handlers: Vec<Box<HeaderActionHandler>>,
+    cross_axis_remap_spec: Option<RemapSpec>
 }
 
 impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
@@ -144,7 +153,8 @@ where
             dragging: None,
             selection: IndicesSelection::NoSelection,
             measure_adjustment_handlers: Default::default(),
-            header_clicked_handlers: Default::default(),
+            header_action_handlers: Default::default(),
+            cross_axis_remap_spec: None
         }
     }
 
@@ -157,9 +167,9 @@ where
 
     pub fn add_header_clicked_handler(
         &mut self,
-        handler: impl Fn(&mut EventCtx, &MouseEvent, &HeaderClicked) + 'static,
+        handler: impl Fn(&mut EventCtx, &MouseEvent, &HeaderAction) + 'static,
     ) {
-        self.header_clicked_handlers.push(Box::new(handler))
+        self.header_action_handlers.push(Box::new(handler))
     }
 
     fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
@@ -191,13 +201,20 @@ where
     ) {
         match _event {
             Event::Command(ref cmd) => {
-                if cmd.is(SELECT_INDICES) {
-                    if let Some(index_selections) = cmd.get(SELECT_INDICES) {
-                        self.selection = index_selections.clone();
-                        ctx.request_paint();
-                        ctx.set_handled();
+                if let Some(index_selections) = cmd.get(SELECT_INDICES) {
+                    self.selection = index_selections.clone();
+                    ctx.request_paint();
+                    ctx.set_handled();
+                }else if let Some(RemapChanged(axis, spec, remap)) =  cmd.get(REMAP_CHANGED){
+                    if *axis == self.axis{
+                        // TODO apply to measure if not shared
+                    }else{
+                        self.cross_axis_remap_spec = Some(spec.clone());
                     }
+                    ctx.request_paint();
+                    ctx.set_handled();
                 }
+                log::info!("Command in headers {:?} {:?}",self.axis, cmd);
             }
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
@@ -225,21 +242,31 @@ where
             }
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
-                //TODO: Combine lookups
-                if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                    if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
-                        self.dragging = Some(idx - VisOffset(1));
-                        ctx.set_active(true);
-                        ctx.set_cursor(self.axis.resize_cursor());
+                if me.count == 2 {
+                    if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                        let clicked = HeaderAction(self.axis, idx, HeaderActionType::ToggleSort{extend: me.mods.ctrl() });
+                        for handler in &self.header_action_handlers {
+                            handler(ctx, me, &clicked);
+                        }
+                        ctx.set_handled()
                     }
-                } else if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
-                    // TODO will need to remember/recreate text extents and other decorations in the cells
-                    // to handle more than just Main
-                    let clicked = HeaderClicked(self.axis, idx, HeaderSection::Main);
-                    for handler in &self.header_clicked_handlers {
-                        handler(ctx, me, &clicked);
+                }else if me.count == 1 {
+
+                    //TODO: Combine lookups
+                    if let Some(idx) = self.measure.pixel_near_border(pix_main) {
+                        if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
+                            self.dragging = Some(idx - VisOffset(1));
+                            ctx.set_active(true);
+                            ctx.set_cursor(self.axis.resize_cursor());
+                            ctx.set_handled()
+                        }
+                    } else if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                        let clicked = HeaderAction(self.axis, idx, HeaderActionType::Select);
+                        for handler in &self.header_action_handlers {
+                            handler(ctx, me, &clicked);
+                        }
+                        ctx.set_handled()
                     }
-                    ctx.set_handled()
                 }
             }
             Event::MouseUp(me) => {
@@ -248,6 +275,7 @@ where
                     self.set_pix_length_for_axis(ctx, idx, pix_main);
                     self.dragging = None;
                     ctx.set_active(false);
+                    ctx.set_handled();
                 }
             }
             _ => (),
@@ -264,11 +292,13 @@ where
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(env);
             self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
-            self.measure.set_axis_properties(
-                rtc.cell_border_thickness,
-                self.headers.as_ref().unwrap().idx_len(),
-                &Remap::Pristine, // TODO: Column reordering..
-            );
+            if !self.measure.shared() {
+                self.measure.set_axis_properties(
+                    rtc.cell_border_thickness,
+                    self.headers.as_ref().unwrap().idx_len(),
+                    &Remap::Pristine, // TODO: Column reordering..
+                );
+            }
             self.resolved_config = Some(rtc);
         }
     }
@@ -283,11 +313,13 @@ where
         if let Some(rtc) = &self.resolved_config {
             if !old_data.same(data) {
                 self.headers = Some(self.headers_source.get_headers(data));
-                self.measure.set_axis_properties(
-                    rtc.cell_border_thickness,
-                    self.headers.as_ref().unwrap().idx_len(),
-                    &Remap::Pristine, // TODO: Column reordering..
-                );
+                if !self.measure.shared() {
+                    self.measure.set_axis_properties(
+                        rtc.cell_border_thickness,
+                        self.headers.as_ref().unwrap().idx_len(),
+                        &Remap::Pristine, // TODO: Column reordering..
+                    );
+                }
                 ctx.request_layout();
             }
         }
@@ -317,6 +349,13 @@ where
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, _data: &HeadersSource::TableData, env: &Env) {
+        // TODO build on change of spec
+        let sort_dirs : HashMap<_, _> = if let Some(cross_rem) = &self.cross_axis_remap_spec {
+           cross_rem.sort_by.iter().enumerate().map(|(ord, x)| (LogIdx(x.idx), (x.direction, ord))).collect()
+        }else{
+            Default::default()
+        };
+
         if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
             self.header_render.init(ctx, env);
             let rect = ctx.region().to_rect();
@@ -358,6 +397,10 @@ where
                             ctx.with_child_ctx(padded_rect, |ctxt| {
                                 //TODO: These indexes are wrong but not used for now
                                 header_render.paint(ctxt, LogIdx(0), log_main_idx, col_name, env);
+
+                                if let Some( (dir, ord) ) = sort_dirs.get(&log_main_idx) {
+                                    log::info!("Sort dir {:?} {:?}", log_main_idx, dir);
+                                }
                             });
                         });
                     });

@@ -292,7 +292,5 @@ impl From<SingleCell> for TableSelection {
     }
 }
 
-pub const SELECT_INDICES: Selector<IndicesSelection> =
-    Selector::new("druid-builtin.table.select-indices");
 
-pub type SelectionHandler = dyn Fn(&mut EventCtx, &TableSelection);
+

@@ -74,7 +74,7 @@ impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
 impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
     CellsDelegate<TableData> for BigTableCells<RowData, TableData, CR>
 {
-    fn number_of_columns_in_data(&self, data: &TableData) -> usize {
+    fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
         self.columns
     }
 }

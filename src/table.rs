@@ -1,6 +1,6 @@
 use crate::axis_measure::TableAxis;
-use crate::cells::CellsDelegate;
-use crate::headings::{HeadersFromData, HEADER_CLICKED};
+use crate::cells::{CellsDelegate, TableChange};
+use crate::headings::{HeadersFromData, HEADER_CLICKED, REMAP_CHANGED};
 use crate::{
     AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, TableConfig,
     ADJUST_AXIS_MEASURE, SELECT_INDICES,
@@ -221,20 +221,32 @@ impl<Args: TableArgsT> Table<Args> {
 
         // These have to be added before we move Cells into scroll
         if let Some(AxisIds { headers, .. }) = ids.columns {
-            cells.add_selection_handler(move |ctx, table_sel| {
-                ctx.submit_command(
-                    SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Columns)),
-                    headers,
-                );
+            cells.add_change_handlers(move |ctx, table_change| {
+                match table_change {
+                    TableChange::Selection(table_sel)=>ctx.submit_command(
+                        SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Columns)),
+                        headers,
+                    ),
+                    TableChange::Remap( remap)=>ctx.submit_command(
+                        REMAP_CHANGED.with( remap.clone() ), headers
+                    )
+                }
+
             });
         };
 
         if let Some(AxisIds { headers, .. }) = ids.rows {
-            cells.add_selection_handler(move |ctx, table_sel| {
-                ctx.submit_command(
-                    SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Rows)),
-                    headers,
-                );
+            cells.add_change_handlers(move |ctx, table_change| {
+                match table_change {
+                    TableChange::Selection(table_sel) => {
+                        ctx.
+                            submit_command(
+                                SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Rows)),
+                                headers,
+                            );
+                    },
+                    _ => {}
+                };
             });
         }
 

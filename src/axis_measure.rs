@@ -87,8 +87,7 @@ impl TableAxis {
 
 #[derive(Debug, Clone)]
 pub enum AxisMeasureAdjustment {
-    LengthChanged(TableAxis, VisIdx, f64),
-    RemapChanged(TableAxis, Remap),
+    LengthChanged(TableAxis, VisIdx, f64)
 }
 
 pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
@@ -102,7 +101,7 @@ pub struct VisIdx(pub usize);
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
 pub struct VisOffset(pub isize);
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default, Hash)]
 pub struct LogIdx(pub usize);
 
 impl VisIdx {
