@@ -17,7 +17,7 @@ pub use axis_measure::{
     AxisMeasure, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
     ADJUST_AXIS_MEASURE,
 };
-pub use builder::{DefaultTableArgs, ShowHeadings, TableBuilder, AxisMeasurements};
+pub use builder::{AxisMeasurements, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{column, CellRender, CellRenderExt, DataCompare, TextCell};
 pub use config::TableConfig;

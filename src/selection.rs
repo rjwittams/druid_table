@@ -1,9 +1,10 @@
 use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
-use crate::Remap;
 use druid::{EventCtx, Selector};
 use std::fmt::Debug;
-use std::ops::{Add, Index, IndexMut};
+use std::iter::Map;
+use std::ops::{Add, Index, IndexMut, RangeInclusive};
 
+// Could be the address of a cell or something else we have one of for each axis
 impl<T: Copy + Debug + Default> AxisPair<T> {
     pub fn new(row: T, col: T) -> AxisPair<T> {
         AxisPair { row, col }
@@ -14,6 +15,55 @@ impl<T: Copy + Debug + Default> AxisPair<T> {
         ca[axis] = main;
         ca[axis.cross_axis()] = cross;
         ca
+    }
+}
+
+// For now a rect only makes sense in VisIdx - In LogIdx any list of points is possible due to remapping
+#[derive(Debug)]
+pub struct CellRect {
+    pub start_row: VisIdx,
+    pub end_row: VisIdx,
+    pub start_col: VisIdx,
+    pub end_col: VisIdx,
+}
+
+impl CellRect {
+    pub fn new(
+        (start_row, end_row): (VisIdx, VisIdx),
+        (start_col, end_col): (VisIdx, VisIdx),
+    ) -> CellRect {
+        CellRect {
+            start_row,
+            end_row,
+            start_col,
+            end_col,
+        }
+    }
+
+    // Todo impl Iterator
+    pub fn rows(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+        VisIdx::range_inc_iter(self.start_row, self.end_row) // Todo work out how to support custom range
+    }
+
+    pub fn cols(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+        VisIdx::range_inc_iter(self.start_col, self.end_col)
+    }
+
+    fn contains_cell(&self, cell_addr: &AxisPair<VisIdx>) -> bool {
+        self.contains_idx(&TableAxis::Columns, cell_addr.col)
+            && self.contains_idx(&TableAxis::Rows, cell_addr.row)
+    }
+
+    fn range(&self, axis: &TableAxis) -> (VisIdx, VisIdx) {
+        match axis {
+            TableAxis::Rows => (self.start_row, self.end_row),
+            TableAxis::Columns => (self.start_col, self.end_col),
+        }
+    }
+
+    fn contains_idx(&self, axis: &TableAxis, idx: VisIdx) -> bool {
+        let (start, end) = self.range(axis);
+        start <= idx && end >= idx
     }
 }
 
@@ -72,6 +122,16 @@ impl SingleSlice {
     pub fn new(axis: TableAxis, focus: SingleCell) -> Self {
         SingleSlice { axis, focus }
     }
+
+    pub fn to_cell_rect(&self, (cross_s, cross_e): (VisIdx, VisIdx)) -> CellRect {
+        let main = self.focus.vis[&self.axis];
+        let main = (main, main);
+        let cross = (cross_s + VisOffset(-1), cross_e + VisOffset(1));
+        match &self.axis {
+            TableAxis::Rows => CellRect::new(main, cross),
+            TableAxis::Columns => CellRect::new(cross, main),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +184,18 @@ impl<F: Fn(&TableSelection) -> Option<TableSelection>> TableSelectionMod for F {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct DrawableSelections {
+    pub focus: Option<AxisPair<VisIdx>>,
+    pub ranges: Vec<CellRect>,
+}
+
+impl DrawableSelections {
+    pub fn new(focus: Option<AxisPair<VisIdx>>, ranges: Vec<CellRect>) -> Self {
+        DrawableSelections { focus, ranges }
+    }
+}
+
 impl TableSelection {
     pub fn move_focus(
         &self,
@@ -136,15 +208,23 @@ impl TableSelection {
                 let vis_origin = AxisPair::new(VisIdx(0), VisIdx(0));
                 cell_demap
                     .get_log_cell(&vis_origin)
-                    .map(|log| TableSelection::SingleCell(SingleCell::new(vis_origin, log)))
+                    .map(|log| Self::SingleCell(SingleCell::new(vis_origin, log)))
             }
             Self::SingleCell(SingleCell { vis, .. }) => {
-                let new_vis = vis.move_by(axis, amount);
+                let new_vis = vis.move_by(axis, amount); // Should check upper bounds
                 cell_demap
                     .get_log_cell(&new_vis)
-                    .map(|log| TableSelection::SingleCell(SingleCell::new(new_vis, log)))
+                    .map(|log| Self::SingleCell(SingleCell::new(new_vis, log)))
             }
-            Self::SingleSlice(slice) => Some(self.clone()),
+            Self::SingleSlice(slice) => {
+                let new_vis = slice.focus.vis.move_by(axis, amount);
+                cell_demap.get_log_cell(&new_vis).map(|log| {
+                    Self::SingleSlice(SingleSlice::new(
+                        slice.axis,
+                        SingleCell::new(new_vis, log),
+                    ))
+                })
+            }
         }
     }
 
@@ -173,29 +253,7 @@ impl TableSelection {
             Self::SingleSlice(SingleSlice { focus, .. }) => Some(&focus.vis),
         }
     }
-}
 
-#[derive(Debug, PartialEq)]
-pub enum SelectionStatus {
-    NotSelected,
-    Primary,
-    AlsoSelected,
-}
-
-// TODO delete
-impl From<SelectionStatus> for bool {
-    fn from(ss: SelectionStatus) -> Self {
-        ss != SelectionStatus::NotSelected
-    }
-}
-
-impl From<SingleCell> for TableSelection {
-    fn from(sc: SingleCell) -> Self {
-        TableSelection::SingleCell(sc)
-    }
-}
-
-impl TableSelection {
     pub fn to_axis_selection(&self, for_axis: &TableAxis) -> IndicesSelection {
         match self {
             Self::NoSelection => IndicesSelection::NoSelection,
@@ -210,23 +268,27 @@ impl TableSelection {
         }
     }
 
-    pub(crate) fn get_cell_status(&self, address: &AxisPair<VisIdx>) -> SelectionStatus {
-        match self {
-            TableSelection::SingleCell(sc) if address == &sc.vis => SelectionStatus::Primary,
-            TableSelection::SingleSlice(SingleSlice {
-                focus: SingleCell { vis, .. },
-                axis,
-            }) => {
-                if vis == address {
-                    SelectionStatus::Primary
-                } else if vis[axis] == address[axis] {
-                    SelectionStatus::AlsoSelected
-                } else {
-                    SelectionStatus::NotSelected
-                }
+    pub fn get_drawable_selections(&self, bounding: CellRect) -> DrawableSelections {
+        match &self {
+            TableSelection::SingleCell(sc) if bounding.contains_cell(&sc.vis) => {
+                DrawableSelections::new(Some(sc.vis.clone()), Default::default())
             }
-            _ => SelectionStatus::NotSelected,
+            TableSelection::SingleSlice(sl)
+                if bounding.contains_idx(&sl.axis, sl.focus.vis[&sl.axis]) =>
+            {
+                DrawableSelections::new(
+                    Some(sl.focus.vis.clone()),
+                    vec![sl.to_cell_rect(bounding.range(sl.axis.cross_axis()))],
+                )
+            }
+            _ => DrawableSelections::new(None, Default::default()),
         }
+    }
+}
+
+impl From<SingleCell> for TableSelection {
+    fn from(sc: SingleCell) -> Self {
+        TableSelection::SingleCell(sc)
     }
 }
 

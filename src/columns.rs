@@ -201,7 +201,7 @@ impl TextCell {
         font
     }
 
-    fn paint_impl(&self, ctx: &mut PaintCtx, data: &String, env: &Env, font: &PietFont) {
+    fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &PietFont) {
         let layout = ctx
             .text()
             .new_text_layout(font, &data, std::f64::INFINITY)

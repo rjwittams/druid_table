@@ -1,5 +1,5 @@
-use std::fmt::{Formatter, Debug};
 use core::fmt;
+use std::fmt::{Debug, Formatter};
 #[macro_export]
 macro_rules! if_opt {
     ($child_expr: expr, $some_expr: expr) => {

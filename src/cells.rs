@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints, Color, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
+    Affine, BoxConstraints,  Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
     LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
@@ -16,13 +16,10 @@ use crate::data::{IndexedData, RemapSpec, Remapper};
 use crate::headings::{HeaderClicked, HEADER_CLICKED};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{
-    CellDemap, SelectionHandler, SelectionStatus, SingleCell, SingleSlice, TableSelection,
-    TableSelectionMod,
+    CellDemap, CellRect, SelectionHandler, SingleCell, SingleSlice,
+    TableSelection
 };
 use crate::{IndexedItems, Remap};
-use druid::platform_menus::win::file::new;
-use std::iter::Map;
-use std::ops::RangeInclusive;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData>
@@ -51,37 +48,6 @@ where
     remap_rows: Remap,
     phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
-}
-
-// A rect only makes sense in VisIdx - In LogIdx any list of points is possible due to remapping
-#[derive(Debug)]
-struct CellRect {
-    start_row: VisIdx,
-    end_row: VisIdx,
-    start_col: VisIdx,
-    end_col: VisIdx,
-}
-
-impl CellRect {
-    fn new(
-        (start_row, end_row): (VisIdx, VisIdx),
-        (start_col, end_col): (VisIdx, VisIdx),
-    ) -> CellRect {
-        CellRect {
-            start_row,
-            end_row,
-            start_col,
-            end_col,
-        }
-    }
-
-    fn rows(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
-        VisIdx::range_inc_iter(self.start_row, self.end_row) // Todo work out how to support custom range
-    }
-
-    fn cols(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
-        VisIdx::range_inc_iter(self.start_col, self.end_col)
-    }
 }
 
 impl<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
@@ -155,7 +121,6 @@ where
         ctx: &mut PaintCtx,
         data: &impl IndexedItems<Item = RowData, Idx = LogIdx>,
         env: &Env,
-        rtc: &ResolvedTableConfig,
         rect: &CellRect,
     ) {
         for vis_row_idx in rect.rows() {
@@ -165,7 +130,6 @@ where
                     self.paint_row(
                         ctx,
                         env,
-                        &rtc,
                         &mut rect.cols(),
                         log_row_idx,
                         vis_row_idx,
@@ -181,62 +145,48 @@ where
         &self,
         ctx: &mut PaintCtx,
         env: &Env,
-        rtc: &ResolvedTableConfig,
         cols: &mut impl Iterator<Item = VisIdx>,
         log_row_idx: LogIdx,
         vis_row_idx: VisIdx,
         row_top: Option<f64>,
         row: &RowData,
     ) {
-        for vis_col_idx in cols {
-            if let Some(log_col_idx) = Remap::Pristine.get_log_idx(vis_col_idx) {
-                let cell_left = self.column_measure.first_pixel_from_vis(vis_col_idx);
-                let selected =
-                    (&self.selection).get_cell_status(&AxisPair::new(vis_row_idx, vis_col_idx));
+        if let Some(rtc) = &self.resolved_config {
+            for vis_col_idx in cols {
+                if let Some(log_col_idx) = Remap::Pristine.get_log_idx(vis_col_idx) {
+                    let cell_left = self.column_measure.first_pixel_from_vis(vis_col_idx);
 
-                let cell_rect = Rect::from_origin_size(
-                    Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
-                    Size::new(
-                        self.column_measure
-                            .pixels_length_for_vis(vis_col_idx)
-                            .unwrap_or(0.),
-                        self.row_measure
-                            .pixels_length_for_vis(vis_row_idx)
-                            .unwrap_or(0.),
-                    ),
-                );
-                let padded_rect = cell_rect.inset(-rtc.cell_padding);
+                    let cell_rect = Rect::from_origin_size(
+                        Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
+                        Size::new(
+                            self.column_measure
+                                .pixels_length_for_vis(vis_col_idx)
+                                .unwrap_or(0.),
+                            self.row_measure
+                                .pixels_length_for_vis(vis_row_idx)
+                                .unwrap_or(0.),
+                        ),
+                    );
+                    let padded_rect = cell_rect.inset(-rtc.cell_padding);
 
-                ctx.with_save(|ctx| {
-                    let layout_origin = padded_rect.origin().to_vec2();
-                    ctx.clip(padded_rect);
-                    ctx.transform(Affine::translate(layout_origin));
-                    ctx.with_child_ctx(padded_rect, |ctxt| {
-                        self.cell_delegate
-                            .paint(ctxt, log_row_idx, log_col_idx, row, env);
+                    ctx.with_save(|ctx| {
+                        let layout_origin = padded_rect.origin().to_vec2();
+                        ctx.clip(padded_rect);
+                        ctx.transform(Affine::translate(layout_origin));
+                        ctx.with_child_ctx(padded_rect, |ctxt| {
+                            self.cell_delegate
+                                .paint(ctxt, log_row_idx, log_col_idx, row, env);
+                        });
                     });
-                });
 
-                // TODO move selection painting out
-                match selected {
-                    SelectionStatus::Primary => ctx.stroke(
-                        cell_rect,
-                        &Color::rgb(0, 0, 0xFF),
-                        rtc.cell_border_thickness,
-                    ),
-                    SelectionStatus::AlsoSelected => ctx.stroke(
-                        cell_rect,
-                        &Color::rgb(0, 0xCC, 0xCC),
-                        rtc.cell_border_thickness,
-                    ),
-                    SelectionStatus::NotSelected => ctx.stroke_bottom_left_border(
+                    ctx.stroke_bottom_left_border(
                         &cell_rect,
                         &rtc.cells_border,
                         rtc.cell_border_thickness,
-                    ),
+                    );
+                } else {
+                    log::warn!("Could not find logical column for {:?}", vis_col_idx)
                 }
-            } else {
-                log::warn!("Could not find logical column for {:?}", vis_col_idx)
             }
         }
     }
@@ -248,11 +198,6 @@ where
         }
     }
 
-    fn change_selection(&mut self, ctx: &mut EventCtx, f: &impl TableSelectionMod) {
-        if let Some(new_sel) = f.new_selection(&self.selection) {
-            self.set_selection(ctx, new_sel);
-        }
-    }
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
@@ -278,14 +223,13 @@ where
                 if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
                     cmd.get(ADJUST_AXIS_MEASURE)
                 {
-
                     match axis {
-                        TableAxis::Rows =>{
+                        TableAxis::Rows => {
                             // If we share the measure through Rc Refcell, we don't need to update it
-                            if !self.row_measure.shared(){
+                            if !self.row_measure.shared() {
                                 self.row_measure.set_pixel_length_for_vis(*idx, *length);
                             }
-                        },
+                        }
                         TableAxis::Columns => {
                             if !self.column_measure.shared() {
                                 self.column_measure.set_pixel_length_for_vis(*idx, *length);
@@ -293,14 +237,14 @@ where
                         }
                     };
                     ctx.request_layout();
-                } else if let Some(HeaderClicked(axis, vis, section)) = cmd.get(HEADER_CLICKED) {
+                } else if let Some(HeaderClicked(axis, vis, ..)) = cmd.get(HEADER_CLICKED) {
                     let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
-                    self.get_log_cell(&vis_addr).map(|log_addr| {
+                    if let Some(log_addr) = self.get_log_cell(&vis_addr) {
                         new_selection = Some(TableSelection::SingleSlice(SingleSlice::new(
                             *axis,
                             SingleCell::new(vis_addr, log_addr),
                         )));
-                    });
+                    };
                 }
             }
             Event::KeyDown(ke) => {
@@ -427,7 +371,57 @@ where
                 .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
-        self.paint_cells(ctx, data, env, &rtc, &cell_rect)
+        self.paint_cells(ctx, data, env,  &cell_rect);
+
+        let selected = self.selection.get_drawable_selections(cell_rect);
+
+        log::info!("Drawable selections {:?}", &selected);
+        let (max_x, max_y) = (
+            self.column_measure.total_pixel_length(),
+            self.row_measure.total_pixel_length(),
+        );
+
+        let sel_color = &rtc.selection_color;
+        let sel_fill = &sel_color.clone().with_alpha(0.2);
+        for range_rect in &selected.ranges {
+            let fetched = (
+                self.column_measure
+                    .first_pixel_from_vis(range_rect.start_col),
+                self.column_measure
+                    .far_pixel_from_vis(range_rect.end_col)
+                    .unwrap_or(max_x),
+                self.row_measure.first_pixel_from_vis(range_rect.start_row),
+                self.row_measure
+                    .far_pixel_from_vis(range_rect.end_row)
+                    .unwrap_or(max_y),
+            );
+            if let (Some(x0), x1, Some(y0), y1) = fetched {
+                let range_draw_rect = Rect::new(x0, y0, x1, y1);
+                ctx.fill(range_draw_rect, sel_fill);
+                ctx.stroke(range_draw_rect, sel_color, rtc.cell_border_thickness)
+            }
+        }
+
+        if let Some(focus) = selected.focus {
+            let fetched = (
+                self.column_measure.first_pixel_from_vis(focus.col),
+                self.column_measure
+                    .far_pixel_from_vis(focus.col)
+                    .unwrap_or(max_x),
+                self.row_measure.first_pixel_from_vis(focus.row),
+                self.row_measure
+                    .far_pixel_from_vis(focus.row)
+                    .unwrap_or(max_y),
+            );
+            if let (Some(x0), x1, Some(y0), y1) = fetched {
+                let range_draw_rect = Rect::new(x0, y0, x1, y1);
+                ctx.stroke(
+                    range_draw_rect,
+                    &rtc.focus_color,
+                    rtc.cell_border_thickness * 1.5,
+                )
+            }
+        }
     }
 }
 
@@ -442,6 +436,6 @@ where
 {
     fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
         let remap = self.remap_for_axis(axis);
-        return remap.get_log_idx(*vis);
+        remap.get_log_idx(*vis)
     }
 }

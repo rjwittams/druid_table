@@ -115,7 +115,7 @@ pub trait TableArgsT {
 
     type CellsDel: CellsDelegate<Self::TableData> + 'static;
     fn content(
-        self,
+        self
     ) -> TableArgs<Self::TableData, Self::RowM, Self::ColM, Self::RowH, Self::ColH, Self::CellsDel>;
 }
 
@@ -285,8 +285,8 @@ impl<Args: TableArgsT> Table<Args> {
             col_headings.add_axis_measure_adjustment_handler(move |ctx, adj| {
                 ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
             });
-            col_headings.add_header_clicked_handler(move |ctx, me, hc| {
-                ctx.submit_command(HEADER_CLICKED.with(hc.clone()), cells_id);
+            col_headings.add_header_clicked_handler(move |ctx, _me, hc| {
+                ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
             });
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
@@ -318,8 +318,8 @@ impl<Args: TableArgsT> Table<Args> {
             row_headings.add_axis_measure_adjustment_handler(move |ctx, adj| {
                 ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
             });
-            row_headings.add_header_clicked_handler(move |ctx, me, hc| {
-                ctx.submit_command(HEADER_CLICKED.with(hc.clone()), cells_id);
+            row_headings.add_header_clicked_handler(move |ctx, _me, hc| {
+                ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
             });
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))
@@ -363,20 +363,15 @@ impl<Args: TableArgsT> Widget<Args::TableData> for Table<Args> {
         data: &Args::TableData,
         env: &Env,
     ) {
-        match event {
-            LifeCycle::WidgetAdded
-         //   | LifeCycle::Internal(InternalLifeCycle::RouteWidgetAdded)
-            => {
-                if self.args.is_some() {
-                    let mut args = None;
-                    std::mem::swap(&mut self.args, &mut args);
-                    self.child = args.map(|args| self.build_child(args));
-                    log::info!("Made child table")
-                } else{
-                    log::warn!("Tried to create child but args consumed!")
-                }
+        if let LifeCycle::WidgetAdded = event {
+            if self.args.is_some() {
+                let mut args = None;
+                std::mem::swap(&mut self.args, &mut args);
+                self.child = args.map(|args| self.build_child(args));
+                log::info!("Made child table")
+            } else {
+                log::warn!("Tried to create child but args consumed!")
             }
-            _ => {}
         }
         if let Some(child) = self.child.as_mut() {
             child.pod.lifecycle(ctx, event, data, env);
@@ -386,7 +381,7 @@ impl<Args: TableArgsT> Widget<Args::TableData> for Table<Args> {
     fn update(
         &mut self,
         ctx: &mut UpdateCtx,
-        old_data: &Args::TableData,
+        _old_data: &Args::TableData,
         data: &Args::TableData,
         env: &Env,
     ) {

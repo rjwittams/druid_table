@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
+    Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
     LifeCycleCtx, MouseEvent, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
 };
 
@@ -210,18 +210,16 @@ where
                         ctx.set_cursor(self.axis.resize_cursor());
                     }
                     ctx.set_handled()
-                } else {
-                    if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                        if idx > VisIdx(0) {
-                            let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
-                                self.axis.resize_cursor()
-                            } else {
-                                &Cursor::NotAllowed
-                            };
-                            ctx.set_handled();
-                            ctx.set_cursor(cursor);
-                            ctx.set_handled();
-                        }
+                } else if let Some(idx) = self.measure.pixel_near_border(pix_main) {
+                    if idx > VisIdx(0) {
+                        let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
+                            self.axis.resize_cursor()
+                        } else {
+                            &Cursor::NotAllowed
+                        };
+                        ctx.set_handled();
+                        ctx.set_cursor(cursor);
+                        ctx.set_handled();
                     }
                 }
             }
@@ -263,21 +261,15 @@ where
         data: &HeadersSource::TableData,
         env: &Env,
     ) {
-        match event {
-            LifeCycle::WidgetAdded => {
-                let rtc = self.config.resolve(env);
-                self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
-                self.measure.set_axis_properties(
-                    rtc.cell_border_thickness,
-                    self.headers.as_ref().unwrap().idx_len(),
-                    &Remap::Pristine, // TODO: Column reordering..
-                );
-                self.resolved_config = Some(rtc);
-            }
-            // LifeCycle::HotChanged(false) => {
-            //     self.dragging = None;
-            // }
-            _ => {}
+        if let LifeCycle::WidgetAdded = event {
+            let rtc = self.config.resolve(env);
+            self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
+            self.measure.set_axis_properties(
+                rtc.cell_border_thickness,
+                self.headers.as_ref().unwrap().idx_len(),
+                &Remap::Pristine, // TODO: Column reordering..
+            );
+            self.resolved_config = Some(rtc);
         }
     }
 
@@ -331,7 +323,6 @@ where
 
             ctx.fill(rect, &rtc.header_background);
 
-            let selected_border = Color::rgb(0xFF, 0, 0);
             let (p0, p1) = self.axis.pixels_from_rect(&rect);
             let (start_main, end_main) = self.measure.vis_range_from_pixels(p0, p1);
 
@@ -352,6 +343,10 @@ where
                     .axis
                     .size(length_pix, rtc.cross_axis_length(&self.axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
+
+                if self.selection.vis_index_selected(vis_main_idx) {
+                    ctx.fill(cell_rect, &rtc.header_selected_background);
+                }
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
                 if let Some(log_main_idx) = Remap::Pristine.get_log_idx(vis_main_idx) {
                     // TODO: use proper remap
@@ -361,20 +356,17 @@ where
                             ctx.clip(padded_rect);
                             ctx.transform(Affine::translate(layout_origin));
                             ctx.with_child_ctx(padded_rect, |ctxt| {
-                                //TODO: These indexes are wrong but not used
+                                //TODO: These indexes are wrong but not used for now
                                 header_render.paint(ctxt, LogIdx(0), log_main_idx, col_name, env);
                             });
                         });
                     });
-                    if self.selection.vis_index_selected(vis_main_idx) {
-                        ctx.stroke(padded_rect, &selected_border, 2.);
-                    } else {
-                        ctx.stroke_bottom_left_border(
-                            &cell_rect,
-                            &rtc.cells_border,
-                            rtc.cell_border_thickness,
-                        );
-                    }
+
+                    ctx.stroke_bottom_left_border(
+                        &cell_rect,
+                        &rtc.cells_border,
+                        rtc.cell_border_thickness,
+                    );
                 }
             }
         }

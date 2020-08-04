@@ -1,16 +1,17 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
-use crate::data::{RemapDetails, SortSpec};
+use crate::data::{RemapDetails};
 use crate::Remap;
 use druid::{Cursor, Data, EventCtx, Point, Rect, Selector, Size};
 use float_ord::FloatOrd;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::iter::Map;
-use std::ops::{Add, Range, RangeInclusive, Sub, Deref};
-use TableAxis::*;
+use std::ops::{Add, Deref, RangeInclusive, Sub};
 use std::rc::Rc;
-use std::cell::RefCell;
+use TableAxis::*;
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
@@ -110,7 +111,7 @@ impl VisIdx {
         from_inc: VisIdx,
         to_inc: VisIdx,
     ) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
-        ((from_inc.0)..=(to_inc.0)).into_iter().map(VisIdx)
+        ((from_inc.0)..=(to_inc.0)).map(VisIdx)
     }
 }
 
@@ -138,6 +139,13 @@ pub trait AxisMeasure {
     fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx>;
     fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx);
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64>;
+
+    fn far_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
+        self.first_pixel_from_vis(idx)
+            .map(|p| self.pixels_length_for_vis(idx).map(|l| p + l))
+            .flatten()
+    }
+
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64>;
     fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64;
     fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64;
@@ -159,7 +167,7 @@ pub trait AxisMeasure {
         }
     }
 
-    fn shared(&self)->bool{
+    fn shared(&self) -> bool {
         false
     }
 }
@@ -170,7 +178,9 @@ impl AxisMeasure for Rc<RefCell<dyn AxisMeasure>> {
     }
 
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
-        self.deref().borrow_mut().set_axis_properties(border, len, remap)
+        self.deref()
+            .borrow_mut()
+            .set_axis_properties(border, len, remap)
     }
 
     fn total_pixel_length(&self) -> f64 {
@@ -198,7 +208,9 @@ impl AxisMeasure for Rc<RefCell<dyn AxisMeasure>> {
     }
 
     fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64 {
-        self.deref().borrow_mut().set_pixel_length_for_vis(idx, length)
+        self.deref()
+            .borrow_mut()
+            .set_pixel_length_for_vis(idx, length)
     }
 
     fn can_resize(&self, idx: VisIdx) -> bool {
@@ -308,8 +320,6 @@ pub struct StoredAxisMeasure {
     total_pixel_length: f64,
 }
 
-
-
 impl Debug for StoredAxisMeasure {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let fp = &self.first_pixels;
@@ -384,12 +394,16 @@ impl AxisMeasure for StoredAxisMeasure {
         self.remap = remap.clone(); // Todo: pass by ref where needed? Or make the measure own it
 
         let old_len = self.log_pix_lengths.len();
-        if old_len > len {
-            self.log_pix_lengths.truncate(len)
-        } else if old_len < len {
-            let extra = vec![self.default_pixels; len - old_len];
-            self.log_pix_lengths.extend_from_slice(&extra[..]);
-            assert_eq!(self.log_pix_lengths.len(), len);
+
+
+        match old_len.cmp(&len) {
+            Ordering::Greater=>self.log_pix_lengths.truncate(len),
+            Ordering::Less=>{
+                let extra = vec![self.default_pixels; len - old_len];
+                self.log_pix_lengths.extend_from_slice(&extra[..]);
+                assert_eq!(self.log_pix_lengths.len(), len);
+            },
+            _=>()
         }
 
         // TODO: handle renumbering / remapping. Erk.
@@ -411,7 +425,7 @@ impl AxisMeasure for StoredAxisMeasure {
         (
             self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0)),
             self.vis_idx_from_pixel(p1)
-                .unwrap_or(VisIdx(self.vis_pix_lengths.len() - 1)),
+                .unwrap_or_else(||VisIdx(self.vis_pix_lengths.len() - 1)),
         )
     }
 

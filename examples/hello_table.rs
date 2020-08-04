@@ -1,18 +1,24 @@
 use std::fmt::{Debug, Formatter};
 
-use druid_table::{column, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, AxisMeasurements};
+use druid_table::{
+    column, AxisMeasurements, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx,
+    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
+};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
-use druid::widget::{Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup, Split, ViewSwitcher, Stepper};
+use druid::widget::{
+    Button, CrossAxisAlignment, Flex, Label, MainAxisAlignment, RadioGroup, Split, Stepper,
+    ViewSwitcher,
+};
 use druid::{
-    AppLauncher, Data, Env, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx, Point, RenderContext,
-    Widget, WidgetExt, WindowDesc,
+    AppLauncher, Data, Env, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx, Point,
+    RenderContext, Widget, WidgetExt, WindowDesc,
 };
 use druid::{Color, Value};
+use float_ord::FloatOrd;
 use std::cmp::Ordering;
 use std::f64::consts::PI;
-use float_ord::FloatOrd;
 use std::fmt;
 
 #[macro_use]
@@ -50,19 +56,20 @@ impl HelloRow {
 #[derive(Clone, Lens, Eq, PartialEq)]
 struct Settings {
     show_headings: ShowHeadings,
-    border_thickness: FloatOrd<f64>
+    border_thickness: FloatOrd<f64>,
 }
 
-impl Data for Settings{
+impl Data for Settings {
     fn same(&self, other: &Self) -> bool {
-        self.show_headings.same(&other.show_headings) && self.border_thickness == other.border_thickness
+        self.show_headings.same(&other.show_headings)
+            && self.border_thickness == other.border_thickness
     }
 }
 
-impl Debug for Settings{
+impl Debug for Settings {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Settings")
-            .field("show_headings",  &self.show_headings)
+            .field("show_headings", &self.show_headings)
             .field("border_thickness", &self.border_thickness.0)
             .finish()
     }
@@ -71,7 +78,7 @@ impl Debug for Settings{
 #[derive(Clone, Data, Lens)]
 struct TableState {
     items: Vector<HelloRow>,
-    settings:Settings
+    settings: Settings,
 }
 
 struct PieCell {}
@@ -132,9 +139,10 @@ fn build_main_widget() -> impl Widget<TableState> {
                         })
                         .expand_width(),
                 )
-                .padding(5.0)
-                ,
-        ).fix_width(200.0).lens(TableState::items);
+                .padding(5.0),
+        )
+        .fix_width(200.0)
+        .lens(TableState::items);
     let headings_control = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(Label::new("Headings to show:").padding(5.))
@@ -144,20 +152,21 @@ fn build_main_widget() -> impl Widget<TableState> {
             ("Row headings", ShowHeadings::One(TableAxis::Rows)),
             ("Both", ShowHeadings::Both),
         ]))
-        .lens(TableState::settings.then(Settings::show_headings) );
+        .lens(TableState::settings.then(Settings::show_headings));
     let style = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(Label::new("Style") )
-        .with_child( Flex::row()
-            .with_child(Label::new( "Border thickness" ))
-            .with_flex_spacer(1.0)
-            .with_child( Label::new(|p:&f64, _:&Env|p.to_string()) )
-            .with_child( Stepper::new().with_range(0., 20.0).with_step(0.5))
-            .lens(TableState::settings.then(Settings::border_thickness).map(
-                    |f|f.0,
-                    |f, u| *f = FloatOrd(u)
-                )
-            )
+        .with_child(Label::new("Style"))
+        .with_child(
+            Flex::row()
+                .with_child(Label::new("Border thickness"))
+                .with_flex_spacer(1.0)
+                .with_child(Label::new(|p: &f64, _: &Env| p.to_string()))
+                .with_child(Stepper::new().with_range(0., 20.0).with_step(0.5))
+                .lens(
+                    TableState::settings
+                        .then(Settings::border_thickness)
+                        .map(|f| f.0, |f, u| *f = FloatOrd(u)),
+                ),
         );
 
     let sidebar = Flex::column()
@@ -171,17 +180,19 @@ fn build_main_widget() -> impl Widget<TableState> {
     let vs = ViewSwitcher::new(
         |ts: &TableState, _| ts.settings.clone(),
         |sh, _, _| Box::new(build_table(sh.clone()).lens(TableState::items)),
-    ).padding(10.);
+    )
+    .padding(10.);
 
-    Flex::row().cross_axis_alignment(CrossAxisAlignment::Start)
+    Flex::row()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(sidebar)
-        .with_flex_child(vs,1.)
+        .with_flex_child(vs, 1.)
 }
 
 fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> {
     log::info!("Create table {:?}", settings);
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
-        .headings(settings.show_headings )
+        .headings(settings.show_headings)
         .border(settings.border_thickness.0)
         .measuring(&TableAxis::Rows, AxisMeasurements::Fixed)
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
@@ -241,10 +252,10 @@ pub fn main() {
             HelloRow::new("Russian", "Привет", "Privet", 42.),
             HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.),
         ],
-        settings: Settings{
+        settings: Settings {
             show_headings: ShowHeadings::Both,
-            border_thickness: FloatOrd(1.)
-        }
+            border_thickness: FloatOrd(1.),
+        },
     };
 
     // start the application

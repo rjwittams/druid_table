@@ -94,37 +94,8 @@ impl Remap {
 
 use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
-use std::ops::{Add, Sub};
 
-pub struct RemappedItems<'a, 'b, U: IndexedItems<Idx = LogIdx>> {
-    pub(crate) underlying: &'a U,
-    pub(crate) details: &'b RemapDetails,
-}
 
-impl<'a, 'b, U: IndexedItems<Idx = LogIdx>> RemappedItems<'a, 'b, U> {
-    pub fn new(underlying: &'a U, details: &'b RemapDetails) -> RemappedItems<'a, 'b, U> {
-        RemappedItems {
-            underlying,
-            details,
-        }
-    }
-}
-
-impl<U: IndexedItems<Idx = LogIdx> + Data> IndexedItems for RemappedItems<'_, '_, U> {
-    type Item = U::Item;
-    type Idx = VisIdx;
-
-    fn with<V>(&self, idx: VisIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
-        self.details
-            .get_log_idx(idx)
-            .and_then(|new_idx| self.underlying.with(*new_idx, f))
-    }
-
-    fn idx_len(&self) -> usize {
-        let RemapDetails::Full(remap) = &self.details;
-        remap.len()
-    }
-}
 #[derive(Clone)]
 pub enum SortDirection {
     Ascending,
@@ -191,24 +162,3 @@ where
     fn initial_spec(&self) -> RemapSpec;
     fn remap(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap;
 }
-
-// #[cfg(test)]
-// mod test {
-//     use crate::data::*;
-//     use im::Vector;
-//
-//     #[test]
-//     fn remap() {
-//         let und: Vector<usize> = (0usize..=10).into_iter().collect();
-//         assert_eq!(und, und.all_items());
-//         let remap_idxs = vec![8, 7, 5, 1];
-//         let details = RemapDetails::Full(remap_idxs.clone());
-//         let remapped = RemappedItems::new(&und, &details);
-//         // assert_eq!(Some(0), remapped.use_item(0, |u|*u));
-//         // assert_eq!(Some(7), remapped.use_item(7, |u|*u));
-//         // assert_eq!(und, remapped.all_items());
-//
-//         let res: Vector<usize> = remap_idxs.into_iter().collect();
-//         assert_eq!(res, remapped.all_items());
-//     }
-// }
