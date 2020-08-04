@@ -380,7 +380,6 @@ impl<Args: TableArgsT> Widget<Args::TableData> for Table<Args> {
                 let mut args = None;
                 std::mem::swap(&mut self.args, &mut args);
                 self.child = args.map(|args| self.build_child(args));
-                log::info!("Made child table")
             } else {
                 log::warn!("Tried to create child but args consumed!")
             }

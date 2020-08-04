@@ -111,7 +111,9 @@ impl SortDirection {
 }
 #[derive(Clone, Debug)]
 pub struct SortSpec {
-    pub(crate) idx: usize, // must be the index in the underlying column order to work
+    pub(crate) idx: usize,
+    //TODO: This index is used in two different ways... the index of the original column (should be log idx) or the sort order.
+    // This is a bit weird maybe parameterize ..
     pub(crate) direction: SortDirection,
 }
 

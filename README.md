@@ -7,7 +7,7 @@ This project was to learn rust.
 * Custom cell and header rendering
 * Columnns can be static or data derived
 * Selections (single cell + row & column) with keyboard control
-* Sorting (multi column, asc/desc) - up front specified right now. Interactive soon.
+* Sorting (multi column, asc/desc) - up front specified right now. Interactive by double clicking in column headers (CTRL for multi select).
 * Trait based design for customisation (and possible monomorphisation benefits) :
     * Data sources:
         * Currently im::Vector is supported out of the box.
@@ -21,7 +21,6 @@ This project was to learn rust.
 
 Planned:
   * Fuller configuration (improved builder)
-  * Interactive sort
   * Filter
   * Pushdown of sort and filter (eg db backend)
   * Column and row pinning

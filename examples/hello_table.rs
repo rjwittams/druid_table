@@ -1,9 +1,6 @@
 use std::fmt::{Debug};
 
-use druid_table::{
-    column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx,
-    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
-};
+use druid_table::{column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, CellCtx};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -82,8 +79,7 @@ impl CellRender<f64> for PieCell {
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        _row_idx: LogIdx,
-        _col_idx: LogIdx,
+        cell: &CellCtx,
         data: &f64,
         _env: &Env,
     ) {
@@ -194,7 +190,6 @@ fn group<T: Data, W: Widget<T> + 'static>(w: W) -> Padding<T> {
 }
 
 fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> {
-    log::info!("Create table {:?}", settings);
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
         .measuring_axis(&TableAxis::Rows, if settings.row_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual}  )
         .measuring_axis(&TableAxis::Columns, if settings.col_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual} )
@@ -236,8 +231,6 @@ fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> 
 
 pub fn main() {
     simple_logger::init().unwrap();
-
-    info!("Hello table");
 
     // describe the main window
     let main_window = WindowDesc::new(build_main_widget)

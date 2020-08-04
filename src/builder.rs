@@ -1,6 +1,6 @@
 
 use crate::columns::{
-    CellDelegate,  CellRenderExt, ProvidedColumns, TableColumn, TextCell,
+    CellDelegate,  CellRenderExt, ProvidedColumns, TableColumn, TextCell, HeaderCell
 };
 
 use crate::axis_measure::{
@@ -10,7 +10,7 @@ use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::{TableArgs};
-use crate::{FixedAxisMeasure, HeaderBuild};
+use crate::{FixedAxisMeasure, HeaderBuild, CellRender};
 use druid::{theme, Data, KeyOrValue};
 use std::cell::{RefCell};
 use std::marker::PhantomData;
@@ -30,8 +30,8 @@ impl Default for AxisMeasurementType {
 
 pub struct TableBuilder<RowData: Data, TableData: Data> {
     table_columns: Vec<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>,
-    column_header_delegate: Box<dyn CellDelegate<String>>,
-    row_header_delegate: Box<dyn CellDelegate<LogIdx>>,
+    column_header_delegate: Box<dyn CellRender<String>>,
+    row_header_delegate: Box<dyn CellRender<LogIdx>>,
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
@@ -69,8 +69,8 @@ pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
     DynAxisMeasure,
     DynAxisMeasure,
-    HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellDelegate<LogIdx>>>,
-    HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellDelegate<String>>>,
+    HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellRender<LogIdx>>>,
+    HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellRender<String>>>,
     ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>,
 >;
 
@@ -81,11 +81,11 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         TableBuilder {
             table_columns: Vec::<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>::new(),
             row_header_delegate: Box::new(
-                TextCell::new()
-                    .text_color(theme::LABEL_COLOR)
+                HeaderCell::new(TextCell::new()
+                    .text_color(theme::LABEL_COLOR))
                     .on_result_of(|br: &LogIdx| br.0.to_string()),
             ),
-            column_header_delegate: Box::new(TextCell::new().text_color(theme::LABEL_COLOR)),
+            column_header_delegate: Box::new(HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))),
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
@@ -132,14 +132,11 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     }
 
     pub fn build_measure(&self, axis: &TableAxis, size: f64) -> DynAxisMeasure {
-        log::info!("Measurements {:?} {:?}", axis, self.measurements);
         match self.measurements[axis] {
             AxisMeasurementType::Individual =>{
-                log::info!("Made stored {:?}", axis);
                 Rc::new(RefCell::new(StoredAxisMeasure::new(size)))
             },
             AxisMeasurementType::Uniform =>{
-                log::info!("Made fixed {:?}", axis);
                 Rc::new(RefCell::new(FixedAxisMeasure::new(size)))
             },
         }

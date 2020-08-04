@@ -10,9 +10,9 @@ use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
     VisOffset,
 };
-use crate::columns::CellRender;
+use crate::columns::{CellRender, CellCtx};
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::IndexedItems;
+use crate::data::{IndexedItems, SortSpec};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{IndicesSelection};
@@ -214,7 +214,6 @@ where
                     ctx.request_paint();
                     ctx.set_handled();
                 }
-                log::info!("Command in headers {:?} {:?}",self.axis, cmd);
             }
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
@@ -351,7 +350,7 @@ where
     fn paint(&mut self, ctx: &mut PaintCtx, _data: &HeadersSource::TableData, env: &Env) {
         // TODO build on change of spec
         let sort_dirs : HashMap<_, _> = if let Some(cross_rem) = &self.cross_axis_remap_spec {
-           cross_rem.sort_by.iter().enumerate().map(|(ord, x)| (LogIdx(x.idx), (x.direction, ord))).collect()
+           cross_rem.sort_by.iter().enumerate().map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction))).collect()
         }else{
             Default::default()
         };
@@ -376,11 +375,11 @@ where
                     .measure
                     .pixels_length_for_vis(vis_main_idx)
                     .unwrap_or(0.);
-                let origin = self.axis.cell_origin(first_pix, 0.);
+                let axis = self.axis;
+                let origin = axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
-                let size = self
-                    .axis
-                    .size(length_pix, rtc.cross_axis_length(&self.axis));
+                let size = axis
+                    .size(length_pix, rtc.cross_axis_length(&axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
 
                 if self.selection.vis_index_selected(vis_main_idx) {
@@ -395,12 +394,8 @@ where
                             ctx.clip(padded_rect);
                             ctx.transform(Affine::translate(layout_origin));
                             ctx.with_child_ctx(padded_rect, |ctxt| {
-                                //TODO: These indexes are wrong but not used for now
-                                header_render.paint(ctxt, LogIdx(0), log_main_idx, col_name, env);
-
-                                if let Some( (dir, ord) ) = sort_dirs.get(&log_main_idx) {
-                                    log::info!("Sort dir {:?} {:?}", log_main_idx, dir);
-                                }
+                                let cell = CellCtx::Header(&axis, log_main_idx, sort_dirs.get(&log_main_idx) );
+                                header_render.paint(ctxt, &cell ,col_name, env);
                             });
                         });
                     });

@@ -1,16 +1,19 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::axis_measure::LogIdx;
+use crate::axis_measure::{LogIdx, AxisPair};
 use crate::data::{RemapDetails, SortDirection, SortSpec};
-use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper};
-use druid::kurbo::Line;
+use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
+use druid::kurbo::{Line, PathEl};
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
-use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx};
+use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use crate::selection::SingleCell;
+use log::Log;
+use crate::data::SortDirection::Ascending;
 
 pub trait CellDelegate<RowData>: CellRender<RowData> + DataCompare<RowData> {}
 
@@ -18,8 +21,17 @@ impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.deref_mut().init(ctx, env)
     }
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env) {
-        self.deref().paint(ctx, row_idx, col_idx, data, env);
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
+        self.deref().paint(ctx, cell, data, env);
+    }
+}
+
+impl<T> CellRender<T> for Box<dyn CellRender<T>> {
+    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
+        self.deref_mut().init(ctx, env)
+    }
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
+        self.deref().paint(ctx, cell, data, env);
     }
 }
 
@@ -30,10 +42,16 @@ impl<T> DataCompare<T> for Box<dyn CellDelegate<T>> {
 }
 
 impl<RowData, T> CellDelegate<RowData> for T where T: CellRender<RowData> + DataCompare<RowData> {}
+#[derive(Debug)]
+pub enum CellCtx<'a>{
+    Absent,
+    Cell(&'a SingleCell),
+    Header(&'a TableAxis, LogIdx, Option<&'a SortSpec>)
+}
 
 pub trait CellRender<T> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env); // Use to cache resources like fonts
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env);
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env);
 }
 
 impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
@@ -43,9 +61,11 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env) {
-        if let Some(cell_render) = self.get(col_idx.0) {
-            cell_render.paint(ctx, row_idx, col_idx, data, env)
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
+        if let CellCtx::Cell(SingleCell{log: AxisPair{col, .. }, .. }) = cell {
+            if let Some(cell_render) = self.get(col.0) {
+                cell_render.paint(ctx, cell, data, env)
+            }
         }
     }
 }
@@ -105,10 +125,10 @@ where
         self.0.inner.init(ctx, env)
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env) {
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         let inner = &self.0.inner;
         self.0.wrapper.with(data, |inner_data| {
-            inner.paint(ctx, row_idx, col_idx, inner_data, env);
+            inner.paint(ctx, cell, inner_data, env);
         })
     }
 }
@@ -138,10 +158,10 @@ where
         self.0.inner.init(ctx, env)
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env) {
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         let inner = &self.0.inner;
         let inner_data = (self.0.wrapper)(data);
-        inner.paint(ctx, row_idx, col_idx, &inner_data, env);
+        inner.paint(ctx, cell, &inner_data, env);
     }
 }
 
@@ -234,8 +254,7 @@ impl CellRender<String> for TextCell {
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        _row_idx: LogIdx,
-        _col_idx: LogIdx,
+        cell: &CellCtx,
         data: &String,
         env: &Env,
     ) {
@@ -253,6 +272,66 @@ impl CellRender<String> for TextCell {
         }
     }
 }
+
+pub(crate) struct HeaderCell<T, I: CellRender<T>>{
+    inner: I,
+    phantom_t: PhantomData<T>
+}
+
+impl<T, I: CellRender<T>> HeaderCell<T, I> {
+    pub fn new(inner: I) -> Self {
+        HeaderCell { inner, phantom_t: Default::default() }
+    }
+}
+
+fn make_arrow(top_point: &Point, up: bool, height: f64, head_rad: f64) -> Vec<PathEl> {
+    let start_y = top_point.y;
+    let tip_y = start_y + height;
+
+    let (start_y, tip_y, mult) = if up {(tip_y, start_y, -1.)} else {(start_y, tip_y, 1.0)};
+    let head_start_y = tip_y - ( head_rad * mult);
+
+    let mid_x = top_point.x;
+
+    let arrow = vec![
+        PathEl::MoveTo((mid_x, start_y).into()),
+        PathEl::LineTo((mid_x, tip_y).into()),
+        PathEl::LineTo((mid_x - head_rad, head_start_y).into()),
+        PathEl::MoveTo((mid_x, tip_y).into()),
+        PathEl::LineTo((mid_x + head_rad, head_start_y).into())
+    ];
+    arrow
+}
+
+impl <T, I: CellRender<T>> CellRender<T> for HeaderCell<T, I>{
+    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
+        self.inner.init(ctx, env);
+    }
+
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
+
+
+        match cell {
+            CellCtx::Header(_, _, Some(ss))=>{
+                let rect = ctx.region().to_rect().with_origin(Point::ORIGIN).inset(-3.);
+                let rad = rect.height() * 0.25;
+                let up = ss.direction == Ascending;
+
+
+                let arrow = make_arrow( &Point::new( rect.max_x() - rad, rect.min_y()), up, rect.height(), rad );
+                ctx.render_ctx.stroke( &arrow[..], &Color::WHITE, 1.0);
+                let rect1 = ctx.region().to_rect();
+                let rect1 = rect1.with_origin(Point::ORIGIN).with_size((rect1.width() - (rad + 3.) * 2., rect1.height()));
+                ctx.clip(rect1);
+                self.inner.paint(ctx, cell, data, env);
+            },
+            _=>{
+                self.inner.paint(ctx, cell, data, env);
+            }
+        }
+    }
+}
+
 
 impl DataCompare<String> for TextCell {
     fn compare(&self, a: &String, b: &String) -> Ordering {
@@ -358,8 +437,8 @@ impl<T: Data, CR: CellDelegate<T>> CellRender<T> for TableColumn<T, CR> {
         self.cell_delegate.init(ctx, env)
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, row_idx: LogIdx, col_idx: LogIdx, data: &T, env: &Env) {
-        self.cell_delegate.paint(ctx, row_idx, col_idx, data, env)
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
+        self.cell_delegate.paint(ctx, cell, data, env)
     }
 }
 
@@ -464,12 +543,11 @@ where
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        row_idx: LogIdx,
-        col_idx: LogIdx,
+        cell: &CellCtx,
         data: &TableData::Item,
         env: &Env,
     ) {
-        self.cols.paint(ctx, row_idx, col_idx, data, env);
+        self.cols.paint(ctx, cell, data, env);
     }
 }
 
@@ -482,3 +560,4 @@ where
         self.cols.len()
     }
 }
+

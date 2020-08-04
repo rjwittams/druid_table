@@ -1,8 +1,4 @@
-use druid_table::{
-    CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices,
-    IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table,
-    TableArgs, TableConfig, TextCell,
-};
+use druid_table::{CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, CellCtx};
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::LogIdxTable;
@@ -43,12 +39,11 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowDa
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        row_idx: LogIdx,
-        col_idx: LogIdx,
+        cell: &CellCtx,
         data: &RowData,
         env: &Env,
     ) {
-        self.inner.paint(ctx, row_idx, col_idx, data, env)
+        self.inner.paint(ctx, cell, data, env)
     }
 }
 

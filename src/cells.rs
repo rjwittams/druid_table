@@ -10,7 +10,7 @@ use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset,
     ADJUST_AXIS_MEASURE,
 };
-use crate::columns::CellRender;
+use crate::columns::{CellRender, CellCtx};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedData, RemapSpec, Remapper, SortSpec};
 use crate::headings::{HeaderAction, HeaderActionType, HEADER_CLICKED};
@@ -188,9 +188,12 @@ where
                         let layout_origin = padded_rect.origin().to_vec2();
                         ctx.clip(padded_rect);
                         ctx.transform(Affine::translate(layout_origin));
+
+                        let sc = SingleCell::new( AxisPair::new(vis_row_idx, vis_col_idx), AxisPair::new(log_row_idx, log_col_idx) );
+                        let cell = CellCtx::Cell(&sc);
                         ctx.with_child_ctx(padded_rect, |ctxt| {
                             self.cell_delegate
-                                .paint(ctxt, log_row_idx, log_col_idx, row, env);
+                                .paint(ctxt, &cell, row, env);
                         });
                     });
 
@@ -281,7 +284,6 @@ where
                                         sort_by.push(SortSpec::new(log_idx, SortDirection::Ascending));
                                     }
                                 }
-                                log::info!("Sort by {} {:?}", extend, sort_by);
 
                                 self.remap_rows = self.cell_delegate.remap(_data, &self.remap_spec_rows);
                                 let tc = TableChange::Remap(RemapChanged(*axis.cross_axis(),self.remap_spec_rows.clone(), None));
@@ -294,7 +296,6 @@ where
                 }
             }
             Event::KeyDown(ke) => {
-                log::info!("Key down {:?}", ke);
                 match &ke.key {
                     KbKey::ArrowDown => {
                         new_selection =
