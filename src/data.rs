@@ -107,7 +107,7 @@ use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
 
 
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Copy)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Copy, Data)]
 pub enum SortDirection {
     Ascending,
     Descending,
@@ -120,7 +120,7 @@ impl SortDirection {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Data)]
 pub struct SortSpec {
     pub(crate) idx: usize,
     //TODO: This index is used in two different ways... the index of the original column (should be log idx) or the sort order.
@@ -139,16 +139,16 @@ impl SortSpec {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Data)]
 pub struct RemapSpec {
-    pub(crate) sort_by: Vec<SortSpec>, // columns sorted
+    pub(crate) sort_by: Vector<SortSpec>, // columns sorted
                                        // filters
                                        // Explicit moves
 }
 
 impl RemapSpec {
     pub(crate) fn add_sort(&mut self, s: SortSpec) {
-        self.sort_by.push(s)
+        self.sort_by.push_back(s)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -159,7 +159,7 @@ impl RemapSpec {
 impl Default for RemapSpec {
     fn default() -> Self {
         RemapSpec {
-            sort_by: Vec::default(),
+            sort_by: Vector::default(),
         }
     }
 }

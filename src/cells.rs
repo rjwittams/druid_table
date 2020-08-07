@@ -20,6 +20,8 @@ use crate::selection::{
     CellDemap, CellRect, SingleCell, SingleSlice, TableSelection,
 };
 use crate::{EditorFactory, IndexedItems, Remap, SortDirection};
+use druid::widget::Bindable;
+use crate::table::TableState;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item>
@@ -307,7 +309,7 @@ where
     }
 }
 
-impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableData>
+impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
@@ -316,14 +318,14 @@ where
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableData, env: &Env) {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableState<TableData>, env: &Env) {
         let mut new_selection: Option<TableSelection> = None;
 
         match event {
             Event::MouseDown(me) => {
                 let ed_cell = match &mut self.editing {
                     Editing::Cell { single_cell, child } => {
-                        data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
+                        data.data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
                         Some(single_cell.vis.clone())
                     }
                     _ => None,
@@ -399,9 +401,9 @@ where
                                 match sort_by.last() {
                                     Some(SortSpec { idx, direction }) if log_idx == *idx => {
                                         let dir = direction.clone();
-                                        sort_by.pop();
+                                        sort_by.pop_back();
                                         if dir == SortDirection::Ascending {
-                                            sort_by.push(SortSpec::new(
+                                            sort_by.push_back(SortSpec::new(
                                                 log_idx,
                                                 SortDirection::Descending,
                                             ));
@@ -412,12 +414,12 @@ where
                                             sort_by.clear();
                                         }
                                         sort_by
-                                            .push(SortSpec::new(log_idx, SortDirection::Ascending));
+                                            .push_back(SortSpec::new(log_idx, SortDirection::Ascending));
                                     }
                                 }
 
                                 self.remap_rows =
-                                    self.cell_delegate.remap(data, &self.remap_spec_rows);
+                                    self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
                                 let tc = TableChange::Remap(RemapChanged(
                                     *axis.cross_axis(),
                                     self.remap_spec_rows.clone(),
@@ -433,7 +435,7 @@ where
                     match &mut self.editing {
                         Editing::Cell { single_cell, child } => {
 
-                            data.with_mut(single_cell.log.row, |row| {
+                            data.data.with_mut(single_cell.log.row, |row| {
                                 child.event(ctx, event, row, env)
                             });
                         }
@@ -484,7 +486,7 @@ where
             }
             _ => match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
-                    data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
+                    data.data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
                 }
                 _ => (),
             },
@@ -502,7 +504,7 @@ where
         &mut self,
         ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        data: &TableData,
+        data: &TableState<TableData>,
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
@@ -510,15 +512,15 @@ where
             // Todo: column moves / hiding etc
             self.column_measure.set_axis_properties(
                 rtc.cell_border_thickness,
-                self.cell_delegate.number_of_columns_in_data(data),
+                self.cell_delegate.number_of_columns_in_data(&data.data),
                 &Remap::Pristine,
             );
 
             self.remap_spec_rows = self.cell_delegate.initial_spec();
-            self.remap_rows = self.cell_delegate.remap(data, &self.remap_spec_rows);
+            self.remap_rows = self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
             self.row_measure.set_axis_properties(
                 rtc.cell_border_thickness,
-                data.idx_len(),
+                data.data.idx_len(),
                 &self.remap_rows,
             );
             self.resolved_config = Some(rtc);
@@ -534,7 +536,7 @@ where
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
                     log::info!("LC event {:?}", event);
-                    data.with(single_cell.log.row, |row| {
+                    data.data.with(single_cell.log.row, |row| {
                         child.lifecycle(ctx, event, row, env)
                     });
                 }
@@ -543,21 +545,21 @@ where
         }
     }
 
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableData, data: &TableData, _env: &Env) {
+    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableState<TableData>, data: &TableState<TableData>, _env: &Env) {
         if let Some(rtc) = &self.resolved_config {
-            if !old_data.same(data) {
+            if !old_data.data.same(&data.data) {
                 // Reapply sorting / filtering. May need to rate limit
                 // and/or have some async way to notify back that sort is complete
                 if !self.remap_spec_rows.is_empty() {
-                    self.remap_rows = self.cell_delegate.remap(data, &self.remap_spec_rows);
+                    self.remap_rows = self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
                 }
 
-                if old_data.idx_len() != data.idx_len() {
+                if old_data.data.idx_len() != data.data.idx_len() {
                     // need to deal with reordering and key columns etc
 
                     self.row_measure.set_axis_properties(
                         rtc.cell_border_thickness,
-                        data.idx_len(),
+                        data.data.idx_len(),
                         &self.remap_rows,
                     );
                     ctx.request_layout(); // TODO: Work out if needed - if we were filling our area before
@@ -571,7 +573,7 @@ where
         &mut self,
         ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        data: &TableData,
+        data: &TableState<TableData>,
         env: &Env,
     ) -> Size {
         bc.debug_check("TableCells");
@@ -594,7 +596,7 @@ where
                     self.row_measure.first_pixel_from_vis(vis.row).unwrap_or(0.),
                 );
                 let bc = BoxConstraints::tight(size);
-                data.with(single_cell.log.row, |row| {
+                data.data.with(single_cell.log.row, |row| {
                     let size = child.layout(ctx, &bc, row, env);
                     child.set_layout_rect(ctx, row, env, Rect::from_origin_size(origin, size))
                 });
@@ -604,7 +606,7 @@ where
         bc.constrain(self.measured_size())
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
         self.cell_delegate.init(ctx, env); // TODO reduce calls? Invalidate on some changes
 
         let rtc = self.config.resolve(env);
@@ -621,7 +623,7 @@ where
                 .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
-        self.paint_cells(ctx, data, env, &cell_rect);
+        self.paint_cells(ctx, &data.data, env, &cell_rect);
         self.paint_selections(ctx, &rtc, &cell_rect);
 
         match &mut self.editing {
@@ -645,7 +647,7 @@ where
 
                 ctx.with_save(|ctx|{
                     ctx.render_ctx.clip( Rect::from_origin_size(origin, size));
-                    data.with(single_cell.log.row, |row| child.paint(ctx, row, env));
+                    data.data.with(single_cell.log.row, |row| child.paint(ctx, row, env));
                 });
             }
             _ => (),
@@ -666,4 +668,16 @@ where
         let remap = self.remap_for_axis(axis);
         remap.get_log_idx(*vis)
     }
+}
+
+impl <RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+Bindable for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+    where
+        RowData: Data,
+        TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+        ColDel: CellsDelegate<TableData>,
+        ColumnMeasure: AxisMeasure,
+        RowMeasure: AxisMeasure,
+{
+
 }

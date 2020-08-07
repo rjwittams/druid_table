@@ -18,7 +18,9 @@ use crate::render_ext::RenderContextExt;
 use crate::selection::{IndicesSelection};
 use crate::{Remap, RemapSpec};
 use crate::cells::RemapChanged;
+use crate::table::TableState;
 use std::collections::HashMap;
+use druid::widget::Bindable;
 
 pub const SELECT_INDICES: Selector<IndicesSelection> =
     Selector::new("druid-builtin.table.select-indices");
@@ -185,7 +187,7 @@ where
     }
 }
 
-impl<HeadersSource, Render, Measure> Widget<HeadersSource::TableData>
+impl<HeadersSource, Render, Measure> Widget<TableState<HeadersSource::TableData>>
     for Headings<HeadersSource, Render, Measure>
 where
     HeadersSource: HeadersFromData,
@@ -196,7 +198,7 @@ where
         &mut self,
         ctx: &mut EventCtx,
         _event: &Event,
-        _data: &mut HeadersSource::TableData,
+        _data: &mut TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
         match _event {
@@ -285,12 +287,12 @@ where
         &mut self,
         _ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        data: &HeadersSource::TableData,
+        data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(env);
-            self.headers = Some(self.headers_source.get_headers(data)); // TODO Option
+            self.headers = Some(self.headers_source.get_headers(&data.data)); // TODO Option
             if !self.measure.shared() {
                 self.measure.set_axis_properties(
                     rtc.cell_border_thickness,
@@ -305,13 +307,13 @@ where
     fn update(
         &mut self,
         ctx: &mut UpdateCtx,
-        old_data: &HeadersSource::TableData,
-        data: &HeadersSource::TableData,
+        old_data: &TableState<HeadersSource::TableData>,
+        data: &TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
         if let Some(rtc) = &self.resolved_config {
             if !old_data.same(data) {
-                self.headers = Some(self.headers_source.get_headers(data));
+                self.headers = Some(self.headers_source.get_headers(&data.data));
                 if !self.measure.shared() {
                     self.measure.set_axis_properties(
                         rtc.cell_border_thickness,
@@ -328,7 +330,7 @@ where
         &mut self,
         _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        _data: &HeadersSource::TableData,
+        _data: &TableState<HeadersSource::TableData>,
         _env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
@@ -347,7 +349,7 @@ where
         )
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, _data: &HeadersSource::TableData, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, _data: &TableState<HeadersSource::TableData>, env: &Env) {
         // TODO build on change of spec
         let sort_dirs : HashMap<_, _> = if let Some(cross_rem) = &self.cross_axis_remap_spec {
            cross_rem.sort_by.iter().enumerate().map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction))).collect()
@@ -410,3 +412,10 @@ where
         }
     }
 }
+
+impl<HeadersSource, Render, Measure> Bindable
+for Headings<HeadersSource, Render, Measure>
+    where
+        HeadersSource: HeadersFromData,
+        Render: CellRender<HeadersSource::Header>,
+        Measure: AxisMeasure {}

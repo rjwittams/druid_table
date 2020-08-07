@@ -21,9 +21,17 @@ pub enum TableAxis {
 
 // Acts as an enum map
 #[derive(Eq, PartialEq, Debug, Clone)]
-pub struct AxisPair<T: Copy + Debug + Default> {
+pub struct AxisPair<T: Debug + Default> {
     pub row: T,
     pub col: T,
+}
+
+impl <T: Copy + Default + Debug> Copy for AxisPair<T>{}
+
+impl <T: Data + Debug + Default> Data for AxisPair<T>{
+    fn same(&self, other: &Self) -> bool {
+        self.row.same(&other.row) && self.col.same(&other.col)
+    }
 }
 
 impl TableAxis {

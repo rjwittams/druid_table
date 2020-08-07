@@ -130,7 +130,7 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
 
     let row_m = FixedAxisMeasure::new(25.);
     let col_m = FixedAxisMeasure::new(100.);
-    Table::new(TableArgs::new(
+    Table::new_in_scope(TableArgs::new(
         BigTableCells::new(
             TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
             columns,

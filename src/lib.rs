@@ -25,3 +25,6 @@ pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirect
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders, SELECT_INDICES};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};
+
+#[macro_use]
+extern crate druid;

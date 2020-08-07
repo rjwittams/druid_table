@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 use std::f64::consts::PI;
 use druid::theme::PLACEHOLDER_COLOR;
 
-const WINDOW_TITLE: LocalizedString<TableState> = LocalizedString::new("Hello Table!");
+const WINDOW_TITLE: LocalizedString<HelloState> = LocalizedString::new("Hello Table!");
 
 #[derive(Clone, Data, Lens, Debug)]
 struct HelloRow {
@@ -55,7 +55,7 @@ impl PartialEq for Settings{
 }
 
 #[derive(Clone, Data, Lens)]
-struct TableState {
+struct HelloState {
     items: Vector<HelloRow>,
     settings: Settings,
 }
@@ -100,7 +100,7 @@ impl EditorFactory<f64> for PieCell{
     }
 }
 
-fn build_main_widget() -> impl Widget<TableState> {
+fn build_main_widget() -> impl Widget<HelloState> {
     // Need a wrapper widget to get selection/scroll events out of it
     let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.);
 
@@ -126,7 +126,7 @@ fn build_main_widget() -> impl Widget<TableState> {
                 ).padding(5.0),
         )
         .fix_width(200.0)
-        .lens(TableState::items);
+        .lens(HelloState::items);
     let headings_control = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(decor(Label::new("Headings to show")))
@@ -136,7 +136,7 @@ fn build_main_widget() -> impl Widget<TableState> {
             ("Row headings", ShowHeadings::One(TableAxis::Rows)),
             ("Both", ShowHeadings::Both),
         ]))
-        .lens(TableState::settings.then(Settings::show_headings));
+        .lens(HelloState::settings.then(Settings::show_headings));
     let style = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(decor(Label::new("Style")))
@@ -147,7 +147,7 @@ fn build_main_widget() -> impl Widget<TableState> {
                 .with_child(Label::new(|p: &f64, _: &Env| p.to_string()))
                 .with_child(Stepper::new().with_range(0., 20.0).with_step(0.5))
                 .lens(
-                    TableState::settings
+                    HelloState::settings
                         .then(Settings::border_thickness),
                 ),
         );
@@ -157,7 +157,7 @@ fn build_main_widget() -> impl Widget<TableState> {
         .with_child(decor(Label::new("Uniform axes")))
         .with_child(Flex::row().with_child(Checkbox::new ("Rows").lens( Settings::row_fixed ) ))
         .with_child(Flex::row().with_child(Checkbox::new ("Columns").lens( Settings::col_fixed ) ))
-        .lens(TableState::settings);
+        .lens(HelloState::settings);
 
     let sidebar = Flex::column()
         .main_axis_alignment(MainAxisAlignment::Start)
@@ -170,8 +170,8 @@ fn build_main_widget() -> impl Widget<TableState> {
         .fix_width(200.0);
 
     let vs = ViewSwitcher::new(
-        |ts: &TableState, _| ts.settings.clone(),
-        |sh, _, _| Box::new(build_table(sh.clone()).lens(TableState::items)),
+        |ts: &HelloState, _| ts.settings.clone(),
+        |sh, _, _| Box::new(build_table(sh.clone()).lens(HelloState::items)),
     )
     .padding(10.);
 
@@ -189,7 +189,7 @@ fn group<T: Data, W: Widget<T> + 'static>(w: W) -> Padding<T> {
     w.border(Color::WHITE, 0.5).padding(5.)
 }
 
-fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> {
+fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
         .measuring_axis(&TableAxis::Rows, if settings.row_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual}  )
         .measuring_axis(&TableAxis::Columns, if settings.col_fixed {AxisMeasurementType::Uniform} else {AxisMeasurementType::Individual} )
@@ -224,7 +224,7 @@ fn build_table(settings: Settings) -> Table<DefaultTableArgs<Vector<HelloRow>>> 
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
 
-    let table = Table::new(table_builder.build_args());
+    let table = Table::new_in_scope(table_builder.build_args());
 
     table
 }
@@ -238,7 +238,7 @@ pub fn main() {
         .window_size((800.0, 500.0));
 
     // create the initial app state
-    let initial_state = TableState {
+    let initial_state = HelloState {
         items: vector![
             HelloRow::new("English", "Hello", "Hello", 99.1),
             HelloRow::new("Français", "Bonjour", "Bonjour", 95.0),

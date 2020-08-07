@@ -4,7 +4,7 @@ use std::iter::Map;
 use std::ops::{Add, Index, IndexMut, RangeInclusive};
 
 // Could be the address of a cell or something else we have one of for each axis
-impl<T: Copy + Debug + Default> AxisPair<T> {
+impl<T: Debug + Default> AxisPair<T> {
     pub fn new(row: T, col: T) -> AxisPair<T> {
         AxisPair { row, col }
     }
@@ -78,7 +78,7 @@ impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for Axis
     }
 }
 
-impl<T: Copy + Debug + Default> Index<&TableAxis> for AxisPair<T> {
+impl<T: Debug + Default> Index<&TableAxis> for AxisPair<T> {
     type Output = T;
 
     fn index(&self, axis: &TableAxis) -> &Self::Output {
@@ -89,7 +89,7 @@ impl<T: Copy + Debug + Default> Index<&TableAxis> for AxisPair<T> {
     }
 }
 
-impl<T: Copy + Debug + Default> IndexMut<&TableAxis> for AxisPair<T> {
+impl<T: Debug + Default> IndexMut<&TableAxis> for AxisPair<T> {
     fn index_mut(&mut self, axis: &TableAxis) -> &mut Self::Output {
         match axis {
             TableAxis::Rows => &mut self.row,
