@@ -36,7 +36,6 @@ pub struct RemapChanged(pub TableAxis, pub RemapSpec, pub Option<Remap>);
 
 pub enum TableChange {
     Selection(TableSelection),
-    Remap(RemapChanged),
 }
 
 pub enum SubmitCommand<'a, 'b, 'c> {
@@ -87,7 +86,6 @@ where
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
     cell_delegate: CellDel,
-    remap_spec_rows: RemapSpec,
     remap_rows: Remap,
     editing: Editing<RowData>,
     phantom_rd: PhantomData<RowData>,
@@ -116,7 +114,6 @@ where
             selection: TableSelection::NoSelection,
             column_measure,
             row_measure,
-            remap_spec_rows: RemapSpec::default(),
             remap_rows: Remap::Pristine,
             cell_delegate: cells_delegate,
             editing: Inactive,
@@ -395,7 +392,7 @@ where
                             }
                             HeaderActionType::ToggleSort { extend } => {
                                 // TODO: centralise remapping etc
-                                let sort_by = &mut self.remap_spec_rows.sort_by;
+                                let sort_by = &mut data.remap_specs[&TableAxis::Rows].sort_by;
                                 let log_idx = log_addr[axis].0;
 
                                 match sort_by.last() {
@@ -419,14 +416,7 @@ where
                                 }
 
                                 self.remap_rows =
-                                    self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
-                                let tc = TableChange::Remap(RemapChanged(
-                                    *axis.cross_axis(),
-                                    self.remap_spec_rows.clone(),
-                                    None,
-                                ));
-                                self.call_change_handlers(SubmitCommand::E(ctx), &tc);
-
+                                    self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
                                 ctx.request_paint();
                             }
                         }
@@ -516,22 +506,14 @@ where
                 &Remap::Pristine,
             );
 
-            self.remap_spec_rows = self.cell_delegate.initial_spec();
-            self.remap_rows = self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
+            // self.remap_spec_rows = self.cell_delegate.initial_spec(); TODO Work out where to put this
+            self.remap_rows = self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
             self.row_measure.set_axis_properties(
                 rtc.cell_border_thickness,
                 data.data.idx_len(),
                 &self.remap_rows,
             );
             self.resolved_config = Some(rtc);
-            self.call_change_handlers(
-                SubmitCommand::L(ctx),
-                &TableChange::Remap(RemapChanged(
-                    TableAxis::Rows,
-                    self.remap_spec_rows.clone(),
-                    None,
-                )),
-            );
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
@@ -547,12 +529,11 @@ where
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableState<TableData>, data: &TableState<TableData>, _env: &Env) {
         if let Some(rtc) = &self.resolved_config {
-            if !old_data.data.same(&data.data) {
+            if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
                 // Reapply sorting / filtering. May need to rate limit
                 // and/or have some async way to notify back that sort is complete
-                if !self.remap_spec_rows.is_empty() {
-                    self.remap_rows = self.cell_delegate.remap(&data.data, &self.remap_spec_rows);
-                }
+
+                self.remap_rows = self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
 
                 if old_data.data.idx_len() != data.data.idx_len() {
                     // need to deal with reordering and key columns etc

@@ -246,9 +246,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                     TableChange::Selection(table_sel)=>ctx.submit_command(
                         SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Columns)),
                         headers,
-                    ),
-                    TableChange::Remap( remap)=>ctx.submit_command(
-                        REMAP_CHANGED.with( remap.clone() ), headers
                     )
                 }
 

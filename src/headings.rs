@@ -128,7 +128,6 @@ where
     selection: IndicesSelection,
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
     header_action_handlers: Vec<Box<HeaderActionHandler>>,
-    cross_axis_remap_spec: Option<RemapSpec>
 }
 
 impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
@@ -155,8 +154,7 @@ where
             dragging: None,
             selection: IndicesSelection::NoSelection,
             measure_adjustment_handlers: Default::default(),
-            header_action_handlers: Default::default(),
-            cross_axis_remap_spec: None
+            header_action_handlers: Default::default()
         }
     }
 
@@ -205,14 +203,6 @@ where
             Event::Command(ref cmd) => {
                 if let Some(index_selections) = cmd.get(SELECT_INDICES) {
                     self.selection = index_selections.clone();
-                    ctx.request_paint();
-                    ctx.set_handled();
-                }else if let Some(RemapChanged(axis, spec, _)) =  cmd.get(REMAP_CHANGED){
-                    if *axis == self.axis{
-                        // TODO apply to measure if not shared
-                    }else{
-                        self.cross_axis_remap_spec = Some(spec.clone());
-                    }
                     ctx.request_paint();
                     ctx.set_handled();
                 }
@@ -349,13 +339,11 @@ where
         )
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, _data: &TableState<HeadersSource::TableData>, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<HeadersSource::TableData>, env: &Env) {
         // TODO build on change of spec
-        let sort_dirs : HashMap<_, _> = if let Some(cross_rem) = &self.cross_axis_remap_spec {
-           cross_rem.sort_by.iter().enumerate().map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction))).collect()
-        }else{
-            Default::default()
-        };
+        let cross_rem = &data.remap_specs[self.axis.cross_axis()];
+        let sort_dirs : HashMap<_, _> =   cross_rem.sort_by.iter().enumerate()
+            .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction))).collect();
 
         if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
             self.header_render.init(ctx, env);
