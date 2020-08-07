@@ -205,7 +205,7 @@ where
                     self.selection = index_selections.clone();
                     ctx.request_paint();
                     ctx.set_handled();
-                }else if let Some(RemapChanged(axis, spec, remap)) =  cmd.get(REMAP_CHANGED){
+                }else if let Some(RemapChanged(axis, spec, _)) =  cmd.get(REMAP_CHANGED){
                     if *axis == self.axis{
                         // TODO apply to measure if not shared
                     }else{

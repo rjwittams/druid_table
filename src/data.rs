@@ -13,7 +13,7 @@ pub trait IndexedItems {
                           // but still provide a reference.
     fn with<V>(&self, idx: Self::Idx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
-    //fn with_mut<V>(&self, idx: Self::Idx, f: impl FnOnce(&Self::Item)) -> Option<V>;
+    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item)->V) -> Option<V>;
     // Seems advisable not to clash with len
     fn idx_len(&self) -> usize;
 
@@ -40,8 +40,14 @@ impl<RowData: Clone> IndexedItems for Vector<RowData> {
     type Idx = LogIdx;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
         let option = self.get(idx.0);
-        option.map(move |x| f(x))
+        option.map(f)
     }
+
+    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item)->V) -> Option<V> {
+        let option = self.get_mut(idx.0);
+        option.map(f)
+    }
+
     fn idx_len(&self) -> usize {
         Vector::len(self)
     }
@@ -51,8 +57,13 @@ impl<RowData> IndexedItems for Vec<RowData> {
     type Item = RowData;
     type Idx = LogIdx;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
-        self.get(idx.0).map(move |x| f(x))
+        self.get(idx.0).map(f)
     }
+
+    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item)->V) -> Option<V> {
+        self.get_mut( idx.0 ).map(f)
+    }
+
 
     fn idx_len(&self) -> usize {
         Vec::len(self)
@@ -132,13 +143,10 @@ impl SortSpec {
 pub struct RemapSpec {
     pub(crate) sort_by: Vec<SortSpec>, // columns sorted
                                        // filters
+                                       // Explicit moves
 }
 
 impl RemapSpec {
-    pub(crate) fn clear(&mut self) {
-        self.sort_by.clear()
-    }
-
     pub(crate) fn add_sort(&mut self, s: SortSpec) {
         self.sort_by.push(s)
     }

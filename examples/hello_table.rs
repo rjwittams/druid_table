@@ -1,6 +1,6 @@
 use std::fmt::{Debug};
 
-use druid_table::{column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, LogIdx, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, CellCtx};
+use druid_table::{column, AxisMeasurementType, CellRender, CellRenderExt, DataCompare, DefaultTableArgs, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, CellCtx, EditorFactory};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -12,12 +12,7 @@ use druid::{
 use druid::{Color, Value};
 use std::cmp::Ordering;
 use std::f64::consts::PI;
-use std::fmt;
 use druid::theme::PLACEHOLDER_COLOR;
-
-#[macro_use]
-extern crate log;
-
 
 const WINDOW_TITLE: LocalizedString<TableState> = LocalizedString::new("Hello Table!");
 
@@ -79,7 +74,7 @@ impl CellRender<f64> for PieCell {
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        cell: &CellCtx,
+        _cell: &CellCtx,
         data: &f64,
         _env: &Env,
     ) {
@@ -96,6 +91,12 @@ impl CellRender<f64> for PieCell {
         ctx.fill(&circle, &Color::rgb(0x0, 0xFF, 0x0));
 
         ctx.stroke(&circle, &Color::BLACK, 1.0);
+    }
+}
+
+impl EditorFactory<f64> for PieCell{
+    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
+        None
     }
 }
 
@@ -122,8 +123,7 @@ fn build_main_widget() -> impl Widget<TableState> {
                             data.pop_back();
                         })
                         .expand_width(),
-                )
-                .padding(5.0),
+                ).padding(5.0),
         )
         .fix_width(200.0)
         .lens(TableState::items);

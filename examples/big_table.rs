@@ -1,4 +1,4 @@
-use druid_table::{CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, CellCtx};
+use druid_table::{CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, CellCtx, EditorFactory};
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::LogIdxTable;
@@ -8,29 +8,30 @@ use std::marker::PhantomData;
 extern crate log;
 
 #[derive(Clone)]
-struct BigTableCells<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
+struct BigTableCells<TableData: IndexedData, CR: CellRender<TableData::Item>>
+where TableData::Item : Data
 {
     inner: CR,
     columns: usize,
-    phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
-    BigTableCells<RowData, TableData, CR>
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
+    BigTableCells<TableData, CR>
+where TableData::Item : Data
 {
-    fn new(inner: CR, columns: usize) -> BigTableCells<RowData, TableData, CR> {
+    fn new(inner: CR, columns: usize) -> BigTableCells<TableData, CR> {
         BigTableCells {
             inner,
             columns,
-            phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
     }
 }
 
-impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
-    CellRender<RowData> for BigTableCells<RowData, TableData, CR>
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
+    CellRender<TableData::Item> for BigTableCells<TableData, CR>
+where TableData::Item : Data
 {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.inner.init(ctx, env);
@@ -40,7 +41,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowDa
         &self,
         ctx: &mut PaintCtx,
         cell: &CellCtx,
-        data: &RowData,
+        data: &TableData::Item,
         env: &Env,
     ) {
         self.inner.paint(ctx, cell, data, env)
@@ -48,7 +49,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowDa
 }
 
 impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
-    for BigTableCells<LogIdx, TableData, CR>
+    for BigTableCells<TableData, CR>
 {
     type Item = LogIdx;
     type Idx = LogIdx;
@@ -61,13 +62,20 @@ impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
         }
     }
 
+    fn with_mut<V>(&mut self, _idx: Self::Idx, _f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
+        None
+    }
+
     fn idx_len(&self) -> usize {
         self.columns
     }
 }
 
-impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowData>>
-    CellsDelegate<TableData> for BigTableCells<RowData, TableData, CR>
+
+
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
+    CellsDelegate<TableData> for BigTableCells<TableData, CR>
+where TableData::Item : Data
 {
     fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
         self.columns
@@ -75,7 +83,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData>, CR: CellRender<RowDa
 }
 
 impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowData>>
-    Remapper<TableData> for BigTableCells<RowData, TableData, CR>
+    Remapper<TableData> for BigTableCells<TableData, CR>
 {
     fn sort_fixed(&self, _idx: usize) -> bool {
         true
@@ -87,6 +95,15 @@ impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowDa
 
     fn remap(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
         Remap::Pristine
+    }
+}
+
+impl<CR: CellRender<TableData::Item>, TableData: IndexedData>
+EditorFactory<TableData::Item> for BigTableCells<TableData, CR>
+where TableData::Item : Data
+{
+    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
+        None
     }
 }
 
@@ -103,7 +120,7 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
             .on_result_of(|br: &LogIdx| br.0.to_string()),
     );
 
-    let headers = BigTableCells::<_, LogIdxTable, _>::new(inner_render, columns);
+    let headers = BigTableCells::<LogIdxTable, _>::new(inner_render, columns);
     let cols = HeaderBuild::new(
         SuppliedHeaders::new(headers),
         TextCell::new()

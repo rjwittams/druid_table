@@ -1,5 +1,4 @@
 use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
-use druid::{EventCtx, Selector};
 use std::fmt::Debug;
 use std::iter::Map;
 use std::ops::{Add, Index, IndexMut, RangeInclusive};
@@ -268,7 +267,7 @@ impl TableSelection {
         }
     }
 
-    pub fn get_drawable_selections(&self, bounding: CellRect) -> DrawableSelections {
+    pub fn get_drawable_selections(&self, bounding: &CellRect) -> DrawableSelections {
         match &self {
             TableSelection::SingleCell(sc) if bounding.contains_cell(&sc.vis) => {
                 DrawableSelections::new(Some(sc.vis.clone()), Default::default())

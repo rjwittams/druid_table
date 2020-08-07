@@ -19,7 +19,7 @@ pub use axis_measure::{
 };
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
-pub use columns::{column, CellRender, CellRenderExt, DataCompare, TextCell, CellCtx};
+pub use columns::{column, CellRender, CellRenderExt, DataCompare, TextCell, CellCtx, EditorFactory};
 pub use config::TableConfig;
 pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirection};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders, SELECT_INDICES};

@@ -3,19 +3,25 @@ use std::ops::{Deref, DerefMut};
 
 use crate::axis_measure::{LogIdx, AxisPair};
 use crate::data::{RemapDetails, SortDirection, SortSpec};
-use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
+use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis, IndexedItems};
 use druid::kurbo::{Line, PathEl};
 use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
-use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point};
+use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use crate::selection::SingleCell;
-use log::Log;
 use crate::data::SortDirection::Ascending;
+use druid::widget::TextBox;
 
-pub trait CellDelegate<RowData>: CellRender<RowData> + DataCompare<RowData> {}
+pub trait EditorFactory<RowData> {
+    fn make_editor(&mut self, ctx: &CellCtx)->Option<Box<dyn Widget<RowData>>>;
+}
+
+pub trait CellDelegate<RowData>: CellRender<RowData> + DataCompare<RowData> + EditorFactory<RowData> {
+
+}
 
 impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
@@ -26,6 +32,23 @@ impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
     }
 }
 
+impl <RowData> EditorFactory<RowData> for Box<dyn CellDelegate<RowData>>{
+    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
+        self.deref_mut().make_editor(ctx)
+    }
+}
+
+
+impl<T> DataCompare<T> for Box<dyn CellDelegate<T>> {
+    fn compare(&self, a: &T, b: &T) -> Ordering {
+        self.deref().compare(a, b)
+    }
+}
+
+impl<RowData, T> CellDelegate<RowData>
+    for T where T: CellRender<RowData> + DataCompare<RowData> + EditorFactory<RowData>{}
+
+// Todo change to boxed header delegate?
 impl<T> CellRender<T> for Box<dyn CellRender<T>> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.deref_mut().init(ctx, env)
@@ -35,13 +58,7 @@ impl<T> CellRender<T> for Box<dyn CellRender<T>> {
     }
 }
 
-impl<T> DataCompare<T> for Box<dyn CellDelegate<T>> {
-    fn compare(&self, a: &T, b: &T) -> Ordering {
-        self.deref().compare(a, b)
-    }
-}
 
-impl<RowData, T> CellDelegate<RowData> for T where T: CellRender<RowData> + DataCompare<RowData> {}
 #[derive(Debug)]
 pub enum CellCtx<'a>{
     Absent,
@@ -67,6 +84,17 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
                 cell_render.paint(ctx, cell, data, env)
             }
         }
+    }
+}
+
+impl<T, EF: EditorFactory<T>> EditorFactory<T> for Vec<EF>{
+    fn make_editor(&mut self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+        if let CellCtx::Cell(SingleCell{log: AxisPair{col, .. }, .. }) = cell {
+            if let Some(ef) = self.get_mut(col.0) {
+               return ef.make_editor(cell)
+            }
+        }
+        None
     }
 }
 
@@ -147,6 +175,23 @@ where
     }
 }
 
+impl <T, U, L, EF> EditorFactory<T> for LensWrapped<T, U, L, EF>
+    where
+        T: Data,
+        U: Data,
+        L: Lens<T, U> + Clone + 'static,
+        EF: EditorFactory<U>,
+{
+    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+        // TODO work out if we can avoid a chain of boxing...
+        if let Some(widget) = self.0.inner.make_editor(ctx){
+            Some( Box::new(widget.lens( self.0.wrapper.clone() )))
+        }else {
+            None
+        }
+    }
+}
+
 impl<T, U, F, CR> CellRender<T> for FuncWrapped<T, U, F, CR>
 where
     T: Data,
@@ -217,23 +262,26 @@ impl TextCell {
             .text()
             .new_font_by_name(self.font_name.resolve(env), self.font_size.resolve(env))
             .build()
-            .unwrap();
+            .unwrap(); // TODO errors / fallback?
         font
     }
 
     fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &PietFont) {
-        let layout = ctx
+        // TODO: error handling
+        // TODO: wrapping (multi line)
+        // TODO:
+
+        if let Ok(layout) = ctx
             .text()
             .new_text_layout(font, &data, std::f64::INFINITY)
-            .build()
-            .unwrap();
+            .build() {
 
-        let fill_color = self.text_color.resolve(env);
-        ctx.draw_text(
-            &layout,
-            (0.0, layout.line_metric(0).unwrap().height),
-            &fill_color,
-        );
+            let fill_color = self.text_color.resolve(env);
+
+            if let Some(metric) = layout.line_metric(0) {
+                ctx.draw_text(&layout, (0.0, metric.height), &fill_color);
+            }
+        }
     }
 }
 
@@ -254,7 +302,7 @@ impl CellRender<String> for TextCell {
     fn paint(
         &self,
         ctx: &mut PaintCtx,
-        cell: &CellCtx,
+        _cell: &CellCtx,
         data: &String,
         env: &Env,
     ) {
@@ -270,6 +318,12 @@ impl CellRender<String> for TextCell {
             );
             self.paint_impl(ctx, &data, env, &font);
         }
+    }
+}
+
+impl EditorFactory<String> for TextCell{
+    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<String>>> {
+        Some(Box::new(TextBox::new().expand_height() ))
     }
 }
 
@@ -448,6 +502,12 @@ impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
     }
 }
 
+impl<T: Data, CR: CellDelegate<T>> EditorFactory<T> for TableColumn<T, CR> {
+    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+        self.cell_delegate.make_editor(ctx)
+    }
+}
+
 pub struct ProvidedColumns<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
 where
     TableData::Item: Data,
@@ -548,6 +608,16 @@ where
         env: &Env,
     ) {
         self.cols.paint(ctx, cell, data, env);
+    }
+}
+
+impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+EditorFactory<TableData::Item> for ProvidedColumns<TableData, ColumnType>
+    where
+        TableData::Item: Data,
+{
+    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedItems>::Item>>> {
+        self.cols.make_editor(ctx)
     }
 }
 

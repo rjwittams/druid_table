@@ -253,14 +253,14 @@ impl<Args: TableArgsT> Table<Args> {
         let mut cells_scroll = Scroll::new(cells.with_id(ids.cells));
 
         if let Some(AxisIds { scroll, .. }) = ids.columns {
-            cells_scroll.add_scroll_handler(move |ctx, pos| {
-                ctx.submit_command(SCROLL_TO.with(ScrollTo::x(pos.x)), scroll);
+            cells_scroll.add_scroll_handler(move |submit_command, pos| {
+                submit_command(SCROLL_TO.with(ScrollTo::x(pos.x)), scroll.into());
             });
         };
 
         if let Some(AxisIds { scroll, .. }) = ids.rows {
-            cells_scroll.add_scroll_handler(move |ctx, pos| {
-                ctx.submit_command(SCROLL_TO.with(ScrollTo::y(pos.y)), scroll);
+            cells_scroll.add_scroll_handler(move |submit_command, pos| {
+                submit_command(SCROLL_TO.with(ScrollTo::y(pos.y)), scroll.into());
             });
         }
 
