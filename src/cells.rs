@@ -16,12 +16,10 @@ use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedData, RemapSpec, Remapper, SortSpec};
 use crate::headings::{HeaderAction, HeaderActionType, HEADER_CLICKED};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{
-    CellDemap, CellRect, SingleCell, SingleSlice, TableSelection,
-};
+use crate::selection::{CellDemap, CellRect, SingleCell, SingleSlice, TableSelection};
+use crate::table::TableState;
 use crate::{EditorFactory, IndexedItems, Remap, SortDirection};
 use druid::widget::Bindable;
-use crate::table::TableState;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item>
@@ -31,29 +29,6 @@ where
     fn number_of_columns_in_data(&self, data: &TableData) -> usize;
 }
 
-#[derive(Clone)]
-pub struct RemapChanged(pub TableAxis, pub RemapSpec, pub Option<Remap>);
-
-pub enum TableChange {
-    Selection(TableSelection),
-}
-
-pub enum SubmitCommand<'a, 'b, 'c> {
-    E(&'a mut EventCtx<'b, 'c>),
-    L(&'a mut LifeCycleCtx<'b, 'c>),
-}
-
-impl SubmitCommand<'_, '_, '_> {
-    pub fn submit_command(&mut self, cmd: impl Into<Command>, target: impl Into<Option<Target>>) {
-        match self {
-            Self::E(ctx) => ctx.submit_command(cmd, target),
-            Self::L(ctx) => ctx.submit_command(cmd, target),
-        }
-    }
-}
-
-pub type TableChangedHandler = dyn Fn(&mut SubmitCommand, &TableChange);
-
 enum Editing<RowData> {
     Inactive,
     Cell {
@@ -62,12 +37,69 @@ enum Editing<RowData> {
     },
 }
 
-impl<RowData> Editing<RowData> {
+impl<RowData: Data> Editing<RowData> {
     fn is_active(&self) -> bool {
         match self {
             Inactive => false,
             _ => true,
         }
+    }
+
+    fn is_editing(&self, cell:&SingleCell)->bool{
+        match self {
+            Editing::Cell { single_cell, .. } => {
+                single_cell.vis.eq(&cell.vis)
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_event<TableData: IndexedItems<Idx=LogIdx, Item=RowData>>(&mut self, ctx: &mut EventCtx,
+                                                           event: &Event,
+                                                           data: &mut TableData,
+                                                           env: &Env){
+        match self {
+            Editing::Cell { ref single_cell, ref mut child } => {
+                data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
+            }
+            _ => { },
+        }
+    }
+
+    fn start_editing<TableData: IndexedItems<Item=RowData>>(&mut self,
+                                                            ctx: &mut EventCtx,
+                                                            data: &mut TableData,
+                                                            cell:&SingleCell,
+                                                            make_editor: impl FnMut(&CellCtx)->Option<Box<dyn Widget<RowData>>> ){
+        self.stop_editing(data);
+        let mut me = make_editor;
+        let cell_ctx = CellCtx::Cell(&cell);
+        if let Some(editor) = me(&cell_ctx) {
+
+            let pod = WidgetPod::new(editor);
+
+            log::info!("Made editor widget id p {:?} c{:?}", ctx.widget_id(),pod.id());
+            *self = Editing::Cell {
+                single_cell: cell.clone(),
+                child: pod,
+            };
+
+            ctx.children_changed();
+            ctx.request_layout();
+            ctx.set_handled();
+        }
+    }
+
+    fn stop_editing<TableData: IndexedItems<Item=RowData>>(&mut self, data: &mut TableData) {
+        match self{
+            Editing::Cell {single_cell, child}=>{
+                // Work out what to do with the previous pod if there is one.
+                // We could have lazy editors (that don't write back to data immediately) and send them a special command saying 'you are being shut down'.
+                // Would need to give them data for their row
+            }
+            Editing::Inactive=>{}
+        }
+        *self = Editing::Inactive
     }
 }
 
@@ -81,13 +113,11 @@ where
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
-    selection: TableSelection,
-    change_handlers: Vec<Box<TableChangedHandler>>,
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
     cell_delegate: CellDel,
-    remap_rows: Remap,
     editing: Editing<RowData>,
+    dragging_selection: bool,
     phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
 }
@@ -110,46 +140,23 @@ where
         Cells {
             config,
             resolved_config: None,
-            change_handlers: Vec::new(),
-            selection: TableSelection::NoSelection,
             column_measure,
             row_measure,
-            remap_rows: Remap::Pristine,
             cell_delegate: cells_delegate,
             editing: Inactive,
+            dragging_selection: false,
             phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
     }
 
-    pub fn add_change_handlers(
-        &mut self,
-        selection_handler: impl Fn(&mut SubmitCommand, &TableChange) + 'static,
-    ) {
-        self.change_handlers.push(Box::new(selection_handler));
-    }
-
-    fn set_selection(&mut self, ctx: &mut EventCtx, selection: TableSelection) {
-        self.selection = selection;
-        let tc = TableChange::Selection(self.selection.clone());
-        self.call_change_handlers(SubmitCommand::E(ctx), &tc);
-        ctx.request_paint();
-    }
-
-    fn call_change_handlers(&mut self, sc: SubmitCommand, tc: &TableChange) {
-        let mut sc_ = sc;
-        for sh in &self.change_handlers {
-            sh(&mut sc_, tc)
-        }
-    }
-
-    fn find_cell(&self, pos: &Point) -> Option<SingleCell> {
+    fn find_cell(&self, data: &TableState<TableData>, pos: &Point) -> Option<SingleCell> {
         let (r, c) = (
             self.row_measure.vis_idx_from_pixel(pos.y),
             self.column_measure.vis_idx_from_pixel(pos.x),
         );
-        let log_row = r.and_then(|r| self.remap_rows.get_log_idx(r));
-        let log_col = c.and_then(|c| Remap::Pristine.get_log_idx(c)); // TODO! Moving columns
+        let log_row = r.and_then(|r| data.remaps[&TableAxis::Rows].get_log_idx(r));
+        let log_col = c.and_then(|c| data.remaps[&TableAxis::Columns].get_log_idx(c));
         Some(SingleCell::new(
             AxisPair::new(r?, c?),
             AxisPair::new(log_row?, log_col?),
@@ -166,14 +173,14 @@ where
     fn paint_cells(
         &self,
         ctx: &mut PaintCtx,
-        data: &impl IndexedItems<Item = RowData, Idx = LogIdx>,
+        data: &TableState<TableData>,
         env: &Env,
         rect: &CellRect,
     ) {
         for vis_row_idx in rect.rows() {
             let row_top = self.row_measure.first_pixel_from_vis(vis_row_idx);
-            if let Some(log_row_idx) = self.remap_rows.get_log_idx(vis_row_idx) {
-                data.with(log_row_idx, |row| {
+            if let Some(log_row_idx) = data.remaps[&TableAxis::Rows].get_log_idx(vis_row_idx) {
+                data.data.with(log_row_idx, |row| {
                     self.paint_row(
                         ctx,
                         env,
@@ -246,10 +253,11 @@ where
     fn paint_selections(
         &mut self,
         ctx: &mut PaintCtx,
+        data: &TableState<TableData>,
         rtc: &ResolvedTableConfig,
         cell_rect: &CellRect,
     ) {
-        let selected = self.selection.get_drawable_selections(cell_rect);
+        let selected = data.selection.get_drawable_selections(cell_rect);
 
         let (max_x, max_y) = (
             self.column_measure.total_pixel_length(),
@@ -258,6 +266,7 @@ where
         let sel_color = &rtc.selection_color;
         let sel_fill = &sel_color.clone().with_alpha(0.2);
         for range_rect in &selected.ranges {
+            log::info!("Drawing selected range: {:?}", range_rect);
             let fetched = (
                 self.column_measure
                     .first_pixel_from_vis(range_rect.start_col),
@@ -277,6 +286,7 @@ where
         }
 
         if let Some(focus) = selected.focus {
+            log::info!("Drawing focus: {:?}", focus);
             let fetched = (
                 self.column_measure.first_pixel_from_vis(focus.col),
                 self.column_measure
@@ -298,12 +308,37 @@ where
         }
     }
 
-    fn remap_for_axis(&self, axis: TableAxis) -> &Remap {
-        match axis {
-            TableAxis::Rows => &self.remap_rows,
-            TableAxis::Columns => &Remap::Pristine,
+
+    fn paint_editing(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
+        match &mut self.editing {
+            Editing::Cell { single_cell, child } => {
+                let vis = &single_cell.vis;
+
+                let size = Size::new(
+                    self.column_measure
+                        .pixels_length_for_vis(vis.col)
+                        .unwrap_or(0.),
+                    self.row_measure
+                        .pixels_length_for_vis(vis.row)
+                        .unwrap_or(0.),
+                );
+                let origin = Point::new(
+                    self.column_measure
+                        .first_pixel_from_vis(vis.col)
+                        .unwrap_or(0.),
+                    self.row_measure.first_pixel_from_vis(vis.row).unwrap_or(0.),
+                );
+
+                ctx.with_save(|ctx| {
+                    ctx.render_ctx.clip(Rect::from_origin_size(origin, size));
+                    data.data
+                        .with(single_cell.log.row, |row| child.paint(ctx, row, env));
+                });
+            }
+            _ => (),
         }
     }
+
 }
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
@@ -315,178 +350,175 @@ where
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableState<TableData>, env: &Env) {
-        let mut new_selection: Option<TableSelection> = None;
+    fn event(
+        &mut self,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut TableState<TableData>,
+        env: &Env,
+    ) {
+        if let Some(rtc) = &self.resolved_config {
+            let mut new_selection: Option<TableSelection> = None;
+            let mut remap_changed = AxisPair::new(false, false);
 
-        match event {
-            Event::MouseDown(me) => {
-                let ed_cell = match &mut self.editing {
-                    Editing::Cell { single_cell, child } => {
-                        data.data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
-                        Some(single_cell.vis.clone())
-                    }
-                    _ => None,
-                };
-
-                let found_cell = self.find_cell(&me.pos);
-                if !ctx.is_handled() {
-                    if let Some(cell) = found_cell {
-                        if Some(cell.vis.clone()) != ed_cell {
+            match event {
+                Event::WindowConnected =>{
+                    data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
+                    remap_changed[&TableAxis::Rows] = true;
+                    remap_changed[&TableAxis::Columns] = true;
+                }
+                Event::MouseDown(me) => {
+                    if let Some(cell) = self.find_cell(data, &me.pos) {
+                        if self.editing.is_editing(&cell) {
+                            self.editing.handle_event(ctx, event, &mut data.data, env);
+                        }else{
                             if me.count == 1 {
-                                new_selection = Some(cell.into());
-                                // TODO: Modifier keys ask current selection to add this cell
-                                // TODO: deactivate any editor
-                                ctx.set_handled();
-                                self.editing = Editing::Inactive;
-                            } else if me.count == 2 {
-                                let cell_ctx = CellCtx::Cell(&cell);
-                                if let Some(editor) = self.cell_delegate.make_editor(&cell_ctx) {
-                                    let pod = WidgetPod::new(editor);
-                                    // Work out what to do with the previous pod if there is one
-
-                                    log::info!(
-                                        "Made editor widget id p {:?} c{:?}",
-                                        ctx.widget_id(),
-                                        pod.id()
-                                    );
-                                    self.editing = Editing::Cell {
-                                        single_cell: cell,
-                                        child: pod,
-                                    };
-
-                                    ctx.children_changed();
-                                    ctx.request_layout();
-                                    ctx.set_handled();
+                                if me.mods.ctrl() {
+                                    new_selection = data.selection.add_selection(cell.into());
+                                } else if me.mods.shift() {
+                                    new_selection = data.selection.move_extent(cell.into());
+                                } else {
+                                    new_selection = Some(cell.into());
                                 }
+
+                                ctx.set_handled();
+                                self.editing.stop_editing(&mut data.data);
+                                self.dragging_selection = true;
+                                ctx.set_active(true);
+                            } else if me.count == 2 {
+                                let cd = &mut self.cell_delegate;
+                                self.editing.start_editing(ctx,&mut data.data, &cell,  |cell_ctx| cd.make_editor(cell_ctx));
                             }
                         }
                     }
                 }
-            }
-            Event::Command(cmd) => {
-                if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
+                Event::MouseMove(me) if !self.editing.is_active() && self.dragging_selection =>{
+                    if let Some(cell) = self.find_cell(data, &me.pos) {
+                        new_selection = data.selection.move_extent(cell.into());
+                    }
+                },
+                Event::MouseUp(me) if self.dragging_selection =>{
+                    self.dragging_selection = false;
+                    ctx.set_active(false);
+                }
+                Event::Command(cmd) => {
+                    if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
                     cmd.get(ADJUST_AXIS_MEASURE)
-                {
-                    match axis {
-                        TableAxis::Rows => {
-                            // If we share the measure through Rc Refcell, we don't need to update it
-                            if !self.row_measure.shared() {
-                                self.row_measure.set_pixel_length_for_vis(*idx, *length);
-                            }
-                        }
-                        TableAxis::Columns => {
-                            if !self.column_measure.shared() {
-                                self.column_measure.set_pixel_length_for_vis(*idx, *length);
-                            }
-                        }
-                    };
-                    ctx.request_layout();
-                } else if let Some(HeaderAction(axis, vis, action)) = cmd.get(HEADER_CLICKED) {
-                    let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
-                    if let Some(log_addr) = self.get_log_cell(&vis_addr) {
-                        match action {
-                            HeaderActionType::Select => {
-                                new_selection = Some(TableSelection::SingleSlice(
-                                    SingleSlice::new(*axis, SingleCell::new(vis_addr, log_addr)),
-                                ));
-                            }
-                            HeaderActionType::ToggleSort { extend } => {
-                                // TODO: centralise remapping etc
-                                let sort_by = &mut data.remap_specs[&TableAxis::Rows].sort_by;
-                                let log_idx = log_addr[axis].0;
-
-                                match sort_by.last() {
-                                    Some(SortSpec { idx, direction }) if log_idx == *idx => {
-                                        let dir = direction.clone();
-                                        sort_by.pop_back();
-                                        if dir == SortDirection::Ascending {
-                                            sort_by.push_back(SortSpec::new(
-                                                log_idx,
-                                                SortDirection::Descending,
-                                            ));
-                                        }
-                                    }
-                                    _ => {
-                                        if !extend {
-                                            sort_by.clear();
-                                        }
-                                        sort_by
-                                            .push_back(SortSpec::new(log_idx, SortDirection::Ascending));
-                                    }
+                    {
+                        match axis {
+                            TableAxis::Rows => {
+                                // If we share the measure through Rc Refcell, we don't need to update it
+                                if !self.row_measure.shared() {
+                                    self.row_measure.set_pixel_length_for_vis(*idx, *length);
                                 }
-
-                                self.remap_rows =
-                                    self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
-                                ctx.request_paint();
                             }
+                            TableAxis::Columns => {
+                                if !self.column_measure.shared() {
+                                    self.column_measure.set_pixel_length_for_vis(*idx, *length);
+                                }
+                            }
+                        };
+                        ctx.request_layout();
+                    } else if let Some(HeaderAction(axis, vis, action)) = cmd.get(HEADER_CLICKED) {
+                        let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
+                        if let Some(log_addr) = data.get_log_cell(&vis_addr) {
+                            match action {
+                                HeaderActionType::Select => {
+                                    new_selection = Some(TableSelection::SingleSlice(
+                                        SingleSlice::new(*axis, SingleCell::new(vis_addr, log_addr)),
+                                    ));
+                                }
+                                HeaderActionType::ToggleSort { extend } => {
+                                    remap_changed[&axis] = data.remap_specs[&axis].toggle_sort(log_addr[axis], *extend);
+                                }
+                            }
+                        }
+                    } else {
+                        match &mut self.editing {
+                            Editing::Cell { single_cell, child } => {
+                                data.data.with_mut(single_cell.log.row, |row| {
+                                    child.event(ctx, event, row, env)
+                                });
+                            }
+                            _ => (),
                         }
                     }
-                } else {
-                    match &mut self.editing {
-                        Editing::Cell { single_cell, child } => {
+                }
+                Event::KeyDown(ke) if !self.editing.is_active() => {
+                    match &ke.key {
+                        KbKey::ArrowDown => {
+                            new_selection =
+                                data.selection
+                                    .move_focus(&TableAxis::Rows, VisOffset(1), data);
+                            ctx.set_handled();
+                        }
+                        KbKey::ArrowUp => {
+                            new_selection =
+                                data.selection
+                                    .move_focus(&TableAxis::Rows, VisOffset(-1), data);
+                            ctx.set_handled();
+                        }
+                        KbKey::ArrowRight => {
+                            new_selection =
+                                data.selection
+                                    .move_focus(&TableAxis::Columns, VisOffset(1), data);
+                            ctx.set_handled();
+                        }
+                        KbKey::ArrowLeft => {
+                            new_selection =
+                                data.selection
+                                    .move_focus(&TableAxis::Columns, VisOffset(-1), data);
+                            ctx.set_handled();
+                        }
+                        KbKey::Character(s) if s == " " => {
+                            // This is to match Excel
+                            if ke.mods.ctrl() {
+                                new_selection = data.selection.extend_in_axis(TableAxis::Columns, data);
+                                ctx.set_handled();
+                            } else if ke.mods.shift() {
+                                new_selection = data.selection.extend_in_axis(TableAxis::Rows, data);
+                                ctx.set_handled();
+                            }
 
-                            data.data.with_mut(single_cell.log.row, |row| {
-                                child.event(ctx, event, row, env)
-                            });
+                            // TODO - when Ctrl + Shift, select full grid
                         }
                         _ => (),
                     }
                 }
-            }
-            Event::KeyDown(ke) if !self.editing.is_active() => {
-                match &ke.key {
-                    KbKey::ArrowDown => {
-                        new_selection =
-                            self.selection
-                                .move_focus(&TableAxis::Rows, VisOffset(1), self);
-                        ctx.set_handled();
-                    }
-                    KbKey::ArrowUp => {
-                        new_selection =
-                            self.selection
-                                .move_focus(&TableAxis::Rows, VisOffset(-1), self);
-                        ctx.set_handled();
-                    }
-                    KbKey::ArrowRight => {
-                        new_selection =
-                            self.selection
-                                .move_focus(&TableAxis::Columns, VisOffset(1), self);
-                        ctx.set_handled();
-                    }
-                    KbKey::ArrowLeft => {
-                        new_selection =
-                            self.selection
-                                .move_focus(&TableAxis::Columns, VisOffset(-1), self);
-                        ctx.set_handled();
-                    }
-                    KbKey::Character(s) if s == " " => {
-                        // This is to match Excel
-                        if ke.mods.ctrl() {
-                            new_selection = self.selection.extend_in_axis(TableAxis::Columns, self);
-                            ctx.set_handled();
-                        } else if ke.mods.shift() {
-                            new_selection = self.selection.extend_in_axis(TableAxis::Rows, self);
-                            ctx.set_handled();
-                        }
-
-                        // TODO - when Ctrl + Shift, select full grid
+                _ => match &mut self.editing {
+                    Editing::Cell { single_cell, child } => {
+                        data.data
+                            .with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
                     }
                     _ => (),
-                }
+                },
             }
-            _ => match &mut self.editing {
-                Editing::Cell { single_cell, child } => {
-                    data.data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
-                }
-                _ => (),
-            },
-        }
 
-        if let Some(sel) = new_selection {
-            self.set_selection(ctx, sel);
-            if !self.editing.is_active() {
-                ctx.request_focus();
+            if let Some(sel) = new_selection {
+                data.selection = sel;
+                if data.selection.focus().is_some() && !self.editing.is_active() {
+                    ctx.request_focus();
+                }
             }
+
+            // TODO: move to update but need versioned pointers on measures
+            if remap_changed[&TableAxis::Rows] {
+                data.remap_axis(&TableAxis::Rows, |d, s| self.cell_delegate.remap_items(d, s));
+                self.row_measure.set_axis_properties(
+                    rtc.cell_border_thickness,
+                    data.data.idx_len(),
+                    &data.remaps[&TableAxis::Rows],
+                );
+                ctx.request_layout(); // Could avoid if we know we overflow scroll?
+            }
+            if remap_changed[&TableAxis::Columns] {
+                self.column_measure.set_axis_properties(
+                    rtc.cell_border_thickness,
+                    self.cell_delegate.number_of_columns_in_data(&data.data),
+                    &data.remaps[&TableAxis::Columns],
+                );
+            }
+            // Todo remap cols
         }
     }
 
@@ -498,22 +530,7 @@ where
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
-            let rtc = self.config.resolve(env);
-            // Todo: column moves / hiding etc
-            self.column_measure.set_axis_properties(
-                rtc.cell_border_thickness,
-                self.cell_delegate.number_of_columns_in_data(&data.data),
-                &Remap::Pristine,
-            );
-
-            // self.remap_spec_rows = self.cell_delegate.initial_spec(); TODO Work out where to put this
-            self.remap_rows = self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
-            self.row_measure.set_axis_properties(
-                rtc.cell_border_thickness,
-                data.data.idx_len(),
-                &self.remap_rows,
-            );
-            self.resolved_config = Some(rtc);
+            self.resolved_config = Some(self.config.resolve(env));
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
@@ -527,26 +544,23 @@ where
         }
     }
 
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableState<TableData>, data: &TableState<TableData>, _env: &Env) {
+    fn update(
+        &mut self,
+        ctx: &mut UpdateCtx,
+        old_data: &TableState<TableData>,
+        data: &TableState<TableData>,
+        _env: &Env,
+    ) {
         if let Some(rtc) = &self.resolved_config {
             if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
-                // Reapply sorting / filtering. May need to rate limit
-                // and/or have some async way to notify back that sort is complete
 
-                self.remap_rows = self.cell_delegate.remap(&data.data, &data.remap_specs[&TableAxis::Rows]);
 
-                if old_data.data.idx_len() != data.data.idx_len() {
-                    // need to deal with reordering and key columns etc
-
-                    self.row_measure.set_axis_properties(
-                        rtc.cell_border_thickness,
-                        data.data.idx_len(),
-                        &self.remap_rows,
-                    );
-                    ctx.request_layout(); // TODO: Work out if needed - if we were filling our area before
-                }
-                // Columns update from data
+                // TODO send self a message to sort. Below needs to move too
             }
+            if !old_data.selection.same(&data.selection){
+                ctx.request_paint();
+            }
+            //TODO Columns update from data
         }
     }
 
@@ -604,39 +618,15 @@ where
                 .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
-        self.paint_cells(ctx, &data.data, env, &cell_rect);
-        self.paint_selections(ctx, &rtc, &cell_rect);
+        self.paint_cells(ctx, data, env, &cell_rect);
+        self.paint_selections(ctx, data, &rtc, &cell_rect);
 
-        match &mut self.editing {
-            Editing::Cell { single_cell, child } => {
-                let vis = &single_cell.vis;
-
-                let size = Size::new(
-                    self.column_measure
-                        .pixels_length_for_vis(vis.col)
-                        .unwrap_or(0.),
-                    self.row_measure
-                        .pixels_length_for_vis(vis.row)
-                        .unwrap_or(0.),
-                );
-                let origin = Point::new(
-                    self.column_measure
-                        .first_pixel_from_vis(vis.col)
-                        .unwrap_or(0.),
-                    self.row_measure.first_pixel_from_vis(vis.row).unwrap_or(0.),
-                );
-
-                ctx.with_save(|ctx|{
-                    ctx.render_ctx.clip( Rect::from_origin_size(origin, size));
-                    data.data.with(single_cell.log.row, |row| child.paint(ctx, row, env));
-                });
-            }
-            _ => (),
-        }
+        self.paint_editing(ctx, data, env)
     }
 }
 
-impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> CellDemap
+
+impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Bindable
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
     RowData: Data,
@@ -645,20 +635,6 @@ where
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
 {
-    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
-        let remap = self.remap_for_axis(axis);
-        remap.get_log_idx(*vis)
-    }
 }
 
-impl <RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
-Bindable for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
-    where
-        RowData: Data,
-        TableData: IndexedData<Item = RowData, Idx = LogIdx>,
-        ColDel: CellsDelegate<TableData>,
-        ColumnMeasure: AxisMeasure,
-        RowMeasure: AxisMeasure,
-{
 
-}

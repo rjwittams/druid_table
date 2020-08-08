@@ -1,18 +1,15 @@
-
 use crate::columns::{
-    CellDelegate,  CellRenderExt, ProvidedColumns, TableColumn, TextCell, HeaderCell
+    CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{
-    AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis,
-};
+use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
-use crate::table::{TableArgs};
-use crate::{FixedAxisMeasure, HeaderBuild, CellRender};
+use crate::table::TableArgs;
+use crate::{CellRender, FixedAxisMeasure, HeaderBuild};
 use druid::{theme, Data, KeyOrValue};
-use std::cell::{RefCell};
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -63,7 +60,7 @@ impl ShowHeadings {
     }
 }
 
-type DynAxisMeasure = Rc<RefCell<dyn AxisMeasure>>;
+pub type DynAxisMeasure = Rc<RefCell<dyn AxisMeasure>>;
 
 pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
@@ -81,15 +78,19 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         TableBuilder {
             table_columns: Vec::<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>::new(),
             row_header_delegate: Box::new(
-                HeaderCell::new(TextCell::new()
-                    .text_color(theme::LABEL_COLOR))
+                HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))
                     .on_result_of(|br: &LogIdx| br.0.to_string()),
             ),
-            column_header_delegate: Box::new(HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))),
+            column_header_delegate: Box::new(HeaderCell::new(
+                TextCell::new().text_color(theme::LABEL_COLOR),
+            )),
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
-            measurements: AxisPair::new(AxisMeasurementType::Individual, AxisMeasurementType::Individual),
+            measurements: AxisPair::new(
+                AxisMeasurementType::Individual,
+                AxisMeasurementType::Individual,
+            ),
         }
     }
 
@@ -133,12 +134,8 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
 
     pub fn build_measure(&self, axis: &TableAxis, size: f64) -> DynAxisMeasure {
         match self.measurements[axis] {
-            AxisMeasurementType::Individual =>{
-                Rc::new(RefCell::new(StoredAxisMeasure::new(size)))
-            },
-            AxisMeasurementType::Uniform =>{
-                Rc::new(RefCell::new(FixedAxisMeasure::new(size)))
-            },
+            AxisMeasurementType::Individual => Rc::new(RefCell::new(StoredAxisMeasure::new(size))),
+            AxisMeasurementType::Uniform => Rc::new(RefCell::new(FixedAxisMeasure::new(size))),
         }
     }
 

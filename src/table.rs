@@ -1,14 +1,17 @@
-use crate::axis_measure::{TableAxis, AxisPair};
-use crate::cells::{CellsDelegate, TableChange};
-use crate::headings::{HeadersFromData, HEADER_CLICKED, REMAP_CHANGED};
-use crate::{AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, TableConfig, ADJUST_AXIS_MEASURE, SELECT_INDICES, RemapSpec};
-use druid::widget::{CrossAxisAlignment, Flex, Scroll, ScrollToProperty, BindableAccess, Scope, WidgetBindingExt, Axis, LensBindingExt, BindingExt, Container};
-use druid::{
-    BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx,
-    Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod, Lens
+use crate::axis_measure::{AxisPair, TableAxis};
+use crate::cells::{CellsDelegate};
+use crate::headings::{HeadersFromData, HEADER_CLICKED};
+use crate::{AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, SELECT_INDICES, VisIdx, Remap};
+use druid::widget::{
+    Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope,
+    Scroll, ScrollToProperty, WidgetBindingExt,
 };
-
-
+use druid::{
+    BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
+    Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
+};
+use crate::builder::DynAxisMeasure;
+use crate::selection::CellDemap;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -114,7 +117,7 @@ pub trait TableArgsT {
 
     type CellsDel: CellsDelegate<Self::TableData> + 'static;
     fn content(
-        self
+        self,
     ) -> TableArgs<Self::TableData, Self::RowM, Self::ColM, Self::RowH, Self::ColH, Self::CellsDel>;
 }
 
@@ -143,16 +146,39 @@ where
 }
 
 #[derive(Data, Clone, Debug)]
-pub(crate) struct TableState<TableData: Data>{
+pub(crate) struct TableState<TableData: Data> {
     scroll_x: f64,
     scroll_y: f64,
     pub(crate) data: TableData,
-    pub(crate) remap_specs: AxisPair<RemapSpec>
+    pub(crate) remap_specs: AxisPair<RemapSpec>,
+    pub(crate) remaps: AxisPair<Remap>,
+    pub(crate) selection: TableSelection,
+    #[data(ignore)] pub(crate) measures: Option<AxisPair<DynAxisMeasure>>, // TODO
 }
 
 impl<TableData: Data> TableState<TableData> {
     pub fn new(data: TableData) -> Self {
-        TableState { scroll_x: 0.0, scroll_y: 0.0, data, remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()) }
+        TableState {
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            data,
+            remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
+            remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
+            selection: TableSelection::default(),
+            measures: None
+        }
+    }
+
+    pub fn remap_axis(&mut self, axis: &TableAxis, f: impl Fn(&TableData, &RemapSpec)->Remap){
+        self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
+    }
+}
+
+
+impl <TableData: Data> CellDemap for TableState<TableData>{
+
+    fn get_log_idx(&self, axis: &TableAxis, vis: &VisIdx) -> Option<LogIdx> {
+        self.remaps[axis].get_log_idx(*vis)
     }
 }
 
@@ -162,7 +188,10 @@ struct TableChild<TableData: Data> {
 }
 
 impl<TableData: Data> TableChild<TableData> {
-    pub fn new(ids: Ids, pod: WidgetPod<TableState<TableData>, Box<dyn Widget<TableState<TableData>>>>) -> Self {
+    pub fn new(
+        ids: Ids,
+        pod: WidgetPod<TableState<TableData>, Box<dyn Widget<TableState<TableData>>>>,
+    ) -> Self {
         TableChild { pod, ids }
     }
 }
@@ -170,6 +199,7 @@ impl<TableData: Data> TableChild<TableData> {
 pub struct Table<Args: TableArgsT> {
     args: Option<Args>,
     child: Option<TableChild<Args::TableData>>,
+    measures: Option<AxisPair<DynAxisMeasure>>
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -208,6 +238,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         Table {
             args: Some(args),
             child: None,
+            measures: None
         }
     }
 
@@ -232,7 +263,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         let cells_delegate = args.cells_delegate;
 
         let data_lens = lens!(TableState<Args::TableData>, data);
-        let mut cells = Cells::new(
+        let cells = Cells::new(
             table_config.clone(),
             args.col_m.0,
             args.row_m.0,
@@ -240,36 +271,14 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         );
 
         // These have to be added before we move Cells into scroll
-        if let Some(AxisIds { headers, .. }) = ids.columns {
-            cells.bindable_mut().add_change_handlers(move |ctx, table_change| {
-                match table_change {
-                    TableChange::Selection(table_sel)=>ctx.submit_command(
-                        SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Columns)),
-                        headers,
-                    )
-                }
-
-            });
-        };
-
-        if let Some(AxisIds { headers, .. }) = ids.rows {
-            cells.bindable_mut().add_change_handlers(move |ctx, table_change| {
-                match table_change {
-                    TableChange::Selection(table_sel) => {
-                        ctx.
-                            submit_command(
-                                SELECT_INDICES.with(table_sel.to_axis_selection(&TableAxis::Rows)),
-                                headers,
-                            );
-                    },
-                    _ => {}
-                };
-            });
-        }
 
         let mut cells_scroll = Scroll::new(cells.with_id(ids.cells)).binding(
-            lens!(TableState<Args::TableData>, scroll_x).bind(ScrollToProperty::new(Axis::Horizontal)).and(
-            lens!(TableState<Args::TableData>, scroll_y).bind(ScrollToProperty::new(Axis::Vertical)))
+            lens!(TableState<Args::TableData>, scroll_x)
+                .bind(ScrollToProperty::new(Axis::Horizontal))
+                .and(
+                    lens!(TableState<Args::TableData>, scroll_y)
+                        .bind(ScrollToProperty::new(Axis::Vertical)),
+                ),
         );
 
         Self::add_headings(
@@ -303,16 +312,23 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 render,
             );
             let cells_id = ids.cells;
-            col_headings.bindable_mut().add_axis_measure_adjustment_handler(move |ctx, adj| {
-                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
-            });
-            col_headings.bindable_mut().add_header_clicked_handler(move |ctx, _me, hc| {
-                ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
-            });
+            col_headings
+                .bindable_mut()
+                .add_axis_measure_adjustment_handler(move |ctx, adj| {
+                    ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
+                });
+            col_headings
+                .bindable_mut()
+                .add_header_clicked_handler(move |ctx, _me, hc| {
+                    ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
+                });
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
-                .binding(lens!(TableState<Args::TableData>, scroll_x).bind(ScrollToProperty::new(Axis::Horizontal)));
+                .binding(
+                    lens!(TableState<Args::TableData>, scroll_x)
+                        .bind(ScrollToProperty::new(Axis::Horizontal)),
+                );
 
             let cells_column = Flex::column()
                 .cross_axis_alignment(CrossAxisAlignment::Start)
@@ -335,26 +351,27 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         if let (Some(AxisIds { headers, scroll }), Some(row_h)) = (ids.rows, row_h) {
             let (source, render) = row_h.content();
             let mut row_headings =
-                Headings::new(TableAxis::Rows,
-                              table_config.clone(),
-                              row_m,
-                              source,
-                              render);
-
+                Headings::new(TableAxis::Rows, table_config.clone(), row_m, source, render);
 
             let cells_id = ids.cells;
-            row_headings.bindable_mut().add_axis_measure_adjustment_handler(move |ctx, adj| {
-                ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
-            });
-            row_headings.bindable_mut().add_header_clicked_handler(move |ctx, _me, hc| {
-                ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
-            });
+            row_headings
+                .bindable_mut()
+                .add_axis_measure_adjustment_handler(move |ctx, adj| {
+                    ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
+                });
+            row_headings
+                .bindable_mut()
+                .add_header_clicked_handler(move |ctx, _me, hc| {
+                    ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
+                });
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
-                .binding(lens!(TableState<Args::TableData>, scroll_y).bind(ScrollToProperty::new(Axis::Vertical)));
-
+                .binding(
+                    lens!(TableState<Args::TableData>, scroll_y)
+                        .bind(ScrollToProperty::new(Axis::Vertical)),
+                );
 
             let mut rh_col = Flex::column().cross_axis_alignment(CrossAxisAlignment::Start);
             if corner_needed {
@@ -376,7 +393,17 @@ impl<Args: TableArgsT + 'static> Table<Args> {
 }
 
 impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<Args> {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableState<Args::TableData>, env: &Env) {
+    fn event(
+        &mut self,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut TableState<Args::TableData>,
+        env: &Env,
+    ) {
+        if self.measures.is_some(){
+            std::mem::swap(&mut self.measures, &mut data.measures);
+            self.measures = None;
+        }
         // log::info!("Table event {:?}", event);
         if let Some(child) = self.child.as_mut() {
             child.pod.event(ctx, event, data, env);
@@ -394,6 +421,8 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
             if self.args.is_some() {
                 let mut args = None;
                 std::mem::swap(&mut self.args, &mut args);
+                //self.measures = Some(AxisPair::new(args. ));
+
                 self.child = args.map(|args| self.build_child(args));
             } else {
                 log::warn!("Tried to create child but args consumed!")

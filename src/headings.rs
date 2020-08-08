@@ -2,30 +2,27 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle,
-    LifeCycleCtx, MouseEvent, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
+    Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
+    MouseEvent, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
 };
 
 use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
     VisOffset,
 };
-use crate::columns::{CellRender, CellCtx};
+use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::selection::{IndicesSelection};
-use crate::{Remap, RemapSpec};
-use crate::cells::RemapChanged;
+use crate::selection::IndicesSelection;
 use crate::table::TableState;
-use std::collections::HashMap;
+use crate::{Remap, RemapSpec};
 use druid::widget::Bindable;
+use std::collections::HashMap;
 
 pub const SELECT_INDICES: Selector<IndicesSelection> =
     Selector::new("druid-builtin.table.select-indices");
-pub const REMAP_CHANGED: Selector<RemapChanged> =
-    Selector::new("druid-builtin.table.remap-changed");
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -99,8 +96,7 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
 #[derive(Debug, Copy, Clone)]
 pub enum HeaderActionType {
     Select,
-    ToggleSort{extend: bool}
-    // Filter
+    ToggleSort { extend: bool }, // Filter
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -125,7 +121,6 @@ where
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
     dragging: Option<VisIdx>,
-    selection: IndicesSelection,
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
     header_action_handlers: Vec<Box<HeaderActionHandler>>,
 }
@@ -152,9 +147,8 @@ where
             headers: None,
             header_render,
             dragging: None,
-            selection: IndicesSelection::NoSelection,
             measure_adjustment_handlers: Default::default(),
-            header_action_handlers: Default::default()
+            header_action_handlers: Default::default(),
         }
     }
 
@@ -200,13 +194,6 @@ where
         _env: &Env,
     ) {
         match _event {
-            Event::Command(ref cmd) => {
-                if let Some(index_selections) = cmd.get(SELECT_INDICES) {
-                    self.selection = index_selections.clone();
-                    ctx.request_paint();
-                    ctx.set_handled();
-                }
-            }
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.dragging {
@@ -235,14 +222,19 @@ where
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
                     if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
-                        let clicked = HeaderAction(self.axis, idx, HeaderActionType::ToggleSort{extend: me.mods.ctrl() });
+                        let clicked = HeaderAction(
+                            self.axis,
+                            idx,
+                            HeaderActionType::ToggleSort {
+                                extend: me.mods.ctrl(),
+                            },
+                        );
                         for handler in &self.header_action_handlers {
                             handler(ctx, me, &clicked);
                         }
                         ctx.set_handled()
                     }
-                }else if me.count == 1 {
-
+                } else if me.count == 1 {
                     //TODO: Combine lookups
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
                         if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
@@ -339,11 +331,22 @@ where
         )
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<HeadersSource::TableData>, env: &Env) {
+    fn paint(
+        &mut self,
+        ctx: &mut PaintCtx,
+        data: &TableState<HeadersSource::TableData>,
+        env: &Env,
+    ) {
+        let indices_selection = data.selection.to_axis_selection(&self.axis, data);
+
         // TODO build on change of spec
         let cross_rem = &data.remap_specs[self.axis.cross_axis()];
-        let sort_dirs : HashMap<_, _> =   cross_rem.sort_by.iter().enumerate()
-            .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction))).collect();
+        let sort_dirs: HashMap<_, _> = cross_rem
+            .sort_by
+            .iter()
+            .enumerate()
+            .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction)))
+            .collect();
 
         if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
             self.header_render.init(ctx, env);
@@ -368,11 +371,11 @@ where
                 let axis = self.axis;
                 let origin = axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
-                let size = axis
-                    .size(length_pix, rtc.cross_axis_length(&axis));
+                let size = axis.size(length_pix, rtc.cross_axis_length(&axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
 
-                if self.selection.vis_index_selected(vis_main_idx) {
+
+                if indices_selection.vis_index_selected(vis_main_idx) {
                     ctx.fill(cell_rect, &rtc.header_selected_background);
                 }
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
@@ -384,8 +387,12 @@ where
                             ctx.clip(padded_rect);
                             ctx.transform(Affine::translate(layout_origin));
                             ctx.with_child_ctx(padded_rect, |ctxt| {
-                                let cell = CellCtx::Header(&axis, log_main_idx, sort_dirs.get(&log_main_idx) );
-                                header_render.paint(ctxt, &cell ,col_name, env);
+                                let cell = CellCtx::Header(
+                                    &axis,
+                                    log_main_idx,
+                                    sort_dirs.get(&log_main_idx),
+                                );
+                                header_render.paint(ctxt, &cell, col_name, env);
                             });
                         });
                     });
@@ -401,9 +408,10 @@ where
     }
 }
 
-impl<HeadersSource, Render, Measure> Bindable
-for Headings<HeadersSource, Render, Measure>
-    where
-        HeadersSource: HeadersFromData,
-        Render: CellRender<HeadersSource::Header>,
-        Measure: AxisMeasure {}
+impl<HeadersSource, Render, Measure> Bindable for Headings<HeadersSource, Render, Measure>
+where
+    HeadersSource: HeadersFromData,
+    Render: CellRender<HeadersSource::Header>,
+    Measure: AxisMeasure,
+{
+}

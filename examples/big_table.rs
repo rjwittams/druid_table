@@ -1,4 +1,8 @@
-use druid_table::{CellRender, CellRenderExt, CellsDelegate, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, CellCtx, EditorFactory};
+use druid_table::{
+    CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, FixedAxisMeasure,
+    HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper,
+    SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
+};
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::LogIdxTable;
@@ -9,16 +13,17 @@ extern crate log;
 
 #[derive(Clone)]
 struct BigTableCells<TableData: IndexedData, CR: CellRender<TableData::Item>>
-where TableData::Item : Data
+where
+    TableData::Item: Data,
 {
     inner: CR,
     columns: usize,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
-    BigTableCells<TableData, CR>
-where TableData::Item : Data
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>> BigTableCells<TableData, CR>
+where
+    TableData::Item: Data,
 {
     fn new(inner: CR, columns: usize) -> BigTableCells<TableData, CR> {
         BigTableCells {
@@ -29,21 +34,16 @@ where TableData::Item : Data
     }
 }
 
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
-    CellRender<TableData::Item> for BigTableCells<TableData, CR>
-where TableData::Item : Data
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>> CellRender<TableData::Item>
+    for BigTableCells<TableData, CR>
+where
+    TableData::Item: Data,
 {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         self.inner.init(ctx, env);
     }
 
-    fn paint(
-        &self,
-        ctx: &mut PaintCtx,
-        cell: &CellCtx,
-        data: &TableData::Item,
-        env: &Env,
-    ) {
+    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &TableData::Item, env: &Env) {
         self.inner.paint(ctx, cell, data, env)
     }
 }
@@ -71,11 +71,10 @@ impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
     }
 }
 
-
-
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>>
-    CellsDelegate<TableData> for BigTableCells<TableData, CR>
-where TableData::Item : Data
+impl<TableData: IndexedData, CR: CellRender<TableData::Item>> CellsDelegate<TableData>
+    for BigTableCells<TableData, CR>
+where
+    TableData::Item: Data,
 {
     fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
         self.columns
@@ -93,14 +92,15 @@ impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowDa
         RemapSpec::default()
     }
 
-    fn remap(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
+    fn remap_items(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
         Remap::Pristine
     }
 }
 
-impl<CR: CellRender<TableData::Item>, TableData: IndexedData>
-EditorFactory<TableData::Item> for BigTableCells<TableData, CR>
-where TableData::Item : Data
+impl<CR: CellRender<TableData::Item>, TableData: IndexedData> EditorFactory<TableData::Item>
+    for BigTableCells<TableData, CR>
+where
+    TableData::Item: Data,
 {
     fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
         None

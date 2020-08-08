@@ -1,9 +1,10 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
-use crate::data::{RemapDetails};
+use crate::data::RemapDetails;
 use crate::Remap;
 use druid::{Cursor, Data, EventCtx, Point, Rect, Selector, Size};
 use float_ord::FloatOrd;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -11,7 +12,6 @@ use std::iter::Map;
 use std::ops::{Add, Deref, RangeInclusive, Sub};
 use std::rc::Rc;
 use TableAxis::*;
-use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
@@ -21,14 +21,14 @@ pub enum TableAxis {
 
 // Acts as an enum map
 #[derive(Eq, PartialEq, Debug, Clone)]
-pub struct AxisPair<T: Debug + Default> {
+pub struct AxisPair<T: Debug> {
     pub row: T,
     pub col: T,
 }
 
-impl <T: Copy + Default + Debug> Copy for AxisPair<T>{}
+impl<T: Copy + Default + Debug> Copy for AxisPair<T> {}
 
-impl <T: Data + Debug + Default> Data for AxisPair<T>{
+impl<T: Data + Debug + Default> Data for AxisPair<T> {
     fn same(&self, other: &Self) -> bool {
         self.row.same(&other.row) && self.col.same(&other.col)
     }
@@ -95,7 +95,7 @@ impl TableAxis {
 
 #[derive(Debug, Clone)]
 pub enum AxisMeasureAdjustment {
-    LengthChanged(TableAxis, VisIdx, f64)
+    LengthChanged(TableAxis, VisIdx, f64),
 }
 
 pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
@@ -120,6 +120,10 @@ impl VisIdx {
     ) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
         ((from_inc.0)..=(to_inc.0)).map(VisIdx)
     }
+
+    pub(crate) fn ascending(a: VisIdx, b: VisIdx) -> (VisIdx, VisIdx){
+        if a < b { (a, b) }else{ (b, a) }
+    }
 }
 
 impl Add<VisOffset> for VisIdx {
@@ -139,7 +143,7 @@ impl Sub<VisOffset> for VisIdx {
     }
 }
 
-pub trait AxisMeasure {
+pub trait AxisMeasure : Debug {
     fn border(&self) -> f64;
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap);
     fn total_pixel_length(&self) -> f64;
@@ -402,15 +406,14 @@ impl AxisMeasure for StoredAxisMeasure {
 
         let old_len = self.log_pix_lengths.len();
 
-
         match old_len.cmp(&len) {
-            Ordering::Greater=>self.log_pix_lengths.truncate(len),
-            Ordering::Less=>{
+            Ordering::Greater => self.log_pix_lengths.truncate(len),
+            Ordering::Less => {
                 let extra = vec![self.default_pixels; len - old_len];
                 self.log_pix_lengths.extend_from_slice(&extra[..]);
                 assert_eq!(self.log_pix_lengths.len(), len);
-            },
-            _=>()
+            }
+            _ => (),
         }
 
         // TODO: handle renumbering / remapping. Erk.
@@ -432,7 +435,7 @@ impl AxisMeasure for StoredAxisMeasure {
         (
             self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0)),
             self.vis_idx_from_pixel(p1)
-                .unwrap_or_else(||VisIdx(self.vis_pix_lengths.len() - 1)),
+                .unwrap_or_else(|| VisIdx(self.vis_pix_lengths.len() - 1)),
         )
     }
 

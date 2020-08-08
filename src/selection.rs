@@ -78,7 +78,7 @@ impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for Axis
     }
 }
 
-impl<T: Debug + Default> Index<&TableAxis> for AxisPair<T> {
+impl<T: Debug> Index<&TableAxis> for AxisPair<T> {
     type Output = T;
 
     fn index(&self, axis: &TableAxis) -> &Self::Output {
@@ -89,7 +89,7 @@ impl<T: Debug + Default> Index<&TableAxis> for AxisPair<T> {
     }
 }
 
-impl<T: Debug + Default> IndexMut<&TableAxis> for AxisPair<T> {
+impl<T: Debug> IndexMut<&TableAxis> for AxisPair<T> {
     fn index_mut(&mut self, axis: &TableAxis) -> &mut Self::Output {
         match axis {
             TableAxis::Rows => &mut self.row,
@@ -98,7 +98,7 @@ impl<T: Debug + Default> IndexMut<&TableAxis> for AxisPair<T> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Data, Debug, Clone, Eq, PartialEq)]
 pub struct SingleCell {
     pub vis: AxisPair<VisIdx>,
     pub log: AxisPair<LogIdx>,
@@ -111,10 +111,22 @@ impl SingleCell {
 }
 
 // Represents a Row or Column. Better name would be nice!
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Data, Debug, Clone, Eq, PartialEq)]
 pub struct SingleSlice {
     pub axis: TableAxis,
     pub focus: SingleCell, // The cell we are focused on, that determines the slice
+}
+
+#[derive(Data, Debug, Clone, Eq, PartialEq)]
+pub struct CellRange{
+    pub focus: SingleCell,
+    pub extent: SingleCell
+}
+
+impl CellRange {
+    pub fn new(focus: SingleCell, extent: SingleCell) -> Self {
+        CellRange { focus, extent }
+    }
 }
 
 impl SingleSlice {
@@ -134,10 +146,12 @@ impl SingleSlice {
 }
 
 #[derive(Debug, Clone)]
+//TODO: Make log idxs optional in here or a further operation to derive
+// currently waste time working out ones we don't use
 pub enum IndicesSelection {
     NoSelection,
     Single(VisIdx, LogIdx),
-    //Many(Vec<usize>),
+    Range{focus: VisIdx, extent: VisIdx, log: Vec<LogIdx>},
     //Range(from, to)
 }
 
@@ -145,32 +159,43 @@ impl IndicesSelection {
     pub(crate) fn vis_index_selected(&self, vis_idx: VisIdx) -> bool {
         match self {
             IndicesSelection::Single(sel_vis, _) => *sel_vis == vis_idx,
+            IndicesSelection::Range {focus, extent, ..}=> {
+                let (min, max) = VisIdx::ascending(*focus, *extent);
+                vis_idx >= min && vis_idx <= max
+            }
             _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Data, Debug, Clone)]
 pub enum TableSelection {
     NoSelection,
     SingleCell(SingleCell),
     SingleSlice(SingleSlice),
-    //  CellRange
+    CellRange(CellRange)
     //  SliceRange
     //  Discontiguous
 }
 
+impl Default for TableSelection {
+    fn default() -> Self {
+        Self::NoSelection
+    }
+}
+
 pub trait CellDemap {
-    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx>;
+    fn get_log_idx(&self, axis: &TableAxis, vis: &VisIdx) -> Option<LogIdx>;
 
     fn get_log_cell(&self, vis: &AxisPair<VisIdx>) -> Option<AxisPair<LogIdx>> {
-        self.get_log_idx(TableAxis::Rows, &vis.row)
+        self.get_log_idx(&TableAxis::Rows, &vis.row)
             .map(|row| {
-                self.get_log_idx(TableAxis::Columns, &vis.col)
+                self.get_log_idx(&TableAxis::Columns, &vis.col)
                     .map(|col| AxisPair::new(row, col))
             })
             .flatten()
     }
+
 }
 
 pub trait TableSelectionMod {
@@ -218,10 +243,13 @@ impl TableSelection {
             Self::SingleSlice(slice) => {
                 let new_vis = slice.focus.vis.move_by(axis, amount);
                 cell_demap.get_log_cell(&new_vis).map(|log| {
-                    Self::SingleSlice(SingleSlice::new(
-                        slice.axis,
-                        SingleCell::new(new_vis, log),
-                    ))
+                    Self::SingleSlice(SingleSlice::new(slice.axis, SingleCell::new(new_vis, log)))
+                })
+            },
+            Self::CellRange(CellRange{ focus , extent }) =>{
+                let new_vis = focus.vis.move_by(axis, amount);
+                cell_demap.get_log_cell(&new_vis).map( |log|{
+                    Self::SingleCell(SingleCell::new(new_vis, log))
                 })
             }
         }
@@ -245,15 +273,36 @@ impl TableSelection {
             .flatten()
     }
 
+    pub fn add_selection(&self, sel: TableSelection)->Option<TableSelection>{
+        // Todo selection layers
+        Some(sel)
+    }
+
+    pub fn move_extent(&self, sel: TableSelection)->Option<TableSelection>{
+
+        let res = match (self, &sel){
+            (Self::SingleCell(cur), Self::SingleCell(ext))=>{
+                Some(Self::CellRange( CellRange::new(cur.clone(), ext.clone()) ))
+            }
+            (Self::CellRange(CellRange{focus, ..}), Self::SingleCell(ext))=>{
+                Some(Self::CellRange( CellRange::new(focus.clone(), ext.clone())))
+            }
+            _=>None
+        };
+        //log::info!("Move extent: \ncur :\n{:?}  \nextent:\n{:?} \nresult:\n{:?}", self, sel, res);
+        res
+    }
+
     pub fn focus(&self) -> Option<&AxisPair<VisIdx>> {
         match self {
             Self::NoSelection => None,
             Self::SingleCell(SingleCell { vis, .. }) => Some(vis),
             Self::SingleSlice(SingleSlice { focus, .. }) => Some(&focus.vis),
+            Self::CellRange(CellRange{ focus, .. }) => Some(&focus.vis)
         }
     }
 
-    pub fn to_axis_selection(&self, for_axis: &TableAxis) -> IndicesSelection {
+    pub fn to_axis_selection(&self, for_axis: &TableAxis, cell_demap: &impl CellDemap) -> IndicesSelection {
         match self {
             Self::NoSelection => IndicesSelection::NoSelection,
             Self::SingleCell(sc) => IndicesSelection::Single(sc.vis[for_axis], sc.log[for_axis]),
@@ -264,12 +313,26 @@ impl TableSelection {
                     IndicesSelection::NoSelection
                 }
             }
+            Self::CellRange(CellRange{focus, extent}) => {
+                // Visual selections may map to a disjoint visual range
+                let mut log : Vec<LogIdx> = VisIdx::range_inc_iter(focus.vis[for_axis], extent.vis[for_axis] )
+                    .map(|vis|cell_demap.get_log_idx(for_axis, &vis)).flatten().collect();
+                log.sort();
+
+                IndicesSelection::Range {
+                    focus: focus.vis[for_axis],
+                    extent: extent.vis[for_axis],
+                    log
+                }
+            }
         }
     }
 
     pub fn get_drawable_selections(&self, bounding: &CellRect) -> DrawableSelections {
+
         match &self {
-            TableSelection::SingleCell(sc) if bounding.contains_cell(&sc.vis) => {
+            TableSelection::SingleCell(sc)
+                if bounding.contains_cell(&sc.vis) => {
                 DrawableSelections::new(Some(sc.vis.clone()), Default::default())
             }
             TableSelection::SingleSlice(sl)
@@ -278,6 +341,18 @@ impl TableSelection {
                 DrawableSelections::new(
                     Some(sl.focus.vis.clone()),
                     vec![sl.to_cell_rect(bounding.range(sl.axis.cross_axis()))],
+                )
+            }
+            TableSelection::CellRange(CellRange{focus, extent})=>{
+                let row = VisIdx::ascending(focus.vis[&TableAxis::Rows], extent.vis[&TableAxis::Rows]);
+                let col = VisIdx::ascending(focus.vis[&TableAxis::Columns], extent.vis[&TableAxis::Columns]);
+
+                let cell_rect = CellRect::new( row, col );
+
+                //TODO: Intersection with bounding box
+                DrawableSelections::new(
+                    Some(focus.vis),
+                        vec![cell_rect]
                 )
             }
             _ => DrawableSelections::new(None, Default::default()),
@@ -290,6 +365,3 @@ impl From<SingleCell> for TableSelection {
         TableSelection::SingleCell(sc)
     }
 }
-
-
-

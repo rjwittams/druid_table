@@ -24,7 +24,7 @@ impl IndexedItems for LogIdxTable {
         }
     }
 
-    fn with_mut<V>(&mut self, _idx: Self::Idx, _f: impl FnOnce(&mut Self::Item)->V) -> Option<V> {
+    fn with_mut<V>(&mut self, _idx: Self::Idx, _f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
         None
     }
 
