@@ -1,10 +1,7 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{
-    Affine, BoxConstraints, Command, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Size, Target, UpdateCtx, Widget, WidgetPod,
-};
+use druid::{Affine, BoxConstraints, Command, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, Target, UpdateCtx, Widget, WidgetPod, Selector};
 
 use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset,
@@ -341,6 +338,8 @@ where
 
 }
 
+pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
+
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
 where
@@ -362,11 +361,6 @@ where
             let mut remap_changed = AxisPair::new(false, false);
 
             match event {
-                Event::WindowConnected =>{
-                    data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
-                    remap_changed[&TableAxis::Rows] = true;
-                    remap_changed[&TableAxis::Columns] = true;
-                }
                 Event::MouseDown(me) => {
                     if let Some(cell) = self.find_cell(data, &me.pos) {
                         if self.editing.is_editing(&cell) {
@@ -402,8 +396,12 @@ where
                     ctx.set_active(false);
                 }
                 Event::Command(cmd) => {
-                    if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) =
-                    cmd.get(ADJUST_AXIS_MEASURE)
+                    if let Some(_)  = cmd.get(INIT_CELLS) {
+                        data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
+                        remap_changed[&TableAxis::Rows] = true;
+                        remap_changed[&TableAxis::Columns] = true;
+                        log::info!("Cells init");
+                    } else if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) = cmd.get(ADJUST_AXIS_MEASURE)
                     {
                         match axis {
                             TableAxis::Rows => {
@@ -509,6 +507,7 @@ where
                     data.data.idx_len(),
                     &data.remaps[&TableAxis::Rows],
                 );
+                log::info!("Set row measure");
                 ctx.request_layout(); // Could avoid if we know we overflow scroll?
             }
             if remap_changed[&TableAxis::Columns] {
@@ -517,6 +516,8 @@ where
                     self.cell_delegate.number_of_columns_in_data(&data.data),
                     &data.remaps[&TableAxis::Columns],
                 );
+                log::info!("Set col measure");
+                ctx.request_layout();
             }
             // Todo remap cols
         }
@@ -531,6 +532,7 @@ where
     ) {
         if let LifeCycle::WidgetAdded = event {
             self.resolved_config = Some(self.config.resolve(env));
+            ctx.submit_command(INIT_CELLS.with(()), ctx.widget_id() );
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
@@ -551,17 +553,14 @@ where
         data: &TableState<TableData>,
         _env: &Env,
     ) {
-        if let Some(rtc) = &self.resolved_config {
-            if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
 
-
-                // TODO send self a message to sort. Below needs to move too
-            }
-            if !old_data.selection.same(&data.selection){
-                ctx.request_paint();
-            }
-            //TODO Columns update from data
+        if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
+            // TODO send self a message to sort
         }
+        if !old_data.selection.same(&data.selection){
+            ctx.request_paint();
+        }
+        //TODO Columns update from data
     }
 
     fn layout(
@@ -598,10 +597,14 @@ where
             }
             _ => (),
         }
-        bc.constrain(self.measured_size())
+        let measured = self.measured_size();
+        let size =  bc.constrain(measured);
+        log::info!("Cells layout {:?} {:?} {:?}", bc, measured, size);
+        size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
+        log::info!("Cells paint");
         self.cell_delegate.init(ctx, env); // TODO reduce calls? Invalidate on some changes
 
         let rtc = self.config.resolve(env);

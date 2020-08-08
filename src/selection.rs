@@ -221,6 +221,8 @@ impl DrawableSelections {
 }
 
 impl TableSelection {
+
+
     pub fn move_focus(
         &self,
         axis: &TableAxis,
@@ -255,6 +257,21 @@ impl TableSelection {
         }
     }
 
+    pub fn move_extent(&self, sel: TableSelection)->Option<TableSelection>{
+
+        let res = match (self, &sel){
+            (Self::SingleCell(cur), Self::SingleCell(ext))=>{
+                Some(Self::CellRange( CellRange::new(cur.clone(), ext.clone()) ))
+            }
+            (Self::CellRange(CellRange{focus, ..}), Self::SingleCell(ext))=>{
+                Some(Self::CellRange( CellRange::new(focus.clone(), ext.clone())))
+            }
+            _=>None
+        };
+        //log::info!("Move extent: \ncur :\n{:?}  \nextent:\n{:?} \nresult:\n{:?}", self, sel, res);
+        res
+    }
+
     pub fn extend_in_axis(
         &self,
         axis: TableAxis,
@@ -276,21 +293,6 @@ impl TableSelection {
     pub fn add_selection(&self, sel: TableSelection)->Option<TableSelection>{
         // Todo selection layers
         Some(sel)
-    }
-
-    pub fn move_extent(&self, sel: TableSelection)->Option<TableSelection>{
-
-        let res = match (self, &sel){
-            (Self::SingleCell(cur), Self::SingleCell(ext))=>{
-                Some(Self::CellRange( CellRange::new(cur.clone(), ext.clone()) ))
-            }
-            (Self::CellRange(CellRange{focus, ..}), Self::SingleCell(ext))=>{
-                Some(Self::CellRange( CellRange::new(focus.clone(), ext.clone())))
-            }
-            _=>None
-        };
-        //log::info!("Move extent: \ncur :\n{:?}  \nextent:\n{:?} \nresult:\n{:?}", self, sel, res);
-        res
     }
 
     pub fn focus(&self) -> Option<&AxisPair<VisIdx>> {

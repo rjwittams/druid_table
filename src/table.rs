@@ -182,6 +182,7 @@ impl <TableData: Data> CellDemap for TableState<TableData>{
     }
 }
 
+
 struct TableChild<TableData: Data> {
     ids: Ids,
     pod: WidgetPod<TableState<TableData>, Box<dyn Widget<TableState<TableData>>>>,
@@ -404,7 +405,7 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
             std::mem::swap(&mut self.measures, &mut data.measures);
             self.measures = None;
         }
-        // log::info!("Table event {:?}", event);
+        //log::info!("Table event {:?} has_child {:?}", event, self.child.is_some() );
         if let Some(child) = self.child.as_mut() {
             child.pod.event(ctx, event, data, env);
         }
@@ -452,7 +453,7 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
         data: &TableState<Args::TableData>,
         env: &Env,
     ) -> Size {
-        if let Some(child) = self.child.as_mut() {
+        let size = if let Some(child) = self.child.as_mut() {
             let size = child.pod.layout(ctx, bc, data, env);
             child
                 .pod
@@ -460,7 +461,10 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
             size
         } else {
             bc.max()
-        }
+        };
+        log::info!("Table layout:{:?}", size);
+
+        size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<Args::TableData>, env: &Env) {
