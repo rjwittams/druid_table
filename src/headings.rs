@@ -15,9 +15,9 @@ use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::selection::IndicesSelection;
+use crate::selection::{IndicesSelection, SingleSlice, SingleCell};
 use crate::table::TableState;
-use crate::{Remap, RemapSpec};
+use crate::{Remap, RemapSpec, TableSelection};
 use druid::widget::Bindable;
 use std::collections::HashMap;
 
@@ -95,8 +95,7 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
 
 #[derive(Debug, Copy, Clone)]
 pub enum HeaderActionType {
-    Select,
-    ToggleSort { extend: bool }, // Filter
+    ToggleSort { extend: bool } // Filter
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -120,7 +119,8 @@ where
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
-    dragging: Option<VisIdx>,
+    resize_dragging: Option<VisIdx>,
+    selection_dragging: bool,
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
     header_action_handlers: Vec<Box<HeaderActionHandler>>,
 }
@@ -146,7 +146,8 @@ where
             headers_source,
             headers: None,
             header_render,
-            dragging: None,
+            resize_dragging: None,
+            selection_dragging: false,
             measure_adjustment_handlers: Default::default(),
             header_action_handlers: Default::default(),
         }
@@ -190,34 +191,10 @@ where
         &mut self,
         ctx: &mut EventCtx,
         _event: &Event,
-        _data: &mut TableState<HeadersSource::TableData>,
+        data: &mut TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
         match _event {
-            Event::MouseMove(me) => {
-                let pix_main = self.axis.main_pixel_from_point(&me.pos);
-                if let Some(idx) = self.dragging {
-                    self.set_pix_length_for_axis(ctx, idx, pix_main);
-
-                    if me.buttons.is_empty() {
-                        self.dragging = None;
-                    } else {
-                        ctx.set_cursor(self.axis.resize_cursor());
-                    }
-                    ctx.set_handled()
-                } else if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                    if idx > VisIdx(0) {
-                        let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
-                            self.axis.resize_cursor()
-                        } else {
-                            &Cursor::NotAllowed
-                        };
-                        ctx.set_handled();
-                        ctx.set_cursor(cursor);
-                        ctx.set_handled();
-                    }
-                }
-            }
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
@@ -238,27 +215,64 @@ where
                     //TODO: Combine lookups
                     if let Some(idx) = self.measure.pixel_near_border(pix_main) {
                         if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
-                            self.dragging = Some(idx - VisOffset(1));
+                            self.resize_dragging = Some(idx - VisOffset(1));
                             ctx.set_active(true);
                             ctx.set_cursor(self.axis.resize_cursor());
                             ctx.set_handled()
                         }
                     } else if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
-                        let clicked = HeaderAction(self.axis, idx, HeaderActionType::Select);
-                        for handler in &self.header_action_handlers {
-                            handler(ctx, me, &clicked);
+                        let sel = &mut data.selection;
+                        if me.mods.shift(){
+                            sel.extend_in_axis(&self.axis, idx, &data.remaps);
+                        }else {
+                            sel.select_in_axis(&self.axis, idx, &data.remaps);
                         }
+                        self.selection_dragging = true;
+                        ctx.set_active(true);
                         ctx.set_handled()
                     }
                 }
-            }
+            },
+            Event::MouseMove(me) => {
+                let pix_main = self.axis.main_pixel_from_point(&me.pos);
+                if let Some(idx) = self.resize_dragging {
+                    self.set_pix_length_for_axis(ctx, idx, pix_main);
+
+                    if me.buttons.is_empty() {
+                        self.resize_dragging = None;
+                    } else {
+                        ctx.set_cursor(self.axis.resize_cursor());
+                    }
+                    ctx.set_handled()
+                } else if self.selection_dragging {
+                    if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                        data.selection.extend_in_axis(&self.axis, idx, &data.remaps);
+                    }
+                } else if let Some(idx) = self.measure.pixel_near_border(pix_main) {
+                    if idx > VisIdx(0) {
+                        let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
+                            self.axis.resize_cursor()
+                        } else {
+                            &Cursor::NotAllowed
+                        };
+                        ctx.set_handled();
+                        ctx.set_cursor(cursor);
+                        ctx.set_handled();
+                    }
+                }
+            },
             Event::MouseUp(me) => {
-                if let Some(idx) = self.dragging {
+                if let Some(idx) = self.resize_dragging {
                     let pix_main = self.axis.main_pixel_from_point(&me.pos);
                     self.set_pix_length_for_axis(ctx, idx, pix_main);
-                    self.dragging = None;
+                    self.resize_dragging = None;
                     ctx.set_active(false);
                     ctx.set_handled();
+                }
+                if self.selection_dragging {
+                    self.selection_dragging = false;
+                    ctx.set_active(false);
+                    ctx.set_handled()
                 }
             }
             _ => (),
@@ -337,7 +351,7 @@ where
         data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) {
-        let indices_selection = data.selection.to_axis_selection(&self.axis, data);
+        let indices_selection = data.selection.to_axis_selection(&self.axis, &data.remaps);
 
         // TODO build on change of spec
         let cross_rem = &data.remap_specs[self.axis.cross_axis()];

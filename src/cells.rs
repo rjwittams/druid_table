@@ -419,13 +419,8 @@ where
                         ctx.request_layout();
                     } else if let Some(HeaderAction(axis, vis, action)) = cmd.get(HEADER_CLICKED) {
                         let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
-                        if let Some(log_addr) = data.get_log_cell(&vis_addr) {
+                        if let Some(log_addr) = data.remaps.get_log_cell(&vis_addr) {
                             match action {
-                                HeaderActionType::Select => {
-                                    new_selection = Some(TableSelection::SingleSlice(
-                                        SingleSlice::new(*axis, SingleCell::new(vis_addr, log_addr)),
-                                    ));
-                                }
                                 HeaderActionType::ToggleSort { extend } => {
                                     remap_changed[&axis] = data.remap_specs[&axis].toggle_sort(log_addr[axis], *extend);
                                 }
@@ -447,34 +442,34 @@ where
                         KbKey::ArrowDown => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Rows, VisOffset(1), data);
+                                    .move_focus(&TableAxis::Rows, VisOffset(1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowUp => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Rows, VisOffset(-1), data);
+                                    .move_focus(&TableAxis::Rows, VisOffset(-1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowRight => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Columns, VisOffset(1), data);
+                                    .move_focus(&TableAxis::Columns, VisOffset(1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowLeft => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Columns, VisOffset(-1), data);
+                                    .move_focus(&TableAxis::Columns, VisOffset(-1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::Character(s) if s == " " => {
                             // This is to match Excel
                             if ke.mods.ctrl() {
-                                new_selection = data.selection.extend_in_axis(TableAxis::Columns, data);
+                                new_selection = data.selection.extend_from_focus_in_axis(&TableAxis::Columns, &data.remaps);
                                 ctx.set_handled();
                             } else if ke.mods.shift() {
-                                new_selection = data.selection.extend_in_axis(TableAxis::Rows, data);
+                                new_selection = data.selection.extend_from_focus_in_axis(&TableAxis::Rows, &data.remaps);
                                 ctx.set_handled();
                             }
 
@@ -494,7 +489,7 @@ where
 
             if let Some(sel) = new_selection {
                 data.selection = sel;
-                if data.selection.focus().is_some() && !self.editing.is_active() {
+                if data.selection.has_focus() && !self.editing.is_active() {
                     ctx.request_focus();
                 }
             }

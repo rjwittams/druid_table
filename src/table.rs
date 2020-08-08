@@ -11,7 +11,7 @@ use druid::{
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
 };
 use crate::builder::DynAxisMeasure;
-use crate::selection::CellDemap;
+use crate::selection::{CellDemap, SingleSlice, SingleCell};
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -175,10 +175,9 @@ impl<TableData: Data> TableState<TableData> {
 }
 
 
-impl <TableData: Data> CellDemap for TableState<TableData>{
-
+impl CellDemap for AxisPair<Remap>{
     fn get_log_idx(&self, axis: &TableAxis, vis: &VisIdx) -> Option<LogIdx> {
-        self.remaps[axis].get_log_idx(*vis)
+        self[axis].get_log_idx(*vis)
     }
 }
 
@@ -273,7 +272,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
 
         // These have to be added before we move Cells into scroll
 
-        let mut cells_scroll = Scroll::new(cells.with_id(ids.cells)).binding(
+        let cells_scroll = Scroll::new(cells.with_id(ids.cells)).binding(
             lens!(TableState<Args::TableData>, scroll_x)
                 .bind(ScrollToProperty::new(Axis::Horizontal))
                 .and(
