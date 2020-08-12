@@ -263,7 +263,6 @@ where
         let sel_color = &rtc.selection_color;
         let sel_fill = &sel_color.clone().with_alpha(0.2);
         for range_rect in &selected.ranges {
-            log::info!("Drawing selected range: {:?}", range_rect);
             let fetched = (
                 self.column_measure
                     .first_pixel_from_vis(range_rect.start_col),
@@ -283,7 +282,6 @@ where
         }
 
         if let Some(focus) = selected.focus {
-            log::info!("Drawing focus: {:?}", focus);
             let fetched = (
                 self.column_measure.first_pixel_from_vis(focus.col),
                 self.column_measure
@@ -367,7 +365,7 @@ where
                             self.editing.handle_event(ctx, event, &mut data.data, env);
                         }else{
                             if me.count == 1 {
-                                if me.mods.ctrl() {
+                                if me.mods.meta() || me.mods.ctrl() {
                                     new_selection = data.selection.add_selection(cell.into());
                                 } else if me.mods.shift() {
                                     new_selection = data.selection.move_extent(cell.into());
@@ -400,7 +398,6 @@ where
                         data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
                         remap_changed[&TableAxis::Rows] = true;
                         remap_changed[&TableAxis::Columns] = true;
-                        log::info!("Cells init");
                     } else if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) = cmd.get(ADJUST_AXIS_MEASURE)
                     {
                         match axis {
@@ -465,7 +462,7 @@ where
                         }
                         KbKey::Character(s) if s == " " => {
                             // This is to match Excel
-                            if ke.mods.ctrl() {
+                            if ke.mods.meta() || ke.mods.ctrl() {
                                 new_selection = data.selection.extend_from_focus_in_axis(&TableAxis::Columns, &data.remaps);
                                 ctx.set_handled();
                             } else if ke.mods.shift() {
@@ -474,8 +471,14 @@ where
                             }
 
                             // TODO - when Ctrl + Shift, select full grid
-                        }
-                        _ => (),
+                        },
+                        KbKey::Copy =>{
+                            log::info!("Copy")
+
+                        },
+                        k => {
+                            log::info!("Key {:?}" , k )
+                        },
                     }
                 }
                 _ => match &mut self.editing {
@@ -502,7 +505,6 @@ where
                     data.data.idx_len(),
                     &data.remaps[&TableAxis::Rows],
                 );
-                log::info!("Set row measure");
                 ctx.request_layout(); // Could avoid if we know we overflow scroll?
             }
             if remap_changed[&TableAxis::Columns] {
@@ -511,7 +513,6 @@ where
                     self.cell_delegate.number_of_columns_in_data(&data.data),
                     &data.remaps[&TableAxis::Columns],
                 );
-                log::info!("Set col measure");
                 ctx.request_layout();
             }
             // Todo remap cols
@@ -594,12 +595,10 @@ where
         }
         let measured = self.measured_size();
         let size =  bc.constrain(measured);
-        log::info!("Cells layout {:?} {:?} {:?}", bc, measured, size);
         size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
-        log::info!("Cells paint");
         self.cell_delegate.init(ctx, env); // TODO reduce calls? Invalidate on some changes
 
         let rtc = self.config.resolve(env);

@@ -2,10 +2,7 @@ use crate::axis_measure::{AxisPair, TableAxis};
 use crate::cells::{CellsDelegate};
 use crate::headings::{HeadersFromData, HEADER_CLICKED};
 use crate::{AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, SELECT_INDICES, VisIdx, Remap};
-use druid::widget::{
-    Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope,
-    Scroll, ScrollToProperty, WidgetBindingExt,
-};
+use druid::widget::{Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
@@ -145,7 +142,7 @@ where
     }
 }
 
-#[derive(Data, Clone, Debug)]
+#[derive(Data, Clone, Debug, Lens)]
 pub(crate) struct TableState<TableData: Data> {
     scroll_x: f64,
     scroll_y: f64,
@@ -244,7 +241,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
 
     pub fn new_in_scope(args: Args) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
-        Container::new(Scope::new(TableState::new, data_lens, Table::new(args)))
+        Container::new(Scope::new(DefaultScopePolicy::new(TableState::new, data_lens), Table::new(args)))
     }
 
     fn build_child(&self, args_t: Args) -> TableChild<Args::TableData> {
@@ -261,8 +258,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         );
 
         let cells_delegate = args.cells_delegate;
-
-        let data_lens = lens!(TableState<Args::TableData>, data);
         let cells = Cells::new(
             table_config.clone(),
             args.col_m.0,
@@ -273,12 +268,9 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         // These have to be added before we move Cells into scroll
 
         let cells_scroll = Scroll::new(cells.with_id(ids.cells)).binding(
-            lens!(TableState<Args::TableData>, scroll_x)
-                .bind(ScrollToProperty::new(Axis::Horizontal))
-                .and(
-                    lens!(TableState<Args::TableData>, scroll_y)
-                        .bind(ScrollToProperty::new(Axis::Vertical)),
-                ),
+            TableState::<Args::TableData>::scroll_x.bind(ScrollToProperty::new(Axis::Horizontal)).and(
+                TableState::<Args::TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical)),
+            ),
         );
 
         Self::add_headings(
@@ -404,7 +396,6 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
             std::mem::swap(&mut self.measures, &mut data.measures);
             self.measures = None;
         }
-        //log::info!("Table event {:?} has_child {:?}", event, self.child.is_some() );
         if let Some(child) = self.child.as_mut() {
             child.pod.event(ctx, event, data, env);
         }
@@ -461,8 +452,6 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
         } else {
             bc.max()
         };
-        log::info!("Table layout:{:?}", size);
-
         size
     }
 
