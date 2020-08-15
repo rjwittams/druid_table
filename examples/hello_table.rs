@@ -238,7 +238,8 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
 
-    let table = Table::new_in_scope(table_builder.build_args());
+    let measures = table_builder.build_measures();
+    let table = Table::new_in_scope(table_builder.build_args(), measures);
 
     table
 }

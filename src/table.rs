@@ -1,8 +1,8 @@
 use crate::axis_measure::{AxisPair, TableAxis, AxisMeasure};
 use crate::cells::{CellsDelegate};
 use crate::headings::{HeadersFromData};
-use crate::{CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, VisIdx, Remap};
-use druid::widget::{Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
+use crate::{CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, VisIdx, Remap};
+use druid::widget::{Axis, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
@@ -64,7 +64,6 @@ pub struct TableArgs<
     TableData::Item: Data,
 {
     cells_delegate: CellsDel,
-    measures: AxisPair<AxisMeasure>,
     row_h: Option<RowH>,
     col_h: Option<ColH>,
     table_config: TableConfig,
@@ -80,14 +79,12 @@ impl<
 {
     pub fn new(
         cells_delegate: CellsDel,
-        measures: AxisPair<AxisMeasure>,
         row_h: Option<RowH>,
         col_h: Option<ColH>,
         table_config: TableConfig,
     ) -> Self {
         TableArgs {
             cells_delegate,
-            measures,
             row_h,
             col_h,
             table_config,
@@ -106,8 +103,6 @@ pub trait TableArgsT {
     fn content(
         self,
     ) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
-
-    fn clone_measures(&self)->AxisPair<AxisMeasure>;
 }
 
 impl<
@@ -127,10 +122,6 @@ where
 
     fn content(self) -> TableArgs<TableData, RowH, ColH, CellsDel> {
         self
-    }
-
-    fn clone_measures(&self) -> AxisPair<AxisMeasure> {
-        self.measures.clone()
     }
 }
 
@@ -229,9 +220,8 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         }
     }
 
-    pub fn new_in_scope(args: Args) -> Container<Args::TableData> {
+    pub fn new_in_scope(args: Args, measures: AxisPair<AxisMeasure>) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
-        let measures = args.clone_measures();
         Container::new(Scope::new(DefaultScopePolicy::new(move|d|{TableState::new(d, measures.clone())}, data_lens), Table::new(args)))
     }
 
@@ -251,8 +241,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         let cells_delegate = args.cells_delegate;
         let cells = Cells::new(
             table_config.clone(),
-            args.measures[&TableAxis::Columns].clone(),
-            args.measures[&TableAxis::Rows].clone(),
             cells_delegate,
         );
 
@@ -265,7 +253,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         );
 
         Self::add_headings(
-            args.measures,
             args.col_h,
             args.row_h,
             table_config,
@@ -275,7 +262,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     }
 
     fn add_headings(
-        measures: AxisPair<AxisMeasure>,
         col_h: Option<Args::ColH>,
         row_h: Option<Args::RowH>,
         table_config: TableConfig,
@@ -292,16 +278,11 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 render,
             );
             let cells_id = ids.cells;
-            col_headings
-                .bindable_mut()
-                .add_axis_measure_adjustment_handler(move |ctx, adj| {
-                    ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
-                });
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
                 .binding(
-                    lens!(TableState<Args::TableData>, scroll_x)
+                    TableState::<Args::TableData>::scroll_x
                         .bind(ScrollToProperty::new(Axis::Horizontal)),
                 );
 
@@ -309,37 +290,31 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 .cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_child(ch_scroll)
                 .with_flex_child(widget, 1.);
-            Self::add_row_headings(table_config, true, measures[&TableAxis::Rows].clone(), row_h, ids, cells_column)
+            Self::add_row_headings(table_config, true,  row_h, ids, cells_column)
         } else {
-            Self::add_row_headings(table_config, false, measures[&TableAxis::Rows].clone(), row_h, ids, widget)
+            Self::add_row_headings(table_config, false,  row_h, ids, widget)
         }
     }
 
     fn add_row_headings(
         table_config: TableConfig,
         corner_needed: bool,
-        row_m: AxisMeasure,
         row_h: Option<Args::RowH>,
         ids: Ids,
         widget: impl Widget<TableState<Args::TableData>> + 'static,
     ) -> TableChild<Args::TableData> {
         if let (Some(AxisIds { headers, scroll }), Some(row_h)) = (ids.rows, row_h) {
             let (source, render) = row_h.content();
-            let mut row_headings =
+            let row_headings =
                 Headings::new(TableAxis::Rows, table_config.clone(), source, render);
 
             let cells_id = ids.cells;
-            row_headings
-                .bindable_mut()
-                .add_axis_measure_adjustment_handler(move |ctx, adj| {
-                    ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
-                });
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
                 .binding(
-                    lens!(TableState<Args::TableData>, scroll_y)
+                    TableState::<Args::TableData>::scroll_y
                         .bind(ScrollToProperty::new(Axis::Vertical)),
                 );
 

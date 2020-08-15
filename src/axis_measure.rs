@@ -1,7 +1,7 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
 use crate::data::RemapDetails;
 use crate::Remap;
-use druid::{Cursor, Data, EventCtx, Point, Rect, Selector, Size};
+use druid::{Cursor, Data, Point, Rect, Size};
 use float_ord::FloatOrd;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -92,16 +92,6 @@ impl TableAxis {
         }
     }
 }
-
-#[derive(Debug, Clone)]
-pub enum AxisMeasureAdjustment {
-    LengthChanged(TableAxis, VisIdx, f64),
-}
-
-pub const ADJUST_AXIS_MEASURE: Selector<AxisMeasureAdjustment> =
-    Selector::new("druid-builtin.table.adjust-measure");
-
-pub type AxisMeasureAdjustmentHandler = dyn Fn(&mut EventCtx, &AxisMeasureAdjustment);
 
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
 pub struct VisIdx(pub usize);

@@ -135,15 +135,17 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         }
     }
 
+    pub fn build_measures(&self) -> AxisPair<AxisMeasure>{
+        AxisPair::new(self.build_measure(&TableAxis::Rows, 30.),
+                      self.build_measure(&TableAxis::Columns, 100.))
+    }
+
     pub fn build_args(self) -> DefaultTableArgs<TableData> {
         let column_headers: Vec<String> = self
             .table_columns
             .iter()
             .map(|tc| tc.header.clone())
             .collect();
-
-        let measures = AxisPair::new(self.build_measure(&TableAxis::Rows, 30.),
-                                     self.build_measure(&TableAxis::Columns, 100.));
 
         let row_build = if_opt!(
             self.show_headings.should_show(&TableAxis::Rows),
@@ -162,7 +164,6 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
 
         TableArgs::new(
             ProvidedColumns::new(self.table_columns),
-            measures,
             row_build,
             col_build,
             self.table_config,

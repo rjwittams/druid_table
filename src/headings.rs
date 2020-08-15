@@ -6,7 +6,7 @@ use druid::{
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasure};
+use crate::axis_measure::{LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasure};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
@@ -97,8 +97,7 @@ where
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
     resize_dragging: Option<VisIdx>,
-    selection_dragging: bool,
-    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
+    selection_dragging: bool
 }
 
 impl<HeadersSource, Render> Headings<HeadersSource, Render>
@@ -120,26 +119,12 @@ where
             headers: None,
             header_render,
             resize_dragging: None,
-            selection_dragging: false,
-            measure_adjustment_handlers: Default::default()
+            selection_dragging: false
         }
-    }
-
-    pub fn add_axis_measure_adjustment_handler(
-        &mut self,
-        handler: impl Fn(&mut EventCtx, &AxisMeasureAdjustment) + 'static,
-    ) {
-        self.measure_adjustment_handlers.push(Box::new(handler))
     }
 
     fn set_pix_length_for_axis(&mut self, measure: &mut AxisMeasure, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
-        let length = measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
-
-        let adjustment = AxisMeasureAdjustment::LengthChanged(self.axis, vis_idx, length);
-        for handler in &self.measure_adjustment_handlers {
-            (handler)(ctx, &adjustment)
-        }
-
+        measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
         // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
         ctx.request_layout();
     }

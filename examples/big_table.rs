@@ -134,11 +134,10 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
             TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
             columns,
         ),
-        measures,
         Some(rows),
         Some(cols),
         table_config,
-    ))
+    ), measures)
 }
 
 pub fn main() {
