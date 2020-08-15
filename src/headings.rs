@@ -3,23 +3,18 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{
     Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
+    PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::axis_measure::{AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasureE};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::selection::{IndicesSelection, CellDemap};
 use crate::table::TableState;
-use crate::{Remap, RemapSpec, TableSelection};
 use druid::widget::Bindable;
 use std::collections::HashMap;
-
-pub const SELECT_INDICES: Selector<IndicesSelection> =
-    Selector::new("druid-builtin.table.select-indices");
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -90,16 +85,15 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
     }
 }
 
-pub struct Headings<HeadersSource, Render, Measure>
+pub struct Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
-    Measure: AxisMeasure,
+    Render: CellRender<HeadersSource::Header>
 {
     axis: TableAxis,
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
-    measure: Measure,
+    measure: AxisMeasureE,
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
@@ -108,19 +102,18 @@ where
     measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
 }
 
-impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
+impl<HeadersSource, Render> Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
-    Measure: AxisMeasure,
+    Render: CellRender<HeadersSource::Header>
 {
     pub fn new(
         axis: TableAxis,
         config: TableConfig,
-        measure: Measure,
+        measure: AxisMeasureE,
         headers_source: HeadersSource,
         header_render: Render,
-    ) -> Headings<HeadersSource, Render, Measure> {
+    ) -> Headings<HeadersSource, Render> {
         Headings {
             axis,
             config,
@@ -155,12 +148,11 @@ where
     }
 }
 
-impl<HeadersSource, Render, Measure> Widget<TableState<HeadersSource::TableData>>
-    for Headings<HeadersSource, Render, Measure>
+impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>
+    for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
-    Measure: AxisMeasure,
+    Render: CellRender<HeadersSource::Header>
 {
     fn event(
         &mut self,
@@ -258,13 +250,6 @@ where
         if let LifeCycle::WidgetAdded = event {
             let rtc = self.config.resolve(env);
             self.headers = Some(self.headers_source.get_headers(&data.data)); // TODO Option
-            if !self.measure.shared() {
-                self.measure.set_axis_properties(
-                    rtc.cell_border_thickness,
-                    self.headers.as_ref().unwrap().idx_len(),
-                    &Remap::Pristine, // TODO: Column reordering..
-                );
-            }
             self.resolved_config = Some(rtc);
         }
     }
@@ -276,18 +261,9 @@ where
         data: &TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
-        if let Some(rtc) = &self.resolved_config {
-            if !old_data.same(data) {
-                self.headers = Some(self.headers_source.get_headers(&data.data));
-                if !self.measure.shared() {
-                    self.measure.set_axis_properties(
-                        rtc.cell_border_thickness,
-                        self.headers.as_ref().unwrap().idx_len(),
-                        &Remap::Pristine, // TODO: Column reordering..
-                    );
-                }
-                ctx.request_layout();
-            }
+        if !old_data.same(data) {
+            self.headers = Some(self.headers_source.get_headers(&data.data));
+            ctx.request_layout(); // TODO Only relayout if actually changed
         }
     }
 
@@ -390,10 +366,9 @@ where
     }
 }
 
-impl<HeadersSource, Render, Measure> Bindable for Headings<HeadersSource, Render, Measure>
+impl<HeadersSource, Render> Bindable for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
-    Measure: AxisMeasure,
+    Render: CellRender<HeadersSource::Header>
 {
 }

@@ -3,16 +3,13 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, Selector};
 
-use crate::axis_measure::{
-    AxisMeasure, AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset,
-    ADJUST_AXIS_MEASURE,
-};
+use crate::axis_measure::{AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, ADJUST_AXIS_MEASURE, AxisMeasureE};
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedData, Remapper};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{CellDemap, CellRect, SingleCell, TableSelection};
+use crate::selection::{CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
 use crate::{EditorFactory, IndexedItems, Remap};
 use druid::widget::Bindable;
@@ -98,39 +95,35 @@ impl<RowData: Data> Editing<RowData> {
     }
 }
 
-pub struct Cells<TableData, CellDel, RowMeasure, ColumnMeasure>
+pub struct Cells<TableData, CellDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item: Data,
-    CellDel: CellsDelegate<TableData>, // The length is the number of columns
-    ColumnMeasure: AxisMeasure,
-    RowMeasure: AxisMeasure
+    CellDel: CellsDelegate<TableData> // The length is the number of columns
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
-    column_measure: ColumnMeasure,
-    row_measure: RowMeasure,
+    column_measure: AxisMeasureE,
+    row_measure: AxisMeasureE,
     cell_delegate: CellDel,
     editing: Editing<TableData::Item>,
     dragging_selection: bool,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData, CellDel, RowMeasure, ColumnMeasure>
-    Cells<TableData, CellDel, RowMeasure, ColumnMeasure>
+impl<TableData, CellDel>
+    Cells<TableData, CellDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item : Data,
-    CellDel: CellsDelegate<TableData>,
-    ColumnMeasure: AxisMeasure,
-    RowMeasure: AxisMeasure,
+    CellDel: CellsDelegate<TableData>
 {
     pub fn new(
         config: TableConfig,
-        column_measure: ColumnMeasure,
-        row_measure: RowMeasure,
+        column_measure: AxisMeasureE,
+        row_measure: AxisMeasureE,
         cells_delegate: CellDel,
-    ) -> Cells<TableData, CellDel, RowMeasure, ColumnMeasure> {
+    ) -> Cells<TableData, CellDel> {
         Cells {
             config,
             resolved_config: None,
@@ -335,14 +328,12 @@ where
 pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
 pub const SORT_CHANGED: Selector<TableAxis> = Selector::new( "druid-builtin.table.sort-changed");
 
-impl<TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
-    for Cells<TableData, ColDel, RowMeasure, ColumnMeasure>
+impl<TableData, ColDel> Widget<TableState<TableData>>
+    for Cells<TableData, ColDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item : Data,
     ColDel: CellsDelegate<TableData>,
-    ColumnMeasure: AxisMeasure,
-    RowMeasure: AxisMeasure,
 {
     fn event(
         &mut self,
@@ -399,19 +390,6 @@ where
                         remap_changed[&ax] = true;
                     } else if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) = cmd.get(ADJUST_AXIS_MEASURE)
                     {
-                        match axis {
-                            TableAxis::Rows => {
-                                // If we share the measure through Rc Refcell, we don't need to update it
-                                if !self.row_measure.shared() {
-                                    self.row_measure.set_pixel_length_for_vis(*idx, *length);
-                                }
-                            }
-                            TableAxis::Columns => {
-                                if !self.column_measure.shared() {
-                                    self.column_measure.set_pixel_length_for_vis(*idx, *length);
-                                }
-                            }
-                        };
                         ctx.request_layout();
                     } else {
                         match &mut self.editing {
@@ -614,14 +592,12 @@ where
 }
 
 
-impl<TableData, ColDel, RowMeasure, ColumnMeasure> Bindable
-    for Cells<TableData, ColDel, RowMeasure, ColumnMeasure>
+impl<TableData, CellsDel> Bindable
+    for Cells<TableData, CellsDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item : Data,
-    ColDel: CellsDelegate<TableData>,
-    ColumnMeasure: AxisMeasure,
-    RowMeasure: AxisMeasure,
+    CellsDel: CellsDelegate<TableData>
 {
 }
 

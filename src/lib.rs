@@ -13,9 +13,8 @@ mod render_ext;
 mod selection;
 mod table;
 
-pub use axis_measure::{
-    AxisMeasure, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
-    ADJUST_AXIS_MEASURE,
+pub use axis_measure::{FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
+    ADJUST_AXIS_MEASURE, AxisMeasureE, AxisPair
 };
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
@@ -24,7 +23,7 @@ pub use columns::{
 };
 pub use config::TableConfig;
 pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirection};
-pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders, SELECT_INDICES};
+pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};
 

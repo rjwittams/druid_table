@@ -2,7 +2,7 @@ use crate::columns::{
     CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis};
+use crate::axis_measure::{AxisPair, LogIdx, StoredAxisMeasure, TableAxis, AxisMeasureE};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
@@ -60,12 +60,8 @@ impl ShowHeadings {
     }
 }
 
-pub type DynAxisMeasure = Rc<RefCell<dyn AxisMeasure>>;
-
 pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
-    DynAxisMeasure,
-    DynAxisMeasure,
     HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellRender<LogIdx>>>,
     HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellRender<String>>>,
     ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>,
@@ -132,10 +128,10 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         self
     }
 
-    pub fn build_measure(&self, axis: &TableAxis, size: f64) -> DynAxisMeasure {
+    pub fn build_measure(&self, axis: &TableAxis, size: f64) -> AxisMeasureE {
         match self.measurements[axis] {
-            AxisMeasurementType::Individual => Rc::new(RefCell::new(StoredAxisMeasure::new(size))),
-            AxisMeasurementType::Uniform => Rc::new(RefCell::new(FixedAxisMeasure::new(size))),
+            AxisMeasurementType::Individual => AxisMeasureE::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size)))),
+            AxisMeasurementType::Uniform => AxisMeasureE::Fixed(FixedAxisMeasure::new(size)),
         }
     }
 
@@ -146,8 +142,8 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             .map(|tc| tc.header.clone())
             .collect();
 
-        let column_measure = self.build_measure(&TableAxis::Columns, 100.);
-        let row_measure = self.build_measure(&TableAxis::Rows, 30.);
+        let measures = AxisPair::new(self.build_measure(&TableAxis::Rows, 30.),
+                                     self.build_measure(&TableAxis::Columns, 100.));
 
         let row_build = if_opt!(
             self.show_headings.should_show(&TableAxis::Rows),
@@ -166,8 +162,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
 
         TableArgs::new(
             ProvidedColumns::new(self.table_columns),
-            (row_measure.clone(), row_measure),
-            (column_measure.clone(), column_measure),
+            measures,
             row_build,
             col_build,
             self.table_config,

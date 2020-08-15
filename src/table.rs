@@ -1,13 +1,12 @@
-use crate::axis_measure::{AxisPair, TableAxis};
+use crate::axis_measure::{AxisPair, TableAxis, AxisMeasureE};
 use crate::cells::{CellsDelegate};
 use crate::headings::{HeadersFromData};
-use crate::{AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, SELECT_INDICES, VisIdx, Remap};
+use crate::{CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, VisIdx, Remap};
 use druid::widget::{Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
 };
-use crate::builder::DynAxisMeasure;
 use crate::selection::{CellDemap};
 
 pub struct HeaderBuild<
@@ -58,8 +57,6 @@ impl<
 
 pub struct TableArgs<
     TableData: IndexedData<Idx = LogIdx>,
-    RowM: AxisMeasure + 'static,
-    ColM: AxisMeasure + 'static,
     RowH: HeaderBuildT<TableData = TableData>,
     ColH: HeaderBuildT<TableData = TableData>,
     CellsDel: CellsDelegate<TableData> + 'static,
@@ -67,8 +64,7 @@ pub struct TableArgs<
     TableData::Item: Data,
 {
     cells_delegate: CellsDel,
-    row_m: (RowM, RowM),
-    col_m: (ColM, ColM),
+    measures: AxisPair<AxisMeasureE>,
     row_h: Option<RowH>,
     col_h: Option<ColH>,
     table_config: TableConfig,
@@ -77,25 +73,21 @@ pub struct TableArgs<
 impl<
         RowData: Data,
         TableData: IndexedData<Item = RowData, Idx = LogIdx>,
-        RowM: AxisMeasure + 'static,
-        ColM: AxisMeasure + 'static,
         RowH: HeaderBuildT<TableData = TableData>,
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
-    > TableArgs<TableData, RowM, ColM, RowH, ColH, CellsDel>
+    > TableArgs<TableData, RowH, ColH, CellsDel>
 {
     pub fn new(
         cells_delegate: CellsDel,
-        row_m: (RowM, RowM),
-        col_m: (ColM, ColM),
+        measures: AxisPair<AxisMeasureE>,
         row_h: Option<RowH>,
         col_h: Option<ColH>,
         table_config: TableConfig,
     ) -> Self {
         TableArgs {
             cells_delegate,
-            row_m,
-            col_m,
+            measures,
             row_h,
             col_h,
             table_config,
@@ -107,38 +99,38 @@ impl<
 pub trait TableArgsT {
     type RowData: Data; // Required because associated type bounds are unstable
     type TableData: IndexedData<Item = Self::RowData, Idx = LogIdx>;
-    type RowM: AxisMeasure + 'static;
-    type ColM: AxisMeasure + 'static;
     type RowH: HeaderBuildT<TableData = Self::TableData>;
     type ColH: HeaderBuildT<TableData = Self::TableData>;
 
     type CellsDel: CellsDelegate<Self::TableData> + 'static;
     fn content(
         self,
-    ) -> TableArgs<Self::TableData, Self::RowM, Self::ColM, Self::RowH, Self::ColH, Self::CellsDel>;
+    ) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
+
+    fn clone_measures(&self)->AxisPair<AxisMeasureE>;
 }
 
 impl<
         TableData: IndexedData<Idx = LogIdx>,
-        RowM: AxisMeasure + 'static,
-        ColM: AxisMeasure + 'static,
         RowH: HeaderBuildT<TableData = TableData>,
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
-    > TableArgsT for TableArgs<TableData, RowM, ColM, RowH, ColH, CellsDel>
+    > TableArgsT for TableArgs<TableData, RowH, ColH, CellsDel>
 where
     TableData::Item: Data,
 {
     type RowData = TableData::Item;
     type TableData = TableData;
-    type RowM = RowM;
-    type ColM = ColM;
     type RowH = RowH;
     type ColH = ColH;
     type CellsDel = CellsDel;
 
-    fn content(self) -> TableArgs<TableData, RowM, ColM, RowH, ColH, CellsDel> {
+    fn content(self) -> TableArgs<TableData, RowH, ColH, CellsDel> {
         self
+    }
+
+    fn clone_measures(&self) -> AxisPair<AxisMeasureE> {
+        self.measures.clone()
     }
 }
 
@@ -150,11 +142,11 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
     pub(crate) selection: TableSelection,
-    #[data(ignore)] pub(crate) measures: Option<AxisPair<DynAxisMeasure>>, // TODO
+    #[data(ignore)] pub(crate) measures: AxisPair<AxisMeasureE> // TODO
 }
 
 impl<TableData: Data> TableState<TableData> {
-    pub fn new(data: TableData) -> Self {
+    pub fn new(data: TableData, measures:AxisPair<AxisMeasureE>) -> Self {
         TableState {
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -162,7 +154,7 @@ impl<TableData: Data> TableState<TableData> {
             remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
             remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
             selection: TableSelection::default(),
-            measures: None
+            measures
         }
     }
 
@@ -195,8 +187,7 @@ impl<TableData: Data> TableChild<TableData> {
 
 pub struct Table<Args: TableArgsT> {
     args: Option<Args>,
-    child: Option<TableChild<Args::TableData>>,
-    measures: Option<AxisPair<DynAxisMeasure>>
+    child: Option<TableChild<Args::TableData>>
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -234,14 +225,14 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     pub fn new(args: Args) -> Self {
         Table {
             args: Some(args),
-            child: None,
-            measures: None
+            child: None
         }
     }
 
     pub fn new_in_scope(args: Args) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
-        Container::new(Scope::new(DefaultScopePolicy::new(TableState::new, data_lens), Table::new(args)))
+        let measures = args.clone_measures();
+        Container::new(Scope::new(DefaultScopePolicy::new(move|d|{TableState::new(d, measures.clone())}, data_lens), Table::new(args)))
     }
 
     fn build_child(&self, args_t: Args) -> TableChild<Args::TableData> {
@@ -260,8 +251,8 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         let cells_delegate = args.cells_delegate;
         let cells = Cells::new(
             table_config.clone(),
-            args.col_m.0,
-            args.row_m.0,
+            args.measures[&TableAxis::Columns].clone(),
+            args.measures[&TableAxis::Rows].clone(),
             cells_delegate,
         );
 
@@ -274,8 +265,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         );
 
         Self::add_headings(
-            args.col_m.1,
-            args.row_m.1,
+            args.measures,
             args.col_h,
             args.row_h,
             table_config,
@@ -285,8 +275,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     }
 
     fn add_headings(
-        col_m: Args::ColM,
-        row_m: Args::RowM,
+        measures: AxisPair<AxisMeasureE>,
         col_h: Option<Args::ColH>,
         row_h: Option<Args::RowH>,
         table_config: TableConfig,
@@ -299,7 +288,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
             let mut col_headings = Headings::new(
                 TableAxis::Columns,
                 table_config.clone(),
-                col_m,
+                measures[&TableAxis::Columns].clone(),
                 source,
                 render,
             );
@@ -321,16 +310,16 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 .cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_child(ch_scroll)
                 .with_flex_child(widget, 1.);
-            Self::add_row_headings(table_config, true, row_m, row_h, ids, cells_column)
+            Self::add_row_headings(table_config, true, measures[&TableAxis::Rows].clone(), row_h, ids, cells_column)
         } else {
-            Self::add_row_headings(table_config, false, row_m, row_h, ids, widget)
+            Self::add_row_headings(table_config, false, measures[&TableAxis::Rows].clone(), row_h, ids, widget)
         }
     }
 
     fn add_row_headings(
         table_config: TableConfig,
         corner_needed: bool,
-        row_m: Args::RowM,
+        row_m: AxisMeasureE,
         row_h: Option<Args::RowH>,
         ids: Ids,
         widget: impl Widget<TableState<Args::TableData>> + 'static,
@@ -382,10 +371,6 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
         data: &mut TableState<Args::TableData>,
         env: &Env,
     ) {
-        if self.measures.is_some(){
-            std::mem::swap(&mut self.measures, &mut data.measures);
-            self.measures = None;
-        }
         if let Some(child) = self.child.as_mut() {
             child.pod.event(ctx, event, data, env);
         }
@@ -402,7 +387,6 @@ impl<Args: TableArgsT + 'static> Widget<TableState<Args::TableData>> for Table<A
             if self.args.is_some() {
                 let mut args = None;
                 std::mem::swap(&mut self.args, &mut args);
-                //self.measures = Some(AxisPair::new(args. ));
 
                 self.child = args.map(|args| self.build_child(args));
             } else {
