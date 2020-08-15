@@ -14,7 +14,7 @@ mod selection;
 mod table;
 
 pub use axis_measure::{FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
-    ADJUST_AXIS_MEASURE, AxisMeasureE, AxisPair
+                       ADJUST_AXIS_MEASURE, AxisMeasure, AxisPair
 };
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};

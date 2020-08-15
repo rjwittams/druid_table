@@ -6,7 +6,7 @@ use druid::{
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasureE};
+use crate::axis_measure::{AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasure};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
@@ -93,7 +93,6 @@ where
     axis: TableAxis,
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
-    measure: AxisMeasureE,
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
@@ -110,7 +109,6 @@ where
     pub fn new(
         axis: TableAxis,
         config: TableConfig,
-        measure: AxisMeasureE,
         headers_source: HeadersSource,
         header_render: Render,
     ) -> Headings<HeadersSource, Render> {
@@ -118,7 +116,6 @@ where
             axis,
             config,
             resolved_config: None,
-            measure,
             headers_source,
             headers: None,
             header_render,
@@ -135,8 +132,8 @@ where
         self.measure_adjustment_handlers.push(Box::new(handler))
     }
 
-    fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
-        let length = self.measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
+    fn set_pix_length_for_axis(&mut self, measure: &mut AxisMeasure, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
+        let length = measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
 
         let adjustment = AxisMeasureAdjustment::LengthChanged(self.axis, vis_idx, length);
         for handler in &self.measure_adjustment_handlers {
@@ -161,12 +158,13 @@ where
         data: &mut TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
+        let measure = &mut data.measures[&self.axis];
         match _event {
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
                     let extend = me.mods.ctrl() || me.mods.meta();
-                    if let Some(vis_idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                    if let Some(vis_idx) = measure.vis_idx_from_pixel(pix_main) {
                         if let Some(log_idx) = data.remaps[&self.axis].get_log_idx(vis_idx) {
                             data.remap_specs[&self.axis.cross_axis()].toggle_sort(log_idx, extend);
                         }
@@ -174,14 +172,14 @@ where
                     }
                 } else if me.count == 1 {
                     //TODO: Combine lookups
-                    if let Some(idx) = self.measure.pixel_near_border(pix_main) {
-                        if idx > VisIdx(0) && self.measure.can_resize(idx - VisOffset(1)) {
+                    if let Some(idx) = measure.pixel_near_border(pix_main) {
+                        if idx > VisIdx(0) && measure.can_resize(idx - VisOffset(1)) {
                             self.resize_dragging = Some(idx - VisOffset(1));
                             ctx.set_active(true);
                             ctx.set_cursor(self.axis.resize_cursor());
                             ctx.set_handled()
                         }
-                    } else if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                    } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
                         if me.mods.shift(){
                             sel.extend_in_axis(&self.axis, idx, &data.remaps);
@@ -197,7 +195,7 @@ where
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.resize_dragging {
-                    self.set_pix_length_for_axis(ctx, idx, pix_main);
+                    self.set_pix_length_for_axis(measure, ctx ,idx, pix_main);
 
                     if me.buttons.is_empty() {
                         self.resize_dragging = None;
@@ -206,12 +204,12 @@ where
                     }
                     ctx.set_handled()
                 } else if self.selection_dragging {
-                    if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                    if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         data.selection.extend_in_axis(&self.axis, idx, &data.remaps);
                     }
-                } else if let Some(idx) = self.measure.pixel_near_border(pix_main) {
+                } else if let Some(idx) = measure.pixel_near_border(pix_main) {
                     if idx > VisIdx(0) {
-                        let cursor = if self.measure.can_resize(idx - VisOffset(1)) {
+                        let cursor = if measure.can_resize(idx - VisOffset(1)) {
                             self.axis.resize_cursor()
                         } else {
                             &Cursor::NotAllowed
@@ -225,7 +223,7 @@ where
             Event::MouseUp(me) => {
                 if let Some(idx) = self.resize_dragging {
                     let pix_main = self.axis.main_pixel_from_point(&me.pos);
-                    self.set_pix_length_for_axis(ctx, idx, pix_main);
+                    self.set_pix_length_for_axis(measure, ctx, idx, pix_main);
                     self.resize_dragging = None;
                     ctx.set_active(false);
                     ctx.set_handled();
@@ -271,7 +269,7 @@ where
         &mut self,
         _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        _data: &TableState<HeadersSource::TableData>,
+        data: &TableState<HeadersSource::TableData>,
         _env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
@@ -286,7 +284,7 @@ where
 
         bc.constrain(
             self.axis
-                .size(self.measure.total_pixel_length(), cross_axis_length),
+                .size(data.measures[&self.axis].total_pixel_length(), cross_axis_length),
         )
     }
 
@@ -296,6 +294,7 @@ where
         data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) {
+        let measure = &data.measures[&self.axis];
         let indices_selection = data.selection.to_axis_selection(&self.axis, &data.remaps);
 
         // TODO build on change of spec
@@ -314,17 +313,15 @@ where
             ctx.fill(rect, &rtc.header_background);
 
             let (p0, p1) = self.axis.pixels_from_rect(&rect);
-            let (start_main, end_main) = self.measure.vis_range_from_pixels(p0, p1);
+            let (start_main, end_main) = measure.vis_range_from_pixels(p0, p1);
 
             let header_render = &mut self.header_render;
 
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
-                let first_pix = self
-                    .measure
+                let first_pix = measure
                     .first_pixel_from_vis(vis_main_idx)
                     .unwrap_or(0.);
-                let length_pix = self
-                    .measure
+                let length_pix = measure
                     .pixels_length_for_vis(vis_main_idx)
                     .unwrap_or(0.);
                 let axis = self.axis;

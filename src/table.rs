@@ -1,4 +1,4 @@
-use crate::axis_measure::{AxisPair, TableAxis, AxisMeasureE};
+use crate::axis_measure::{AxisPair, TableAxis, AxisMeasure};
 use crate::cells::{CellsDelegate};
 use crate::headings::{HeadersFromData};
 use crate::{CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, VisIdx, Remap};
@@ -64,7 +64,7 @@ pub struct TableArgs<
     TableData::Item: Data,
 {
     cells_delegate: CellsDel,
-    measures: AxisPair<AxisMeasureE>,
+    measures: AxisPair<AxisMeasure>,
     row_h: Option<RowH>,
     col_h: Option<ColH>,
     table_config: TableConfig,
@@ -80,7 +80,7 @@ impl<
 {
     pub fn new(
         cells_delegate: CellsDel,
-        measures: AxisPair<AxisMeasureE>,
+        measures: AxisPair<AxisMeasure>,
         row_h: Option<RowH>,
         col_h: Option<ColH>,
         table_config: TableConfig,
@@ -107,7 +107,7 @@ pub trait TableArgsT {
         self,
     ) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
 
-    fn clone_measures(&self)->AxisPair<AxisMeasureE>;
+    fn clone_measures(&self)->AxisPair<AxisMeasure>;
 }
 
 impl<
@@ -129,7 +129,7 @@ where
         self
     }
 
-    fn clone_measures(&self) -> AxisPair<AxisMeasureE> {
+    fn clone_measures(&self) -> AxisPair<AxisMeasure> {
         self.measures.clone()
     }
 }
@@ -142,11 +142,11 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
     pub(crate) selection: TableSelection,
-    #[data(ignore)] pub(crate) measures: AxisPair<AxisMeasureE> // TODO
+    #[data(ignore)] pub(crate) measures: AxisPair<AxisMeasure> // TODO
 }
 
 impl<TableData: Data> TableState<TableData> {
-    pub fn new(data: TableData, measures:AxisPair<AxisMeasureE>) -> Self {
+    pub fn new(data: TableData, measures:AxisPair<AxisMeasure>) -> Self {
         TableState {
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -275,7 +275,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     }
 
     fn add_headings(
-        measures: AxisPair<AxisMeasureE>,
+        measures: AxisPair<AxisMeasure>,
         col_h: Option<Args::ColH>,
         row_h: Option<Args::RowH>,
         table_config: TableConfig,
@@ -288,7 +288,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
             let mut col_headings = Headings::new(
                 TableAxis::Columns,
                 table_config.clone(),
-                measures[&TableAxis::Columns].clone(),
                 source,
                 render,
             );
@@ -319,7 +318,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     fn add_row_headings(
         table_config: TableConfig,
         corner_needed: bool,
-        row_m: AxisMeasureE,
+        row_m: AxisMeasure,
         row_h: Option<Args::RowH>,
         ids: Ids,
         widget: impl Widget<TableState<Args::TableData>> + 'static,
@@ -327,7 +326,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         if let (Some(AxisIds { headers, scroll }), Some(row_h)) = (ids.rows, row_h) {
             let (source, render) = row_h.content();
             let mut row_headings =
-                Headings::new(TableAxis::Rows, table_config.clone(), row_m, source, render);
+                Headings::new(TableAxis::Rows, table_config.clone(), source, render);
 
             let cells_id = ids.cells;
             row_headings

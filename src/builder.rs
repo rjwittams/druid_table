@@ -2,7 +2,7 @@ use crate::columns::{
     CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{AxisPair, LogIdx, StoredAxisMeasure, TableAxis, AxisMeasureE};
+use crate::axis_measure::{AxisPair, LogIdx, StoredAxisMeasure, TableAxis, AxisMeasure};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
@@ -128,10 +128,10 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         self
     }
 
-    pub fn build_measure(&self, axis: &TableAxis, size: f64) -> AxisMeasureE {
+    pub fn build_measure(&self, axis: &TableAxis, size: f64) -> AxisMeasure {
         match self.measurements[axis] {
-            AxisMeasurementType::Individual => AxisMeasureE::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size)))),
-            AxisMeasurementType::Uniform => AxisMeasureE::Fixed(FixedAxisMeasure::new(size)),
+            AxisMeasurementType::Individual => AxisMeasure::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size)))),
+            AxisMeasurementType::Uniform => AxisMeasure::Fixed(FixedAxisMeasure::new(size)),
         }
     }
 

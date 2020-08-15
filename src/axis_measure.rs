@@ -144,80 +144,80 @@ impl Sub<VisOffset> for VisIdx {
 }
 
 #[derive(Debug, Clone)]
-pub enum AxisMeasureE {
+pub enum AxisMeasure {
     Fixed(FixedAxisMeasure),
     Stored(Rc<RefCell<StoredAxisMeasure>>)
 }
 
 
-impl AxisMeasureE{
+impl AxisMeasure {
     pub fn border(&self) -> f64 {
         match self{
-            AxisMeasureE::Fixed(f) => f.border,
-            AxisMeasureE::Stored(s) => s.borrow().border()
+            AxisMeasure::Fixed(f) => f.border,
+            AxisMeasure::Stored(s) => s.borrow().border()
         }
     }
 
     pub fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
         match self{
-            AxisMeasureE::Fixed(f) => f.set_axis_properties(border, len, remap),
-            AxisMeasureE::Stored(s) => s.borrow_mut().set_axis_properties(border, len, remap)
+            AxisMeasure::Fixed(f) => f.set_axis_properties(border, len, remap),
+            AxisMeasure::Stored(s) => s.borrow_mut().set_axis_properties(border, len, remap)
         }
     }
 
     pub fn total_pixel_length(&self) -> f64 {
         match self{
-            AxisMeasureE::Fixed(f) => f.total_pixel_length(),
-            AxisMeasureE::Stored(s) => s.borrow().total_pixel_length()
+            AxisMeasure::Fixed(f) => f.total_pixel_length(),
+            AxisMeasure::Stored(s) => s.borrow().total_pixel_length()
         }
     }
 
     pub fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
         match self{
-            AxisMeasureE::Fixed(f) => f.vis_idx_from_pixel(pixel),
-            AxisMeasureE::Stored(s) => s.borrow().vis_idx_from_pixel(pixel)
+            AxisMeasure::Fixed(f) => f.vis_idx_from_pixel(pixel),
+            AxisMeasure::Stored(s) => s.borrow().vis_idx_from_pixel(pixel)
         }
     }
 
     pub fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
         match self{
-            AxisMeasureE::Fixed(f) => f.vis_range_from_pixels(p0, p1),
-            AxisMeasureE::Stored(s) => s.borrow().vis_range_from_pixels(p0, p1)
+            AxisMeasure::Fixed(f) => f.vis_range_from_pixels(p0, p1),
+            AxisMeasure::Stored(s) => s.borrow().vis_range_from_pixels(p0, p1)
         }
     }
 
     pub fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         match self{
-            AxisMeasureE::Fixed(f) => f.first_pixel_from_vis(idx),
-            AxisMeasureE::Stored(s) => s.borrow().first_pixel_from_vis(idx)
+            AxisMeasure::Fixed(f) => f.first_pixel_from_vis(idx),
+            AxisMeasure::Stored(s) => s.borrow().first_pixel_from_vis(idx)
         }
     }
 
     pub fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
         match self{
-            AxisMeasureE::Fixed(f) => f.pixels_length_for_vis(idx),
-            AxisMeasureE::Stored(s) => s.borrow().pixels_length_for_vis(idx)
+            AxisMeasure::Fixed(f) => f.pixels_length_for_vis(idx),
+            AxisMeasure::Stored(s) => s.borrow().pixels_length_for_vis(idx)
         }
     }
 
     pub fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
         match self{
-            AxisMeasureE::Fixed(f) => f.set_far_pixel_for_vis(idx, pixel),
-            AxisMeasureE::Stored(s) => s.borrow_mut().set_far_pixel_for_vis(idx, pixel)
+            AxisMeasure::Fixed(f) => f.set_far_pixel_for_vis(idx, pixel),
+            AxisMeasure::Stored(s) => s.borrow_mut().set_far_pixel_for_vis(idx, pixel)
         }
     }
 
     pub fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64 {
         match self{
-            AxisMeasureE::Fixed(f) => f.set_far_pixel_for_vis(idx, length),
-            AxisMeasureE::Stored(s) => s.borrow_mut().set_pixel_length_for_vis(idx, length)
+            AxisMeasure::Fixed(f) => f.set_far_pixel_for_vis(idx, length),
+            AxisMeasure::Stored(s) => s.borrow_mut().set_pixel_length_for_vis(idx, length)
         }
     }
 
     pub fn can_resize(&self, idx: VisIdx) -> bool {
         match self{
-            AxisMeasureE::Fixed(f) => f.can_resize(idx),
-            AxisMeasureE::Stored(s) => s.borrow().can_resize(idx)
+            AxisMeasure::Fixed(f) => f.can_resize(idx),
+            AxisMeasure::Stored(s) => s.borrow().can_resize(idx)
         }
     }
 

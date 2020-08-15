@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, Selector};
 
-use crate::axis_measure::{AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, ADJUST_AXIS_MEASURE, AxisMeasureE};
+use crate::axis_measure::{AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, ADJUST_AXIS_MEASURE, AxisMeasure};
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
@@ -103,8 +103,8 @@ where
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
-    column_measure: AxisMeasureE,
-    row_measure: AxisMeasureE,
+    column_measure: AxisMeasure,
+    row_measure: AxisMeasure,
     cell_delegate: CellDel,
     editing: Editing<TableData::Item>,
     dragging_selection: bool,
@@ -120,8 +120,8 @@ where
 {
     pub fn new(
         config: TableConfig,
-        column_measure: AxisMeasureE,
-        row_measure: AxisMeasureE,
+        column_measure: AxisMeasure,
+        row_measure: AxisMeasure,
         cells_delegate: CellDel,
     ) -> Cells<TableData, CellDel> {
         Cells {
