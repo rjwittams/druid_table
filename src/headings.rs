@@ -3,19 +3,16 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{
     Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    MouseEvent, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
+    PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{
-    AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx,
-    VisOffset,
-};
+use crate::axis_measure::{AxisMeasure, AxisMeasureAdjustment, AxisMeasureAdjustmentHandler, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::selection::{IndicesSelection, SingleSlice, SingleCell};
+use crate::selection::{IndicesSelection, CellDemap};
 use crate::table::TableState;
 use crate::{Remap, RemapSpec, TableSelection};
 use druid::widget::Bindable;
@@ -93,19 +90,6 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum HeaderActionType {
-    ToggleSort { extend: bool } // Filter
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct HeaderAction(pub TableAxis, pub VisIdx, pub HeaderActionType);
-
-pub const HEADER_CLICKED: Selector<HeaderAction> =
-    Selector::new("druid-builtin.table.header-action");
-
-pub type HeaderActionHandler = dyn Fn(&mut EventCtx, &MouseEvent, &HeaderAction);
-
 pub struct Headings<HeadersSource, Render, Measure>
 where
     HeadersSource: HeadersFromData,
@@ -121,8 +105,7 @@ where
     header_render: Render,
     resize_dragging: Option<VisIdx>,
     selection_dragging: bool,
-    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>,
-    header_action_handlers: Vec<Box<HeaderActionHandler>>,
+    measure_adjustment_handlers: Vec<Box<AxisMeasureAdjustmentHandler>>
 }
 
 impl<HeadersSource, Render, Measure> Headings<HeadersSource, Render, Measure>
@@ -148,8 +131,7 @@ where
             header_render,
             resize_dragging: None,
             selection_dragging: false,
-            measure_adjustment_handlers: Default::default(),
-            header_action_handlers: Default::default(),
+            measure_adjustment_handlers: Default::default()
         }
     }
 
@@ -158,13 +140,6 @@ where
         handler: impl Fn(&mut EventCtx, &AxisMeasureAdjustment) + 'static,
     ) {
         self.measure_adjustment_handlers.push(Box::new(handler))
-    }
-
-    pub fn add_header_clicked_handler(
-        &mut self,
-        handler: impl Fn(&mut EventCtx, &MouseEvent, &HeaderAction) + 'static,
-    ) {
-        self.header_action_handlers.push(Box::new(handler))
     }
 
     fn set_pix_length_for_axis(&mut self, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
@@ -198,16 +173,10 @@ where
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
-                    if let Some(idx) = self.measure.vis_idx_from_pixel(pix_main) {
-                        let clicked = HeaderAction(
-                            self.axis,
-                            idx,
-                            HeaderActionType::ToggleSort {
-                                extend: me.mods.ctrl(),
-                            },
-                        );
-                        for handler in &self.header_action_handlers {
-                            handler(ctx, me, &clicked);
+                    let extend = me.mods.ctrl() || me.mods.meta();
+                    if let Some(vis_idx) = self.measure.vis_idx_from_pixel(pix_main) {
+                        if let Some(log_idx) = data.remaps[&self.axis].get_log_idx(vis_idx) {
+                            data.remap_specs[&self.axis.cross_axis()].toggle_sort(log_idx, extend);
                         }
                         ctx.set_handled()
                     }

@@ -1,6 +1,6 @@
 use crate::axis_measure::{AxisPair, TableAxis};
 use crate::cells::{CellsDelegate};
-use crate::headings::{HeadersFromData, HEADER_CLICKED};
+use crate::headings::{HeadersFromData};
 use crate::{AxisMeasure, CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, ADJUST_AXIS_MEASURE, SELECT_INDICES, VisIdx, Remap};
 use druid::widget::{Axis, BindableAccess, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
 use druid::{
@@ -8,7 +8,7 @@ use druid::{
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
 };
 use crate::builder::DynAxisMeasure;
-use crate::selection::{CellDemap, SingleSlice, SingleCell};
+use crate::selection::{CellDemap};
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -309,11 +309,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 .add_axis_measure_adjustment_handler(move |ctx, adj| {
                     ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
                 });
-            col_headings
-                .bindable_mut()
-                .add_header_clicked_handler(move |ctx, _me, hc| {
-                    ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
-                });
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
@@ -350,11 +345,6 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 .bindable_mut()
                 .add_axis_measure_adjustment_handler(move |ctx, adj| {
                     ctx.submit_command(ADJUST_AXIS_MEASURE.with(adj.clone()), cells_id);
-                });
-            row_headings
-                .bindable_mut()
-                .add_header_clicked_handler(move |ctx, _me, hc| {
-                    ctx.submit_command(HEADER_CLICKED.with(*hc), cells_id);
                 });
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))

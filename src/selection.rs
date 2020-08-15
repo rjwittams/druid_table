@@ -367,7 +367,7 @@ impl TableSelection {
         self.focus().map(|x|&x.vis)
     }
 
-    pub fn to_axis_selection(&self, for_axis: &TableAxis, cell_demap: &impl CellDemap) -> IndicesSelection {
+    pub fn to_axis_selection(&self, for_axis: &TableAxis, _cell_demap: &impl CellDemap) -> IndicesSelection {
         match self {
             Self::NoSelection => IndicesSelection::NoSelection,
             Self::SingleCell(sc) => IndicesSelection::Single(sc.vis[for_axis]),

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Command, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, Target, UpdateCtx, Widget, WidgetPod, Selector};
+use druid::{Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, Selector};
 
 use crate::axis_measure::{
     AxisMeasure, AxisMeasureAdjustment, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset,
@@ -10,12 +10,11 @@ use crate::axis_measure::{
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{IndexedData, RemapSpec, Remapper, SortSpec};
-use crate::headings::{HeaderAction, HeaderActionType, HEADER_CLICKED};
+use crate::data::{IndexedData, Remapper};
 use crate::render_ext::RenderContextExt;
-use crate::selection::{CellDemap, CellRect, SingleCell, SingleSlice, TableSelection};
+use crate::selection::{CellDemap, CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
-use crate::{EditorFactory, IndexedItems, Remap, SortDirection};
+use crate::{EditorFactory, IndexedItems, Remap};
 use druid::widget::Bindable;
 
 pub trait CellsDelegate<TableData: IndexedData>:
@@ -337,6 +336,7 @@ where
 }
 
 pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
+pub const SORT_CHANGED: Selector<TableAxis> = Selector::new( "druid-builtin.table.sort-changed");
 
 impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
     for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
@@ -398,6 +398,8 @@ where
                         data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
                         remap_changed[&TableAxis::Rows] = true;
                         remap_changed[&TableAxis::Columns] = true;
+                    } else if let Some(ax) = cmd.get( SORT_CHANGED) {
+                        remap_changed[&ax] = true;
                     } else if let Some(AxisMeasureAdjustment::LengthChanged(axis, idx, length)) = cmd.get(ADJUST_AXIS_MEASURE)
                     {
                         match axis {
@@ -414,15 +416,6 @@ where
                             }
                         };
                         ctx.request_layout();
-                    } else if let Some(HeaderAction(axis, vis, action)) = cmd.get(HEADER_CLICKED) {
-                        let vis_addr = AxisPair::new_for_axis(axis, *vis, Default::default());
-                        if let Some(log_addr) = data.remaps.get_log_cell(&vis_addr) {
-                            match action {
-                                HeaderActionType::ToggleSort { extend } => {
-                                    remap_changed[&axis] = data.remap_specs[&axis].toggle_sort(log_addr[axis], *extend);
-                                }
-                            }
-                        }
                     } else {
                         match &mut self.editing {
                             Editing::Cell { single_cell, child } => {
@@ -550,8 +543,9 @@ where
         _env: &Env,
     ) {
 
+        // TODO move all sorting up to table level so we don't need commands
         if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
-            // TODO send self a message to sort
+            ctx.submit_command(SORT_CHANGED.with(TableAxis::Rows), ctx.widget_id());
         }
         if !old_data.selection.same(&data.selection){
             ctx.request_paint();
