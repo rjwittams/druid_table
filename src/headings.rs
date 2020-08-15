@@ -324,7 +324,7 @@ where
 
         // TODO build on change of spec
         let cross_rem = &data.remap_specs[self.axis.cross_axis()];
-        let sort_dirs: HashMap<_, _> = cross_rem
+        let sort_dirs: HashMap<LogIdx, SortSpec> = cross_rem
             .sort_by
             .iter()
             .enumerate()
@@ -362,8 +362,7 @@ where
                     ctx.fill(cell_rect, &rtc.header_selected_background);
                 }
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                if let Some(log_main_idx) = Remap::Pristine.get_log_idx(vis_main_idx) {
-                    // TODO: use proper remap
+                if let Some(log_main_idx) = data.remaps[&self.axis].get_log_idx(vis_main_idx) {
                     headers.with(log_main_idx, |col_name| {
                         ctx.with_save(|ctx| {
                             let layout_origin = padded_rect.origin().to_vec2();

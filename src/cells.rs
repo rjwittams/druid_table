@@ -74,7 +74,6 @@ impl<RowData: Data> Editing<RowData> {
 
             let pod = WidgetPod::new(editor);
 
-            log::info!("Made editor widget id p {:?} c{:?}", ctx.widget_id(),pod.id());
             *self = Editing::Cell {
                 single_cell: cell.clone(),
                 child: pod,
@@ -99,30 +98,29 @@ impl<RowData: Data> Editing<RowData> {
     }
 }
 
-pub struct Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
+pub struct Cells<TableData, CellDel, RowMeasure, ColumnMeasure>
 where
-    RowData: Data,
-    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    TableData: IndexedData<Idx = LogIdx>,
+    TableData::Item: Data,
     CellDel: CellsDelegate<TableData>, // The length is the number of columns
     ColumnMeasure: AxisMeasure,
-    RowMeasure: AxisMeasure,
+    RowMeasure: AxisMeasure
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
     column_measure: ColumnMeasure,
     row_measure: RowMeasure,
     cell_delegate: CellDel,
-    editing: Editing<RowData>,
+    editing: Editing<TableData::Item>,
     dragging_selection: bool,
-    phantom_rd: PhantomData<RowData>,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
-    Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure>
+impl<TableData, CellDel, RowMeasure, ColumnMeasure>
+    Cells<TableData, CellDel, RowMeasure, ColumnMeasure>
 where
-    RowData: Data,
-    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    TableData: IndexedData<Idx = LogIdx>,
+    TableData::Item : Data,
     CellDel: CellsDelegate<TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
@@ -132,7 +130,7 @@ where
         column_measure: ColumnMeasure,
         row_measure: RowMeasure,
         cells_delegate: CellDel,
-    ) -> Cells<RowData, TableData, CellDel, RowMeasure, ColumnMeasure> {
+    ) -> Cells<TableData, CellDel, RowMeasure, ColumnMeasure> {
         Cells {
             config,
             resolved_config: None,
@@ -141,7 +139,6 @@ where
             cell_delegate: cells_delegate,
             editing: Inactive,
             dragging_selection: false,
-            phantom_rd: PhantomData::default(),
             phantom_td: PhantomData::default(),
         }
     }
@@ -199,7 +196,7 @@ where
         log_row_idx: LogIdx,
         vis_row_idx: VisIdx,
         row_top: Option<f64>,
-        row: &RowData,
+        row: &TableData::Item,
     ) {
         if let Some(rtc) = &self.resolved_config {
             for vis_col_idx in cols {
@@ -338,11 +335,11 @@ where
 pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
 pub const SORT_CHANGED: Selector<TableAxis> = Selector::new( "druid-builtin.table.sort-changed");
 
-impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
-    for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+impl<TableData, ColDel, RowMeasure, ColumnMeasure> Widget<TableState<TableData>>
+    for Cells<TableData, ColDel, RowMeasure, ColumnMeasure>
 where
-    RowData: Data,
-    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    TableData: IndexedData<Idx = LogIdx>,
+    TableData::Item : Data,
     ColDel: CellsDelegate<TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
@@ -617,11 +614,11 @@ where
 }
 
 
-impl<RowData, TableData, ColDel, RowMeasure, ColumnMeasure> Bindable
-    for Cells<RowData, TableData, ColDel, RowMeasure, ColumnMeasure>
+impl<TableData, ColDel, RowMeasure, ColumnMeasure> Bindable
+    for Cells<TableData, ColDel, RowMeasure, ColumnMeasure>
 where
-    RowData: Data,
-    TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+    TableData: IndexedData<Idx = LogIdx>,
+    TableData::Item : Data,
     ColDel: CellsDelegate<TableData>,
     ColumnMeasure: AxisMeasure,
     RowMeasure: AxisMeasure,
