@@ -149,14 +149,14 @@ impl<TableData: Data> TableState<TableData> {
         }
     }
 
-    pub fn remap_axis(&mut self, axis: &TableAxis, f: impl Fn(&TableData, &RemapSpec)->Remap){
+    pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec)->Remap){
         self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
     }
 }
 
 
 impl CellDemap for AxisPair<Remap>{
-    fn get_log_idx(&self, axis: &TableAxis, vis: &VisIdx) -> Option<LogIdx> {
+    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
         self[axis].get_log_idx(*vis)
     }
 }

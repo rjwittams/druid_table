@@ -35,10 +35,10 @@ impl<T: Data + Debug + Default> Data for AxisPair<T> {
 }
 
 impl TableAxis {
-    pub fn cross_axis(&self) -> &TableAxis {
+    pub fn cross_axis(&self) -> TableAxis {
         match self {
-            Rows => &Columns,
-            Columns => &Rows,
+            Rows => Columns,
+            Columns => Rows,
         }
     }
 
@@ -234,7 +234,7 @@ impl AxisMeasure {
     }
 }
 
-pub trait AxisMeasureT: Debug {
+trait AxisMeasureT: Debug {
     fn border(&self) -> f64;
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap);
     fn total_pixel_length(&self) -> f64;

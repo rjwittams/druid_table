@@ -123,12 +123,12 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             .push(TableColumn::new(header, Box::new(cell_render)));
     }
 
-    pub fn measuring_axis(mut self, axis: &TableAxis, measure: AxisMeasurementType) -> Self {
+    pub fn measuring_axis(mut self, axis: TableAxis, measure: AxisMeasurementType) -> Self {
         self.measurements[axis] = measure;
         self
     }
 
-    pub fn build_measure(&self, axis: &TableAxis, size: f64) -> AxisMeasure {
+    pub fn build_measure(&self, axis: TableAxis, size: f64) -> AxisMeasure {
         match self.measurements[axis] {
             AxisMeasurementType::Individual => AxisMeasure::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size)))),
             AxisMeasurementType::Uniform => AxisMeasure::Fixed(FixedAxisMeasure::new(size)),
@@ -136,8 +136,8 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     }
 
     pub fn build_measures(&self) -> AxisPair<AxisMeasure>{
-        AxisPair::new(self.build_measure(&TableAxis::Rows, 30.),
-                      self.build_measure(&TableAxis::Columns, 100.))
+        AxisPair::new(self.build_measure(TableAxis::Rows, 30.),
+                      self.build_measure(TableAxis::Columns, 100.))
     }
 
     pub fn build_args(self) -> DefaultTableArgs<TableData> {

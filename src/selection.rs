@@ -10,7 +10,7 @@ impl<T: Debug> AxisPair<T> {
         AxisPair { row, col }
     }
 
-    pub fn new_for_axis(axis: &TableAxis, main: T, cross: T) -> AxisPair<T> where T : Default {
+    pub fn new_for_axis(axis: TableAxis, main: T, cross: T) -> AxisPair<T> where T : Default {
         let mut ca = AxisPair::new(Default::default(), Default::default());
         ca[axis] = main;
         ca[axis.cross_axis()] = cross;
@@ -50,39 +50,39 @@ impl CellRect {
     }
 
     fn contains_cell(&self, cell_addr: &AxisPair<VisIdx>) -> bool {
-        self.contains_idx(&TableAxis::Columns, cell_addr.col)
-            && self.contains_idx(&TableAxis::Rows, cell_addr.row)
+        self.contains_idx(TableAxis::Columns, cell_addr.col)
+            && self.contains_idx(TableAxis::Rows, cell_addr.row)
     }
 
-    fn range(&self, axis: &TableAxis) -> (VisIdx, VisIdx) {
+    fn range(&self, axis: TableAxis) -> (VisIdx, VisIdx) {
         match axis {
             TableAxis::Rows => (self.start_row, self.end_row),
             TableAxis::Columns => (self.start_col, self.end_col),
         }
     }
 
-    fn contains_idx(&self, axis: &TableAxis, idx: VisIdx) -> bool {
+    fn contains_idx(&self, axis: TableAxis, idx: VisIdx) -> bool {
         let (start, end) = self.range(axis);
         start <= idx && end >= idx
     }
 }
 
 trait AxisPairMove<O> {
-    fn move_by(&self, axis: &TableAxis, amount: O) -> Self;
+    fn move_by(&self, axis: TableAxis, amount: O) -> Self;
 }
 
 impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for AxisPair<T> {
-    fn move_by(&self, axis: &TableAxis, amount: O) -> AxisPair<T> {
+    fn move_by(&self, axis: TableAxis, amount: O) -> AxisPair<T> {
         let mut moved = (*self).clone();
         moved[axis] = self[axis] + amount;
         moved
     }
 }
 
-impl<T: Debug> Index<&TableAxis> for AxisPair<T> {
+impl<T: Debug> Index<TableAxis> for AxisPair<T> {
     type Output = T;
 
-    fn index(&self, axis: &TableAxis) -> &Self::Output {
+    fn index(&self, axis: TableAxis) -> &Self::Output {
         match axis {
             TableAxis::Rows => &self.row,
             TableAxis::Columns => &self.col,
@@ -90,8 +90,8 @@ impl<T: Debug> Index<&TableAxis> for AxisPair<T> {
     }
 }
 
-impl<T: Debug> IndexMut<&TableAxis> for AxisPair<T> {
-    fn index_mut(&mut self, axis: &TableAxis) -> &mut Self::Output {
+impl<T: Debug> IndexMut<TableAxis> for AxisPair<T> {
+    fn index_mut(&mut self, axis: TableAxis) -> &mut Self::Output {
         match axis {
             TableAxis::Rows => &mut self.row,
             TableAxis::Columns => &mut self.col,
@@ -126,7 +126,7 @@ pub struct SliceRange{
 
 impl SliceRange{
     pub fn to_cell_rect(&self, (cross_s, cross_e): (VisIdx, VisIdx)) -> CellRect {
-        let main =  VisIdx::ascending(self.range.focus.vis[&self.axis], self.range.extent.vis[&self.axis]);
+        let main =  VisIdx::ascending(self.range.focus.vis[self.axis], self.range.extent.vis[self.axis]);
         let cross = (cross_s + VisOffset(-1), cross_e + VisOffset(1));
         match &self.axis {
             TableAxis::Rows => CellRect::new(main, cross),
@@ -153,7 +153,7 @@ impl SingleSlice {
     }
 
     pub fn to_cell_rect(&self, (cross_s, cross_e): (VisIdx, VisIdx)) -> CellRect {
-        let main = self.focus.vis[&self.axis];
+        let main = self.focus.vis[self.axis];
         let main = (main, main);
         let cross = (cross_s + VisOffset(-1), cross_e + VisOffset(1));
         match &self.axis {
@@ -203,12 +203,12 @@ impl Default for TableSelection {
 }
 
 pub trait CellDemap {
-    fn get_log_idx(&self, axis: &TableAxis, vis: &VisIdx) -> Option<LogIdx>;
+    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx>;
 
     fn get_log_cell(&self, vis: &AxisPair<VisIdx>) -> Option<AxisPair<LogIdx>> {
-        self.get_log_idx(&TableAxis::Rows, &vis.row)
+        self.get_log_idx(TableAxis::Rows, &vis.row)
             .map(|row| {
-                self.get_log_idx(&TableAxis::Columns, &vis.col)
+                self.get_log_idx(TableAxis::Columns, &vis.col)
                     .map(|col| AxisPair::new(row, col))
             })
             .flatten()
@@ -243,7 +243,7 @@ impl TableSelection {
 
     pub fn move_focus(
         &self,
-        axis: &TableAxis,
+        axis: TableAxis,
         amount: VisOffset,
         cell_demap: &impl CellDemap,
     ) -> Option<TableSelection> {
@@ -273,7 +273,7 @@ impl TableSelection {
                 })
             },
             Self::SliceRange(SliceRange{axis, range})=>{
-                let new_vis = range.focus.vis.move_by(axis, amount);
+                let new_vis = range.focus.vis.move_by(*axis, amount);
                 cell_demap.get_log_cell(&new_vis).map(|log| {
                     Self::SingleSlice(SingleSlice::new(axis.clone(), SingleCell::new(new_vis, log)))
                 })
@@ -298,7 +298,7 @@ impl TableSelection {
 
     pub fn extend_in_axis(
         &mut self,
-        axis: &TableAxis,
+        axis: TableAxis,
         vis: VisIdx,
         cell_demap: &impl CellDemap,
     ){
@@ -315,14 +315,14 @@ impl TableSelection {
 
     pub fn select_in_axis(
         &mut self,
-        axis: &TableAxis,
+        axis: TableAxis,
         vis: VisIdx,
         cell_demap: &impl CellDemap,
     ){
         let vis_addr = AxisPair::new_for_axis(axis, vis, Default::default());
         if let Some(log_addr) = cell_demap.get_log_cell(&vis_addr) {
             *self = TableSelection::SingleSlice(
-                SingleSlice::new(*axis, SingleCell::new(vis_addr, log_addr)),
+                SingleSlice::new(axis, SingleCell::new(vis_addr, log_addr)),
             )
         }
     }
@@ -368,13 +368,13 @@ impl TableSelection {
         self.focus().map(|x|&x.vis)
     }
 
-    pub fn to_axis_selection(&self, for_axis: &TableAxis, _cell_demap: &impl CellDemap) -> IndicesSelection {
+    pub fn to_axis_selection(&self, for_axis: TableAxis, _cell_demap: &impl CellDemap) -> IndicesSelection {
         match self {
             Self::NoSelection => IndicesSelection::NoSelection,
             Self::SingleCell(sc) => IndicesSelection::Single(sc.vis[for_axis]),
             Self::SingleSlice(SingleSlice { axis, focus }) => {
-                if for_axis == axis {
-                    IndicesSelection::Single(focus.vis[axis])
+                if for_axis == *axis {
+                    IndicesSelection::Single(focus.vis[*axis])
                 } else {
                     IndicesSelection::NoSelection
                 }
@@ -386,8 +386,8 @@ impl TableSelection {
                 }
             },
             Self::SliceRange(SliceRange{axis, range: CellRange{ focus, extent }}) =>{
-                if for_axis == axis {
-                    IndicesSelection::Range { focus: focus.vis[&axis] , extent: extent.vis[&axis] } // Todo remove log
+                if for_axis == *axis {
+                    IndicesSelection::Range { focus: focus.vis[*axis] , extent: extent.vis[*axis] } // Todo remove log
                 }else{
                     IndicesSelection::NoSelection
                 }
@@ -403,7 +403,7 @@ impl TableSelection {
                     DrawableSelections::new(Some(sc.vis.clone()), Default::default())
             }
             TableSelection::SingleSlice(sl)
-                if bounding.contains_idx(&sl.axis, sl.focus.vis[&sl.axis]) =>
+                if bounding.contains_idx(sl.axis, sl.focus.vis[sl.axis]) =>
             {
                 DrawableSelections::new(
                     Some(sl.focus.vis.clone()),
@@ -411,8 +411,8 @@ impl TableSelection {
                 )
             }
             TableSelection::CellRange(CellRange{focus, extent})=>{
-                let row = VisIdx::ascending(focus.vis[&TableAxis::Rows], extent.vis[&TableAxis::Rows]);
-                let col = VisIdx::ascending(focus.vis[&TableAxis::Columns], extent.vis[&TableAxis::Columns]);
+                let row = VisIdx::ascending(focus.vis[TableAxis::Rows], extent.vis[TableAxis::Rows]);
+                let col = VisIdx::ascending(focus.vis[TableAxis::Columns], extent.vis[TableAxis::Columns]);
 
                 let cell_rect = CellRect::new( row, col );
 
@@ -423,8 +423,8 @@ impl TableSelection {
                 )
             },
             TableSelection::SliceRange(sr)
-            if bounding.contains_idx(&sr.axis, sr.range.focus.vis[&sr.axis])
-                || bounding.contains_idx(&sr.axis, sr.range.extent.vis[&sr.axis]) =>{
+            if bounding.contains_idx(sr.axis, sr.range.focus.vis[sr.axis])
+                || bounding.contains_idx(sr.axis, sr.range.extent.vis[sr.axis]) =>{
                 DrawableSelections::new(
                     Some(sr.range.focus.vis),
                     vec![sr.to_cell_rect( bounding.range(sr.axis.cross_axis()) )]

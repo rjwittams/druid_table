@@ -192,7 +192,7 @@ fn group<T: Data, W: Widget<T> + 'static>(w: W) -> Padding<T> {
 fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
     let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
         .measuring_axis(
-            &TableAxis::Rows,
+            TableAxis::Rows,
             if settings.row_fixed {
                 AxisMeasurementType::Uniform
             } else {
@@ -200,7 +200,7 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
             },
         )
         .measuring_axis(
-            &TableAxis::Columns,
+            TableAxis::Columns,
             if settings.col_fixed {
                 AxisMeasurementType::Uniform
             } else {

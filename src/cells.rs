@@ -132,11 +132,11 @@ where
 
     fn find_cell(&self, data: &TableState<TableData>, pos: &Point) -> Option<SingleCell> {
         let (r, c) = (
-            data.measures[&TableAxis::Rows].vis_idx_from_pixel(pos.y),
-            data.measures[&TableAxis::Columns].vis_idx_from_pixel(pos.x),
+            data.measures[TableAxis::Rows].vis_idx_from_pixel(pos.y),
+            data.measures[TableAxis::Columns].vis_idx_from_pixel(pos.x),
         );
-        let log_row = r.and_then(|r| data.remaps[&TableAxis::Rows].get_log_idx(r));
-        let log_col = c.and_then(|c| data.remaps[&TableAxis::Columns].get_log_idx(c));
+        let log_row = r.and_then(|r| data.remaps[TableAxis::Rows].get_log_idx(r));
+        let log_col = c.and_then(|c| data.remaps[TableAxis::Columns].get_log_idx(c));
         Some(SingleCell::new(
             AxisPair::new(r?, c?),
             AxisPair::new(log_row?, log_col?),
@@ -145,8 +145,8 @@ where
 
     fn measured_size(&mut self, measures: &AxisPair<AxisMeasure>) -> Size {
         Size::new(
-            measures[&TableAxis::Columns].total_pixel_length(),
-            measures[&TableAxis::Rows].total_pixel_length(),
+            measures[TableAxis::Columns].total_pixel_length(),
+            measures[TableAxis::Rows].total_pixel_length(),
         )
     }
 
@@ -158,11 +158,11 @@ where
         rect: &CellRect,
     ) {
         for vis_row_idx in rect.rows() {
-            let col_remap = &data.remaps[&TableAxis::Columns];
+            let col_remap = &data.remaps[TableAxis::Columns];
             let measures = &data.measures;
-            let row_top = measures[&TableAxis::Rows].first_pixel_from_vis(vis_row_idx);
+            let row_top = measures[TableAxis::Rows].first_pixel_from_vis(vis_row_idx);
 
-            if let Some(log_row_idx) = data.remaps[&TableAxis::Rows].get_log_idx(vis_row_idx) {
+            if let Some(log_row_idx) = data.remaps[TableAxis::Rows].get_log_idx(vis_row_idx) {
                 data.data.with(log_row_idx, |row| {
                     self.paint_row(
                         ctx,
@@ -190,8 +190,8 @@ where
         col_remap: &Remap,
         measures: &AxisPair<AxisMeasure>
     ) {
-        let col_measure = &measures[&TableAxis::Columns];
-        let row_measure = &measures[&TableAxis::Rows];
+        let col_measure = &measures[TableAxis::Columns];
+        let row_measure = &measures[TableAxis::Rows];
         if let Some(rtc) = &self.resolved_config {
             for vis_col_idx in cols {
                 if let Some(log_col_idx) = col_remap.get_log_idx(vis_col_idx) {
@@ -250,8 +250,8 @@ where
         let sel_color = &rtc.selection_color;
         let sel_fill = &sel_color.clone().with_alpha(0.2);
 
-        let col_measure = &data.measures[&TableAxis::Columns];
-        let row_measure = &data.measures[&TableAxis::Rows];
+        let col_measure = &data.measures[TableAxis::Columns];
+        let row_measure = &data.measures[TableAxis::Rows];
 
         for range_rect in &selected.ranges {
 
@@ -297,8 +297,8 @@ where
 
 
     fn paint_editing(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
-        let col_measure = &data.measures[&TableAxis::Columns];
-        let row_measure = &data.measures[&TableAxis::Rows];
+        let col_measure = &data.measures[TableAxis::Columns];
+        let row_measure = &data.measures[TableAxis::Rows];
 
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
@@ -389,11 +389,11 @@ where
                 }
                 Event::Command(cmd) => {
                     if let Some(_)  = cmd.get(INIT_CELLS) {
-                        data.remap_specs[&TableAxis::Rows] = self.cell_delegate.initial_spec();
-                        remap_changed[&TableAxis::Rows] = true;
-                        remap_changed[&TableAxis::Columns] = true;
+                        data.remap_specs[TableAxis::Rows] = self.cell_delegate.initial_spec();
+                        remap_changed[TableAxis::Rows] = true;
+                        remap_changed[TableAxis::Columns] = true;
                     } else if let Some(ax) = cmd.get( SORT_CHANGED) {
-                        remap_changed[&ax] = true;
+                        remap_changed[*ax] = true;
                     } else {
                         match &mut self.editing {
                             Editing::Cell { single_cell, child } => {
@@ -410,25 +410,25 @@ where
                         KbKey::ArrowDown => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Rows, VisOffset(1), &data.remaps);
+                                    .move_focus(TableAxis::Rows, VisOffset(1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowUp => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Rows, VisOffset(-1), &data.remaps);
+                                    .move_focus(TableAxis::Rows, VisOffset(-1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowRight => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Columns, VisOffset(1), &data.remaps);
+                                    .move_focus(TableAxis::Columns, VisOffset(1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::ArrowLeft => {
                             new_selection =
                                 data.selection
-                                    .move_focus(&TableAxis::Columns, VisOffset(-1), &data.remaps);
+                                    .move_focus(TableAxis::Columns, VisOffset(-1), &data.remaps);
                             ctx.set_handled();
                         }
                         KbKey::Character(s) if s == " " => {
@@ -469,20 +469,20 @@ where
             }
 
             // TODO: move to update but need versioned pointers on measures
-            if remap_changed[&TableAxis::Rows] {
-                data.remap_axis(&TableAxis::Rows, |d, s| self.cell_delegate.remap_items(d, s));
-                data.measures[&TableAxis::Rows].set_axis_properties(
+            if remap_changed[TableAxis::Rows] {
+                data.remap_axis(TableAxis::Rows, |d, s| self.cell_delegate.remap_items(d, s));
+                data.measures[TableAxis::Rows].set_axis_properties(
                     rtc.cell_border_thickness,
                     data.data.idx_len(),
-                    &data.remaps[&TableAxis::Rows],
+                    &data.remaps[TableAxis::Rows],
                 );
                 ctx.request_layout(); // Could avoid if we know we overflow scroll?
             }
-            if remap_changed[&TableAxis::Columns] {
-                data.measures[&TableAxis::Columns].set_axis_properties(
+            if remap_changed[TableAxis::Columns] {
+                data.measures[TableAxis::Columns].set_axis_properties(
                     rtc.cell_border_thickness,
                     self.cell_delegate.number_of_columns_in_data(&data.data),
-                    &data.remaps[&TableAxis::Columns],
+                    &data.remaps[TableAxis::Columns],
                 );
                 ctx.request_layout();
             }
@@ -544,18 +544,18 @@ where
             Editing::Cell { single_cell, child } => {
                 let vis = &single_cell.vis;
                 let size = Size::new(
-                    data.measures[&TableAxis::Columns]
+                    data.measures[TableAxis::Columns]
                         .pixels_length_for_vis(vis.col)
                         .unwrap_or(0.),
-                    data.measures[&TableAxis::Rows]
+                    data.measures[TableAxis::Rows]
                         .pixels_length_for_vis(vis.row)
                         .unwrap_or(0.),
                 );
                 let origin = Point::new(
-                    data.measures[&TableAxis::Columns]
+                    data.measures[TableAxis::Columns]
                         .first_pixel_from_vis(vis.col)
                         .unwrap_or(0.),
-                    data.measures[&TableAxis::Rows].first_pixel_from_vis(vis.row).unwrap_or(0.),
+                    data.measures[TableAxis::Rows].first_pixel_from_vis(vis.row).unwrap_or(0.),
                 );
                 let bc = BoxConstraints::tight(size);
                 data.data.with(single_cell.log.row, |row| {
@@ -581,9 +581,9 @@ where
         ctx.fill(draw_rect, &rtc.cells_background);
 
         let cell_rect = CellRect::new(
-            data.measures[&TableAxis::Rows]
+            data.measures[TableAxis::Rows]
                 .vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
-            data.measures[&TableAxis::Columns]
+            data.measures[TableAxis::Columns]
                 .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 

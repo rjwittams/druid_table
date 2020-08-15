@@ -143,15 +143,15 @@ where
         data: &mut TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
-        let measure = &mut data.measures[&self.axis];
+        let measure = &mut data.measures[self.axis];
         match _event {
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
                     let extend = me.mods.ctrl() || me.mods.meta();
                     if let Some(vis_idx) = measure.vis_idx_from_pixel(pix_main) {
-                        if let Some(log_idx) = data.remaps[&self.axis].get_log_idx(vis_idx) {
-                            data.remap_specs[&self.axis.cross_axis()].toggle_sort(log_idx, extend);
+                        if let Some(log_idx) = data.remaps[self.axis].get_log_idx(vis_idx) {
+                            data.remap_specs[self.axis.cross_axis()].toggle_sort(log_idx, extend);
                         }
                         ctx.set_handled()
                     }
@@ -167,9 +167,9 @@ where
                     } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
                         if me.mods.shift(){
-                            sel.extend_in_axis(&self.axis, idx, &data.remaps);
+                            sel.extend_in_axis(self.axis, idx, &data.remaps);
                         }else {
-                            sel.select_in_axis(&self.axis, idx, &data.remaps);
+                            sel.select_in_axis(self.axis, idx, &data.remaps);
                         }
                         self.selection_dragging = true;
                         ctx.set_active(true);
@@ -190,7 +190,7 @@ where
                     ctx.set_handled()
                 } else if self.selection_dragging {
                     if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
-                        data.selection.extend_in_axis(&self.axis, idx, &data.remaps);
+                        data.selection.extend_in_axis(self.axis, idx, &data.remaps);
                     }
                 } else if let Some(idx) = measure.pixel_near_border(pix_main) {
                     if idx > VisIdx(0) {
@@ -269,7 +269,7 @@ where
 
         bc.constrain(
             self.axis
-                .size(data.measures[&self.axis].total_pixel_length(), cross_axis_length),
+                .size(data.measures[self.axis].total_pixel_length(), cross_axis_length),
         )
     }
 
@@ -279,8 +279,8 @@ where
         data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) {
-        let measure = &data.measures[&self.axis];
-        let indices_selection = data.selection.to_axis_selection(&self.axis, &data.remaps);
+        let measure = &data.measures[self.axis];
+        let indices_selection = data.selection.to_axis_selection(self.axis, &data.remaps);
 
         // TODO build on change of spec
         let cross_rem = &data.remap_specs[self.axis.cross_axis()];
@@ -320,7 +320,7 @@ where
                     ctx.fill(cell_rect, &rtc.header_selected_background);
                 }
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                if let Some(log_main_idx) = data.remaps[&self.axis].get_log_idx(vis_main_idx) {
+                if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
                     headers.with(log_main_idx, |col_name| {
                         ctx.with_save(|ctx| {
                             let layout_origin = padded_rect.origin().to_vec2();
