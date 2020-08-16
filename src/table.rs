@@ -271,9 +271,8 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         if let (Some(AxisIds { headers, scroll }), Some(col_h)) = (ids.columns, col_h) {
             let (source, render) = col_h.content();
 
-            let mut col_headings =
+            let col_headings =
                 Headings::new(TableAxis::Columns, table_config.clone(), source, render);
-            let cells_id = ids.cells;
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)

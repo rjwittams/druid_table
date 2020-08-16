@@ -15,6 +15,7 @@ use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
 use druid::widget::Bindable;
 use std::collections::HashMap;
+use crate::IndicesSelection;
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -133,6 +134,50 @@ where
         measure.set_far_pixel_for_vis(vis_idx, pixel);
         // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
         ctx.request_layout();
+    }
+
+    fn paint_header(&mut self, ctx: &mut PaintCtx, data: &TableState<<HeadersSource as HeadersFromData>::TableData>,
+                    env: &Env, measure: &AxisMeasure, indices_selection: &IndicesSelection,
+                    sort_dirs: &HashMap<LogIdx, SortSpec>,
+                    vis_main_idx: VisIdx) -> Option<()> {
+        let rtc = self.resolved_config.as_ref()?;
+        let headers = self.headers.as_ref()?;
+        let axis = self.axis;
+        let header_render = &mut self.header_render;
+
+        let cell_rect = Rect::from_origin_size(axis.cell_origin(measure.first_pixel_from_vis(vis_main_idx)?, 0.),
+                                               axis.size(measure.pixels_length_for_vis(vis_main_idx)?, rtc.cross_axis_length(&axis)));
+
+        if indices_selection.vis_index_selected(vis_main_idx) {
+            ctx.fill(cell_rect, &rtc.header_selected_background);
+        }
+
+        let padded_rect = cell_rect.inset(-rtc.cell_padding);
+        if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
+            let cell = CellCtx::Header(
+                &axis,
+                log_main_idx,
+                sort_dirs.get(&log_main_idx),
+            );
+
+            headers.with(log_main_idx, |col_name| {
+                ctx.with_save(|ctx| {
+                    let layout_origin = padded_rect.origin().to_vec2();
+                    ctx.clip(padded_rect);
+                    ctx.transform(Affine::translate(layout_origin));
+                    ctx.with_child_ctx(padded_rect, |ctxt| {
+                        header_render.paint(ctxt, &cell, col_name, env);
+                    });
+                });
+            });
+
+            ctx.stroke_bottom_left_border(
+                &cell_rect,
+                &rtc.cells_border,
+                rtc.cell_border_thickness,
+            );
+        }
+        Some(())
     }
 }
 
@@ -297,7 +342,7 @@ where
             .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction)))
             .collect();
 
-        if let (Some(rtc), Some(headers)) = (&self.resolved_config, &self.headers) {
+        if let Some(rtc) = &self.resolved_config {
             self.header_render.init(ctx, env);
             let rect = ctx.region().to_rect();
 
@@ -306,49 +351,14 @@ where
             let (p0, p1) = self.axis.pixels_from_rect(&rect);
             let (start_main, end_main) = measure.vis_range_from_pixels(p0, p1);
 
-            let header_render = &mut self.header_render;
-
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
                 // TODO: excessive unwrapping
-                let first_pix = measure.first_pixel_from_vis(vis_main_idx).unwrap_or(0.);
-                let length_pix = measure.pixels_length_for_vis(vis_main_idx).unwrap_or(0.);
-                let axis = self.axis;
-                let origin = axis.cell_origin(first_pix, 0.);
-                Point::new(first_pix, 0.);
-                let size = axis.size(length_pix, rtc.cross_axis_length(&axis));
-                let cell_rect = Rect::from_origin_size(origin, size);
-
-                if indices_selection.vis_index_selected(vis_main_idx) {
-                    ctx.fill(cell_rect, &rtc.header_selected_background);
-                }
-                let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
-                    headers.with(log_main_idx, |col_name| {
-                        ctx.with_save(|ctx| {
-                            let layout_origin = padded_rect.origin().to_vec2();
-                            ctx.clip(padded_rect);
-                            ctx.transform(Affine::translate(layout_origin));
-                            ctx.with_child_ctx(padded_rect, |ctxt| {
-                                let cell = CellCtx::Header(
-                                    &axis,
-                                    log_main_idx,
-                                    sort_dirs.get(&log_main_idx),
-                                );
-                                header_render.paint(ctxt, &cell, col_name, env);
-                            });
-                        });
-                    });
-
-                    ctx.stroke_bottom_left_border(
-                        &cell_rect,
-                        &rtc.cells_border,
-                        rtc.cell_border_thickness,
-                    );
-                }
+                self.paint_header(ctx, data, env, measure, &indices_selection, &sort_dirs,  vis_main_idx);
             }
         }
     }
 }
+
 
 impl<HeadersSource, Render> Bindable for Headings<HeadersSource, Render>
 where
@@ -356,3 +366,4 @@ where
     Render: CellRender<HeadersSource::Header>,
 {
 }
+
