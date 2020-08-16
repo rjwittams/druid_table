@@ -1,7 +1,7 @@
 use druid_table::{
-    CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, FixedAxisMeasure,
-    HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper,
-    SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, AxisMeasure, AxisPair
+    AxisMeasure, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory,
+    FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap,
+    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
 };
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
@@ -128,16 +128,22 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
             .on_result_of(|br: &LogIdx| br.0.to_string()),
     );
 
-    let measures = AxisPair::new(AxisMeasure::Fixed(FixedAxisMeasure::new(25.)), AxisMeasure::Fixed(FixedAxisMeasure::new(100.)));
-    Table::new_in_scope(TableArgs::new(
-        BigTableCells::new(
-            TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
-            columns,
+    let measures = AxisPair::new(
+        AxisMeasure::Fixed(FixedAxisMeasure::new(25.)),
+        AxisMeasure::Fixed(FixedAxisMeasure::new(100.)),
+    );
+    Table::new_in_scope(
+        TableArgs::new(
+            BigTableCells::new(
+                TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
+                columns,
+            ),
+            Some(rows),
+            Some(cols),
+            table_config,
         ),
-        Some(rows),
-        Some(cols),
-        table_config,
-    ), measures)
+        measures,
+    )
 }
 
 pub fn main() {

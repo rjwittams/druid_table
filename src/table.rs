@@ -1,13 +1,19 @@
-use crate::axis_measure::{AxisPair, TableAxis, AxisMeasure};
-use crate::cells::{CellsDelegate};
-use crate::headings::{HeadersFromData};
-use crate::{CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, RemapSpec, TableConfig, TableSelection, VisIdx, Remap};
-use druid::widget::{Axis, BindingExt, Container, CrossAxisAlignment, Flex, LensBindingExt, Scope, Scroll, ScrollToProperty, WidgetBindingExt, DefaultScopePolicy};
+use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis};
+use crate::cells::CellsDelegate;
+use crate::headings::HeadersFromData;
+use crate::selection::CellDemap;
+use crate::{
+    CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, TableConfig,
+    TableSelection, VisIdx,
+};
+use druid::widget::{
+    Axis, BindingExt, Container, CrossAxisAlignment, DefaultScopePolicy, Flex, LensBindingExt,
+    Scope, Scroll, ScrollToProperty, WidgetBindingExt,
+};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
 };
-use crate::selection::{CellDemap};
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -100,9 +106,7 @@ pub trait TableArgsT {
     type ColH: HeaderBuildT<TableData = Self::TableData>;
 
     type CellsDel: CellsDelegate<Self::TableData> + 'static;
-    fn content(
-        self,
-    ) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
+    fn content(self) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
 }
 
 impl<
@@ -133,11 +137,12 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
     pub(crate) selection: TableSelection,
-    #[data(ignore)] pub(crate) measures: AxisPair<AxisMeasure> // TODO
+    #[data(ignore)]
+    pub(crate) measures: AxisPair<AxisMeasure>, // TODO
 }
 
 impl<TableData: Data> TableState<TableData> {
-    pub fn new(data: TableData, measures:AxisPair<AxisMeasure>) -> Self {
+    pub fn new(data: TableData, measures: AxisPair<AxisMeasure>) -> Self {
         TableState {
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -145,22 +150,20 @@ impl<TableData: Data> TableState<TableData> {
             remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
             remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
             selection: TableSelection::default(),
-            measures
+            measures,
         }
     }
 
-    pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec)->Remap){
+    pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec) -> Remap) {
         self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
     }
 }
 
-
-impl CellDemap for AxisPair<Remap>{
+impl CellDemap for AxisPair<Remap> {
     fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx> {
         self[axis].get_log_idx(*vis)
     }
 }
-
 
 struct TableChild<TableData: Data> {
     ids: Ids,
@@ -178,7 +181,7 @@ impl<TableData: Data> TableChild<TableData> {
 
 pub struct Table<Args: TableArgsT> {
     args: Option<Args>,
-    child: Option<TableChild<Args::TableData>>
+    child: Option<TableChild<Args::TableData>>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -216,13 +219,16 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     pub fn new(args: Args) -> Self {
         Table {
             args: Some(args),
-            child: None
+            child: None,
         }
     }
 
     pub fn new_in_scope(args: Args, measures: AxisPair<AxisMeasure>) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
-        Container::new(Scope::new(DefaultScopePolicy::new(move|d|{TableState::new(d, measures.clone())}, data_lens), Table::new(args)))
+        Container::new(Scope::new(
+            DefaultScopePolicy::new(move |d| TableState::new(d, measures.clone()), data_lens),
+            Table::new(args),
+        ))
     }
 
     fn build_child(&self, args_t: Args) -> TableChild<Args::TableData> {
@@ -239,26 +245,20 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         );
 
         let cells_delegate = args.cells_delegate;
-        let cells = Cells::new(
-            table_config.clone(),
-            cells_delegate,
-        );
+        let cells = Cells::new(table_config.clone(), cells_delegate);
 
         // These have to be added before we move Cells into scroll
 
         let cells_scroll = Scroll::new(cells.with_id(ids.cells)).binding(
-            TableState::<Args::TableData>::scroll_x.bind(ScrollToProperty::new(Axis::Horizontal)).and(
-                TableState::<Args::TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical)),
-            ),
+            TableState::<Args::TableData>::scroll_x
+                .bind(ScrollToProperty::new(Axis::Horizontal))
+                .and(
+                    TableState::<Args::TableData>::scroll_y
+                        .bind(ScrollToProperty::new(Axis::Vertical)),
+                ),
         );
 
-        Self::add_headings(
-            args.col_h,
-            args.row_h,
-            table_config,
-            ids,
-            cells_scroll,
-        )
+        Self::add_headings(args.col_h, args.row_h, table_config, ids, cells_scroll)
     }
 
     fn add_headings(
@@ -271,12 +271,8 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         if let (Some(AxisIds { headers, scroll }), Some(col_h)) = (ids.columns, col_h) {
             let (source, render) = col_h.content();
 
-            let mut col_headings = Headings::new(
-                TableAxis::Columns,
-                table_config.clone(),
-                source,
-                render,
-            );
+            let mut col_headings =
+                Headings::new(TableAxis::Columns, table_config.clone(), source, render);
             let cells_id = ids.cells;
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
@@ -290,9 +286,9 @@ impl<Args: TableArgsT + 'static> Table<Args> {
                 .cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_child(ch_scroll)
                 .with_flex_child(widget, 1.);
-            Self::add_row_headings(table_config, true,  row_h, ids, cells_column)
+            Self::add_row_headings(table_config, true, row_h, ids, cells_column)
         } else {
-            Self::add_row_headings(table_config, false,  row_h, ids, widget)
+            Self::add_row_headings(table_config, false, row_h, ids, widget)
         }
     }
 
@@ -305,8 +301,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     ) -> TableChild<Args::TableData> {
         if let (Some(AxisIds { headers, scroll }), Some(row_h)) = (ids.rows, row_h) {
             let (source, render) = row_h.content();
-            let row_headings =
-                Headings::new(TableAxis::Rows, table_config.clone(), source, render);
+            let row_headings = Headings::new(TableAxis::Rows, table_config.clone(), source, render);
 
             let cells_id = ids.cells;
 

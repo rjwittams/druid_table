@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use druid_table::{
-    column, AxisMeasurementType, CellCtx, CellRender, CellRenderExt, DataCompare,
-    EditorFactory, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
+    column, AxisMeasurementType, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory,
+    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
 };
 
 use druid::im::{vector, Vector};

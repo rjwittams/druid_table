@@ -6,7 +6,7 @@ use druid::{
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
 };
 
-use crate::axis_measure::{LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasure};
+use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
@@ -88,7 +88,7 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
 pub struct Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>
+    Render: CellRender<HeadersSource::Header>,
 {
     axis: TableAxis,
     config: TableConfig,
@@ -97,13 +97,13 @@ where
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
     resize_dragging: Option<VisIdx>,
-    selection_dragging: bool
+    selection_dragging: bool,
 }
 
 impl<HeadersSource, Render> Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>
+    Render: CellRender<HeadersSource::Header>,
 {
     pub fn new(
         axis: TableAxis,
@@ -119,11 +119,17 @@ where
             headers: None,
             header_render,
             resize_dragging: None,
-            selection_dragging: false
+            selection_dragging: false,
         }
     }
 
-    fn set_pix_length_for_axis(&mut self, measure: &mut AxisMeasure, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
+    fn set_pix_length_for_axis(
+        &mut self,
+        measure: &mut AxisMeasure,
+        ctx: &mut EventCtx,
+        vis_idx: VisIdx,
+        pixel: f64,
+    ) {
         measure.set_far_pixel_for_vis(vis_idx, pixel);
         // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
         ctx.request_layout();
@@ -134,7 +140,7 @@ impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>
     for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>
+    Render: CellRender<HeadersSource::Header>,
 {
     fn event(
         &mut self,
@@ -166,9 +172,9 @@ where
                         }
                     } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
-                        if me.mods.shift(){
+                        if me.mods.shift() {
                             sel.extend_in_axis(self.axis, idx, &data.remaps);
-                        }else {
+                        } else {
                             sel.select_in_axis(self.axis, idx, &data.remaps);
                         }
                         self.selection_dragging = true;
@@ -176,11 +182,11 @@ where
                         ctx.set_handled()
                     }
                 }
-            },
+            }
             Event::MouseMove(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.resize_dragging {
-                    self.set_pix_length_for_axis(measure, ctx ,idx, pix_main);
+                    self.set_pix_length_for_axis(measure, ctx, idx, pix_main);
 
                     if me.buttons.is_empty() {
                         self.resize_dragging = None;
@@ -204,7 +210,7 @@ where
                         ctx.set_handled();
                     }
                 }
-            },
+            }
             Event::MouseUp(me) => {
                 if let Some(idx) = self.resize_dragging {
                     let pix_main = self.axis.main_pixel_from_point(&me.pos);
@@ -267,10 +273,10 @@ where
             self.axis.default_header_cross()
         };
 
-        bc.constrain(
-            self.axis
-                .size(data.measures[self.axis].total_pixel_length(), cross_axis_length),
-        )
+        bc.constrain(self.axis.size(
+            data.measures[self.axis].total_pixel_length(),
+            cross_axis_length,
+        ))
     }
 
     fn paint(
@@ -303,20 +309,14 @@ where
             let header_render = &mut self.header_render;
 
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
-
                 // TODO: excessive unwrapping
-                let first_pix = measure
-                    .first_pixel_from_vis(vis_main_idx)
-                    .unwrap_or(0.);
-                let length_pix = measure
-                    .pixels_length_for_vis(vis_main_idx)
-                    .unwrap_or(0.);
+                let first_pix = measure.first_pixel_from_vis(vis_main_idx).unwrap_or(0.);
+                let length_pix = measure.pixels_length_for_vis(vis_main_idx).unwrap_or(0.);
                 let axis = self.axis;
                 let origin = axis.cell_origin(first_pix, 0.);
                 Point::new(first_pix, 0.);
                 let size = axis.size(length_pix, rtc.cross_axis_length(&axis));
                 let cell_rect = Rect::from_origin_size(origin, size);
-
 
                 if indices_selection.vis_index_selected(vis_main_idx) {
                     ctx.fill(cell_rect, &rtc.header_selected_background);
@@ -353,6 +353,6 @@ where
 impl<HeadersSource, Render> Bindable for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>
+    Render: CellRender<HeadersSource::Header>,
 {
 }

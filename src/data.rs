@@ -99,7 +99,7 @@ impl Remap {
     }
 }
 
-impl Default for Remap{
+impl Default for Remap {
     fn default() -> Self {
         Remap::Pristine
     }
@@ -156,7 +156,7 @@ impl RemapSpec {
         self.sort_by.is_empty()
     }
 
-    pub(crate) fn toggle_sort(&mut self, log_idx: LogIdx, extend: bool)->bool{
+    pub(crate) fn toggle_sort(&mut self, log_idx: LogIdx, extend: bool) -> bool {
         let sort_by = &mut self.sort_by;
         let log_idx = log_idx.0;
 
@@ -165,20 +165,14 @@ impl RemapSpec {
                 let dir = direction.clone();
                 sort_by.pop_back();
                 if dir == SortDirection::Ascending {
-                    sort_by.push_back(SortSpec::new(
-                        log_idx,
-                        SortDirection::Descending,
-                    ));
+                    sort_by.push_back(SortSpec::new(log_idx, SortDirection::Descending));
                 }
             }
             _ => {
                 if !extend {
                     sort_by.clear();
                 }
-                sort_by.push_back(SortSpec::new(
-                    log_idx,
-                    SortDirection::Ascending,
-                ));
+                sort_by.push_back(SortSpec::new(log_idx, SortDirection::Ascending));
             }
         }
         // Handle sorting disabled for a column

@@ -1,9 +1,12 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, Selector};
+use druid::{
+    Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx,
+    PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetPod,
+};
 
-use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, AxisMeasure};
+use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
@@ -38,37 +41,42 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn is_editing(&self, cell:&SingleCell)->bool{
+    fn is_editing(&self, cell: &SingleCell) -> bool {
         match self {
-            Editing::Cell { single_cell, .. } => {
-                single_cell.vis.eq(&cell.vis)
-            }
+            Editing::Cell { single_cell, .. } => single_cell.vis.eq(&cell.vis),
             _ => false,
         }
     }
 
-    fn handle_event<TableData: IndexedItems<Idx=LogIdx, Item=RowData>>(&mut self, ctx: &mut EventCtx,
-                                                           event: &Event,
-                                                           data: &mut TableData,
-                                                           env: &Env){
+    fn handle_event<TableData: IndexedItems<Idx = LogIdx, Item = RowData>>(
+        &mut self,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut TableData,
+        env: &Env,
+    ) {
         match self {
-            Editing::Cell { ref single_cell, ref mut child } => {
+            Editing::Cell {
+                ref single_cell,
+                ref mut child,
+            } => {
                 data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
             }
-            _ => { },
+            _ => {}
         }
     }
 
-    fn start_editing<TableData: IndexedItems<Item=RowData>>(&mut self,
-                                                            ctx: &mut EventCtx,
-                                                            data: &mut TableData,
-                                                            cell:&SingleCell,
-                                                            make_editor: impl FnMut(&CellCtx)->Option<Box<dyn Widget<RowData>>> ){
+    fn start_editing<TableData: IndexedItems<Item = RowData>>(
+        &mut self,
+        ctx: &mut EventCtx,
+        data: &mut TableData,
+        cell: &SingleCell,
+        make_editor: impl FnMut(&CellCtx) -> Option<Box<dyn Widget<RowData>>>,
+    ) {
         self.stop_editing(data);
         let mut me = make_editor;
         let cell_ctx = CellCtx::Cell(&cell);
         if let Some(editor) = me(&cell_ctx) {
-
             let pod = WidgetPod::new(editor);
 
             *self = Editing::Cell {
@@ -82,14 +90,14 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn stop_editing<TableData: IndexedItems<Item=RowData>>(&mut self, data: &mut TableData) {
-        match self{
-            Editing::Cell {single_cell, child}=>{
+    fn stop_editing<TableData: IndexedItems<Item = RowData>>(&mut self, data: &mut TableData) {
+        match self {
+            Editing::Cell { single_cell, child } => {
                 // Work out what to do with the previous pod if there is one.
                 // We could have lazy editors (that don't write back to data immediately) and send them a special command saying 'you are being shut down'.
                 // Would need to give them data for their row
             }
-            Editing::Inactive=>{}
+            Editing::Inactive => {}
         }
         *self = Editing::Inactive
     }
@@ -99,7 +107,7 @@ pub struct Cells<TableData, CellDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item: Data,
-    CellDel: CellsDelegate<TableData> // The length is the number of columns
+    CellDel: CellsDelegate<TableData>, // The length is the number of columns
 {
     config: TableConfig,
     resolved_config: Option<ResolvedTableConfig>,
@@ -109,17 +117,13 @@ where
     phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData, CellDel>
-    Cells<TableData, CellDel>
+impl<TableData, CellDel> Cells<TableData, CellDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
-    TableData::Item : Data,
-    CellDel: CellsDelegate<TableData>
+    TableData::Item: Data,
+    CellDel: CellsDelegate<TableData>,
 {
-    pub fn new(
-        config: TableConfig,
-        cells_delegate: CellDel,
-    ) -> Cells<TableData, CellDel> {
+    pub fn new(config: TableConfig, cells_delegate: CellDel) -> Cells<TableData, CellDel> {
         Cells {
             config,
             resolved_config: None,
@@ -132,22 +136,19 @@ where
 
     fn find_cell(&self, data: &TableState<TableData>, pos: &Point) -> Option<SingleCell> {
         let (r, c) = (
-            data.measures[TableAxis::Rows].vis_idx_from_pixel(pos.y),
-            data.measures[TableAxis::Columns].vis_idx_from_pixel(pos.x),
+            data.measures[TableAxis::Rows].vis_idx_from_pixel(pos.y)?,
+            data.measures[TableAxis::Columns].vis_idx_from_pixel(pos.x)?,
         );
-        let log_row = r.and_then(|r| data.remaps[TableAxis::Rows].get_log_idx(r));
-        let log_col = c.and_then(|c| data.remaps[TableAxis::Columns].get_log_idx(c));
+        let log_row = data.remaps[TableAxis::Rows].get_log_idx(r)?;
+        let log_col = data.remaps[TableAxis::Columns].get_log_idx(c)?;
         Some(SingleCell::new(
-            AxisPair::new(r?, c?),
-            AxisPair::new(log_row?, log_col?),
+            AxisPair::new(r, c),
+            AxisPair::new(log_row, log_col),
         ))
     }
 
     fn measured_size(&mut self, measures: &AxisPair<AxisMeasure>) -> Size {
-        Size::new(
-            measures[TableAxis::Columns].total_pixel_length(),
-            measures[TableAxis::Rows].total_pixel_length(),
-        )
+        measures.map(|m| m.total_pixel_length()).size()
     }
 
     fn paint_cells(
@@ -160,7 +161,6 @@ where
         for vis_row_idx in rect.rows() {
             let col_remap = &data.remaps[TableAxis::Columns];
             let measures = &data.measures;
-            let row_top = measures[TableAxis::Rows].first_pixel_from_vis(vis_row_idx);
 
             if let Some(log_row_idx) = data.remaps[TableAxis::Rows].get_log_idx(vis_row_idx) {
                 let table_data = &data.data;
@@ -171,8 +171,9 @@ where
                         &mut rect.cols(),
                         log_row_idx,
                         vis_row_idx,
-                        row_top,
-                        row, col_remap, measures
+                        row,
+                        col_remap,
+                        measures,
                     )
                 });
             }
@@ -186,29 +187,27 @@ where
         cols: &mut impl Iterator<Item = VisIdx>,
         log_row_idx: LogIdx,
         vis_row_idx: VisIdx,
-        row_top: Option<f64>,
         row: &TableData::Item,
         col_remap: &Remap,
-        measures: &AxisPair<AxisMeasure>
-    ) {
-        let col_measure = &measures[TableAxis::Columns];
-        let row_measure = &measures[TableAxis::Rows];
+        measures: &AxisPair<AxisMeasure>,
+    ) -> Option<()> {
         if let Some(rtc) = &self.resolved_config {
             for vis_col_idx in cols {
                 if let Some(log_col_idx) = col_remap.get_log_idx(vis_col_idx) {
-                    let cell_left = col_measure.first_pixel_from_vis(vis_col_idx);
+                    let sc = SingleCell::new(
+                        AxisPair::new(vis_row_idx, vis_col_idx),
+                        AxisPair::new(log_row_idx, log_col_idx),
+                    );
 
-                    // TODO: excessive unwrapping
                     let cell_rect = Rect::from_origin_size(
-                        Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
-                        Size::new(
-                            col_measure
-                                .pixels_length_for_vis(vis_col_idx)
-                                .unwrap_or(0.),
-                            row_measure
-                                .pixels_length_for_vis(vis_row_idx)
-                                .unwrap_or(0.),
-                        ),
+                        measures
+                            .zip_with(&sc.vis, |m, vis| m.first_pixel_from_vis(*vis))
+                            .opt()?
+                            .point(),
+                        measures
+                            .zip_with(&sc.vis, |m, vis| m.pixels_length_for_vis(*vis))
+                            .opt()?
+                            .size(),
                     );
                     let padded_rect = cell_rect.inset(-rtc.cell_padding);
 
@@ -216,11 +215,6 @@ where
                         let layout_origin = padded_rect.origin().to_vec2();
                         ctx.clip(padded_rect);
                         ctx.transform(Affine::translate(layout_origin));
-
-                        let sc = SingleCell::new(
-                            AxisPair::new(vis_row_idx, vis_col_idx),
-                            AxisPair::new(log_row_idx, log_col_idx),
-                        );
                         let cell = CellCtx::Cell(&sc);
                         ctx.with_child_ctx(padded_rect, |ctxt| {
                             self.cell_delegate.paint(ctxt, &cell, row, env);
@@ -237,6 +231,7 @@ where
                 }
             }
         }
+        Some(())
     }
 
     fn paint_selections(
@@ -245,104 +240,60 @@ where
         data: &TableState<TableData>,
         rtc: &ResolvedTableConfig,
         cell_rect: &CellRect,
-    ) {
+    ) -> Option<()> {
         let selected = data.selection.get_drawable_selections(cell_rect);
 
-        let sz = self.measured_size(&data.measures);
         let sel_color = &rtc.selection_color;
         let sel_fill = &sel_color.clone().with_alpha(0.2);
 
-        let col_measure = &data.measures[TableAxis::Columns];
-        let row_measure = &data.measures[TableAxis::Rows];
-
         for range_rect in &selected.ranges {
-
-            // TODO: excessive unwrapping
-            let fetched = (
-                col_measure
-                    .first_pixel_from_vis(range_rect.start_col),
-                col_measure
-                    .far_pixel_from_vis(range_rect.end_col)
-                    .unwrap_or(sz.width),
-                row_measure.first_pixel_from_vis(range_rect.start_row),
-                row_measure
-                    .far_pixel_from_vis(range_rect.end_row)
-                    .unwrap_or(sz.height),
-            );
-            if let (Some(x0), x1, Some(y0), y1) = fetched {
-                let range_draw_rect = Rect::new(x0, y0, x1, y1);
+            if let Some(range_draw_rect) = range_rect.to_pixel_rect(&data.measures) {
                 ctx.fill(range_draw_rect, sel_fill);
                 ctx.stroke(range_draw_rect, sel_color, rtc.cell_border_thickness)
             }
         }
 
-        // TODO: excessive unwrapping
-        if let Some(focus) = selected.focus {
-            let fetched = (
-                col_measure.first_pixel_from_vis(focus.col),
-                col_measure
-                    .far_pixel_from_vis(focus.col)
-                    .unwrap_or(sz.width),
-                row_measure.first_pixel_from_vis(focus.row),
-                row_measure
-                    .far_pixel_from_vis(focus.row)
-                    .unwrap_or(sz.height),
-            );
-            if let (Some(x0), x1, Some(y0), y1) = fetched {
-                let range_draw_rect = Rect::new(x0, y0, x1, y1);
-                ctx.stroke(
-                    range_draw_rect,
-                    &rtc.focus_color,
-                    (rtc.cell_border_thickness * 1.5).min(2.),
-                )
-            }
-        }
+        let focus = selected.focus?;
+
+        ctx.stroke(
+            CellRect::point(focus.row, focus.col).to_pixel_rect(&data.measures)?,
+            &rtc.focus_color,
+            (rtc.cell_border_thickness * 1.5).min(2.),
+        );
+        Some(())
     }
 
-
-    fn paint_editing(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
-        let col_measure = &data.measures[TableAxis::Columns];
-        let row_measure = &data.measures[TableAxis::Rows];
-
+    fn paint_editing(
+        &mut self,
+        ctx: &mut PaintCtx,
+        data: &TableState<TableData>,
+        env: &Env,
+    ) -> Option<()> {
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
                 let vis = &single_cell.vis;
                 // TODO: excessive unwrapping
-                let size = Size::new(
-                    col_measure
-                        .pixels_length_for_vis(vis.col)
-                        .unwrap_or(0.),
-                    row_measure
-                        .pixels_length_for_vis(vis.row)
-                        .unwrap_or(0.),
-                );
-                let origin = Point::new(
-                    col_measure
-                        .first_pixel_from_vis(vis.col)
-                        .unwrap_or(0.),
-                    row_measure.first_pixel_from_vis(vis.row).unwrap_or(0.),
-                );
+                let rect = CellRect::point(vis.row, vis.col).to_pixel_rect(&data.measures)?;
 
                 ctx.with_save(|ctx| {
-                    ctx.render_ctx.clip(Rect::from_origin_size(origin, size));
+                    ctx.render_ctx.clip(rect);
                     data.data
                         .with(single_cell.log.row, |row| child.paint(ctx, row, env));
                 });
             }
             _ => (),
         }
+        Some(())
     }
-
 }
 
 pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
-pub const SORT_CHANGED: Selector<TableAxis> = Selector::new( "druid-builtin.table.sort-changed");
+pub const SORT_CHANGED: Selector<TableAxis> = Selector::new("druid-builtin.table.sort-changed");
 
-impl<TableData, ColDel> Widget<TableState<TableData>>
-    for Cells<TableData, ColDel>
+impl<TableData, ColDel> Widget<TableState<TableData>> for Cells<TableData, ColDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
-    TableData::Item : Data,
+    TableData::Item: Data,
     ColDel: CellsDelegate<TableData>,
 {
     fn event(
@@ -361,7 +312,7 @@ where
                     if let Some(cell) = self.find_cell(data, &me.pos) {
                         if self.editing.is_editing(&cell) {
                             self.editing.handle_event(ctx, event, &mut data.data, env);
-                        }else{
+                        } else {
                             if me.count == 1 {
                                 if me.mods.meta() || me.mods.ctrl() {
                                     new_selection = data.selection.add_selection(cell.into());
@@ -377,26 +328,31 @@ where
                                 ctx.set_active(true);
                             } else if me.count == 2 {
                                 let cd = &mut self.cell_delegate;
-                                self.editing.start_editing(ctx,&mut data.data, &cell,  |cell_ctx| cd.make_editor(cell_ctx));
+                                self.editing.start_editing(
+                                    ctx,
+                                    &mut data.data,
+                                    &cell,
+                                    |cell_ctx| cd.make_editor(cell_ctx),
+                                );
                             }
                         }
                     }
                 }
-                Event::MouseMove(me) if !self.editing.is_active() && self.dragging_selection =>{
+                Event::MouseMove(me) if !self.editing.is_active() && self.dragging_selection => {
                     if let Some(cell) = self.find_cell(data, &me.pos) {
                         new_selection = data.selection.move_extent(cell.into());
                     }
-                },
-                Event::MouseUp(me) if self.dragging_selection =>{
+                }
+                Event::MouseUp(me) if self.dragging_selection => {
                     self.dragging_selection = false;
                     ctx.set_active(false);
                 }
                 Event::Command(cmd) => {
-                    if let Some(_)  = cmd.get(INIT_CELLS) {
+                    if let Some(_) = cmd.get(INIT_CELLS) {
                         data.remap_specs[TableAxis::Rows] = self.cell_delegate.initial_spec();
                         remap_changed[TableAxis::Rows] = true;
                         remap_changed[TableAxis::Columns] = true;
-                    } else if let Some(ax) = cmd.get( SORT_CHANGED) {
+                    } else if let Some(ax) = cmd.get(SORT_CHANGED) {
                         remap_changed[*ax] = true;
                     } else {
                         match &mut self.editing {
@@ -412,48 +368,55 @@ where
                 Event::KeyDown(ke) if !self.editing.is_active() => {
                     match &ke.key {
                         KbKey::ArrowDown => {
-                            new_selection =
-                                data.selection
-                                    .move_focus(TableAxis::Rows, VisOffset(1), &data.remaps);
+                            new_selection = data.selection.move_focus(
+                                TableAxis::Rows,
+                                VisOffset(1),
+                                &data.remaps,
+                            );
                             ctx.set_handled();
                         }
                         KbKey::ArrowUp => {
-                            new_selection =
-                                data.selection
-                                    .move_focus(TableAxis::Rows, VisOffset(-1), &data.remaps);
+                            new_selection = data.selection.move_focus(
+                                TableAxis::Rows,
+                                VisOffset(-1),
+                                &data.remaps,
+                            );
                             ctx.set_handled();
                         }
                         KbKey::ArrowRight => {
-                            new_selection =
-                                data.selection
-                                    .move_focus(TableAxis::Columns, VisOffset(1), &data.remaps);
+                            new_selection = data.selection.move_focus(
+                                TableAxis::Columns,
+                                VisOffset(1),
+                                &data.remaps,
+                            );
                             ctx.set_handled();
                         }
                         KbKey::ArrowLeft => {
-                            new_selection =
-                                data.selection
-                                    .move_focus(TableAxis::Columns, VisOffset(-1), &data.remaps);
+                            new_selection = data.selection.move_focus(
+                                TableAxis::Columns,
+                                VisOffset(-1),
+                                &data.remaps,
+                            );
                             ctx.set_handled();
                         }
                         KbKey::Character(s) if s == " " => {
                             // This is to match Excel
                             if ke.mods.meta() || ke.mods.ctrl() {
-                                new_selection = data.selection.extend_from_focus_in_axis(&TableAxis::Columns, &data.remaps);
+                                new_selection = data
+                                    .selection
+                                    .extend_from_focus_in_axis(&TableAxis::Columns, &data.remaps);
                                 ctx.set_handled();
                             } else if ke.mods.shift() {
-                                new_selection = data.selection.extend_from_focus_in_axis(&TableAxis::Rows, &data.remaps);
+                                new_selection = data
+                                    .selection
+                                    .extend_from_focus_in_axis(&TableAxis::Rows, &data.remaps);
                                 ctx.set_handled();
                             }
 
                             // TODO - when Ctrl + Shift, select full grid
-                        },
-                        KbKey::Copy =>{
-                            log::info!("Copy")
-
-                        },
-                        k => {
-                            log::info!("Key {:?}" , k )
-                        },
+                        }
+                        KbKey::Copy => log::info!("Copy"),
+                        k => log::info!("Key {:?}", k),
                     }
                 }
                 _ => match &mut self.editing {
@@ -503,7 +466,7 @@ where
     ) {
         if let LifeCycle::WidgetAdded = event {
             self.resolved_config = Some(self.config.resolve(env));
-            ctx.submit_command(INIT_CELLS.with(()), ctx.widget_id() );
+            ctx.submit_command(INIT_CELLS.with(()), ctx.widget_id());
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
@@ -524,12 +487,11 @@ where
         data: &TableState<TableData>,
         _env: &Env,
     ) {
-
         // TODO move all sorting up to table level so we don't need commands
         if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
             ctx.submit_command(SORT_CHANGED.with(TableAxis::Rows), ctx.widget_id());
         }
-        if !old_data.selection.same(&data.selection){
+        if !old_data.selection.same(&data.selection) {
             ctx.request_paint();
         }
         //TODO Columns update from data
@@ -547,32 +509,29 @@ where
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
                 let vis = &single_cell.vis;
-
-                // TODO: excessive unwrapping
-                let size = Size::new(
-                    data.measures[TableAxis::Columns]
-                        .pixels_length_for_vis(vis.col)
-                        .unwrap_or(0.),
-                    data.measures[TableAxis::Rows]
-                        .pixels_length_for_vis(vis.row)
-                        .unwrap_or(0.),
-                );
-                let origin = Point::new(
-                    data.measures[TableAxis::Columns]
-                        .first_pixel_from_vis(vis.col)
-                        .unwrap_or(0.),
-                    data.measures[TableAxis::Rows].first_pixel_from_vis(vis.row).unwrap_or(0.),
-                );
-                let bc = BoxConstraints::tight(size);
-                data.data.with(single_cell.log.row, |row| {
-                    let size = child.layout(ctx, &bc, row, env);
-                    child.set_layout_rect(ctx, row, env, Rect::from_origin_size(origin, size))
-                });
+                (|| -> Option<_> {
+                    let bc = BoxConstraints::tight(
+                        data.measures
+                            .zip_with(&vis, |m, v| m.pixels_length_for_vis(*v))
+                            .opt()?
+                            .size(),
+                    );
+                    let origin = data
+                        .measures
+                        .zip_with(&vis, |m, v| m.first_pixel_from_vis(*v))
+                        .opt()?
+                        .point();
+                    data.data.with(single_cell.log.row, |row| {
+                        let size = child.layout(ctx, &bc, row, env);
+                        child.set_layout_rect(ctx, row, env, Rect::from_origin_size(origin, size))
+                    });
+                    Some(())
+                })();
             }
             _ => (),
         }
         let measured = self.measured_size(&data.measures);
-        let size =  bc.constrain(measured);
+        let size = bc.constrain(measured);
         size
     }
 
@@ -582,32 +541,29 @@ where
         let rtc = self.config.resolve(env);
         let rect = ctx.region().to_rect();
 
-        let draw_rect = rect.intersect(Rect::from_origin_size(Point::ZERO, self.measured_size(&data.measures)));
+        let draw_rect = rect.intersect(Rect::from_origin_size(
+            Point::ZERO,
+            self.measured_size(&data.measures),
+        ));
 
         ctx.fill(draw_rect, &rtc.cells_background);
 
         let cell_rect = CellRect::new(
-            data.measures[TableAxis::Rows]
-                .vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
-            data.measures[TableAxis::Columns]
-                .vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
+            data.measures[TableAxis::Rows].vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            data.measures[TableAxis::Columns].vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
         self.paint_cells(ctx, data, env, &cell_rect);
         self.paint_selections(ctx, data, &rtc, &cell_rect);
 
-        self.paint_editing(ctx, data, env)
+        self.paint_editing(ctx, data, env);
     }
 }
 
-
-impl<TableData, CellsDel> Bindable
-    for Cells<TableData, CellsDel>
+impl<TableData, CellsDel> Bindable for Cells<TableData, CellsDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
-    TableData::Item : Data,
-    CellsDel: CellsDelegate<TableData>
+    TableData::Item: Data,
+    CellsDel: CellsDelegate<TableData>,
 {
 }
-
-

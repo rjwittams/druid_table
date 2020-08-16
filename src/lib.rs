@@ -13,12 +13,14 @@ mod render_ext;
 mod selection;
 mod table;
 
-pub use axis_measure::{FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
-                       AxisMeasure, AxisPair};
+pub use axis_measure::{
+    AxisMeasure, AxisPair, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
+};
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{
-    column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell};
+    column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell,
+};
 pub use config::TableConfig;
 pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirection};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};

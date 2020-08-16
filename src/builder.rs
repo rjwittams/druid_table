@@ -2,7 +2,7 @@ use crate::columns::{
     CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{AxisPair, LogIdx, StoredAxisMeasure, TableAxis, AxisMeasure};
+use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
@@ -130,14 +130,18 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
 
     pub fn build_measure(&self, axis: TableAxis, size: f64) -> AxisMeasure {
         match self.measurements[axis] {
-            AxisMeasurementType::Individual => AxisMeasure::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size)))),
+            AxisMeasurementType::Individual => {
+                AxisMeasure::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size))))
+            }
             AxisMeasurementType::Uniform => AxisMeasure::Fixed(FixedAxisMeasure::new(size)),
         }
     }
 
-    pub fn build_measures(&self) -> AxisPair<AxisMeasure>{
-        AxisPair::new(self.build_measure(TableAxis::Rows, 30.),
-                      self.build_measure(TableAxis::Columns, 100.))
+    pub fn build_measures(&self) -> AxisPair<AxisMeasure> {
+        AxisPair::new(
+            self.build_measure(TableAxis::Rows, 30.),
+            self.build_measure(TableAxis::Columns, 100.),
+        )
     }
 
     pub fn build_args(self) -> DefaultTableArgs<TableData> {
