@@ -272,14 +272,13 @@ impl TextCell {
             .text()
             .new_font_by_name(self.font_name.resolve(env), self.font_size.resolve(env))
             .build()
-            .unwrap(); // TODO errors / fallback?
+            .unwrap(); // TODO errors / fallback
         font
     }
 
     fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &PietFont) {
         // TODO: error handling
         // TODO: wrapping (multi line)
-        // TODO:
 
         if let Ok(layout) = ctx
             .text()

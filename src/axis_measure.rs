@@ -430,8 +430,6 @@ impl AxisMeasureT for StoredAxisMeasure {
             }
             _ => (),
         }
-
-        // TODO: handle renumbering / remapping. Erk.
         self.build_maps()
     }
 

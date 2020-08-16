@@ -163,7 +163,8 @@ where
             let row_top = measures[TableAxis::Rows].first_pixel_from_vis(vis_row_idx);
 
             if let Some(log_row_idx) = data.remaps[TableAxis::Rows].get_log_idx(vis_row_idx) {
-                data.data.with(log_row_idx, |row| {
+                let table_data = &data.data;
+                table_data.with(log_row_idx, |row| {
                     self.paint_row(
                         ctx,
                         env,
@@ -197,6 +198,7 @@ where
                 if let Some(log_col_idx) = col_remap.get_log_idx(vis_col_idx) {
                     let cell_left = col_measure.first_pixel_from_vis(vis_col_idx);
 
+                    // TODO: excessive unwrapping
                     let cell_rect = Rect::from_origin_size(
                         Point::new(cell_left.unwrap_or(0.), row_top.unwrap_or(0.)),
                         Size::new(
@@ -255,6 +257,7 @@ where
 
         for range_rect in &selected.ranges {
 
+            // TODO: excessive unwrapping
             let fetched = (
                 col_measure
                     .first_pixel_from_vis(range_rect.start_col),
@@ -273,6 +276,7 @@ where
             }
         }
 
+        // TODO: excessive unwrapping
         if let Some(focus) = selected.focus {
             let fetched = (
                 col_measure.first_pixel_from_vis(focus.col),
@@ -303,7 +307,7 @@ where
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
                 let vis = &single_cell.vis;
-
+                // TODO: excessive unwrapping
                 let size = Size::new(
                     col_measure
                         .pixels_length_for_vis(vis.col)
@@ -543,6 +547,8 @@ where
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
                 let vis = &single_cell.vis;
+
+                // TODO: excessive unwrapping
                 let size = Size::new(
                     data.measures[TableAxis::Columns]
                         .pixels_length_for_vis(vis.col)

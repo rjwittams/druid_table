@@ -124,7 +124,7 @@ where
     }
 
     fn set_pix_length_for_axis(&mut self, measure: &mut AxisMeasure, ctx: &mut EventCtx, vis_idx: VisIdx, pixel: f64) {
-        measure.set_far_pixel_for_vis(vis_idx, pixel); //TODO Jam calls together with richer result?
+        measure.set_far_pixel_for_vis(vis_idx, pixel);
         // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
         ctx.request_layout();
     }
@@ -303,6 +303,8 @@ where
             let header_render = &mut self.header_render;
 
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
+
+                // TODO: excessive unwrapping
                 let first_pix = measure
                     .first_pixel_from_vis(vis_main_idx)
                     .unwrap_or(0.);

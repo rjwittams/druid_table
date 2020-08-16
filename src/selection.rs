@@ -164,8 +164,6 @@ impl SingleSlice {
 }
 
 #[derive(Debug, Clone)]
-//TODO: Make log idxs optional in here or a further operation to derive
-// currently waste time working out ones we don't use
 pub enum IndicesSelection {
     NoSelection,
     Single(VisIdx),
@@ -387,7 +385,7 @@ impl TableSelection {
             },
             Self::SliceRange(SliceRange{axis, range: CellRange{ focus, extent }}) =>{
                 if for_axis == *axis {
-                    IndicesSelection::Range { focus: focus.vis[*axis] , extent: extent.vis[*axis] } // Todo remove log
+                    IndicesSelection::Range { focus: focus.vis[*axis] , extent: extent.vis[*axis] }
                 }else{
                     IndicesSelection::NoSelection
                 }
