@@ -1,6 +1,6 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
 use crate::data::RemapDetails;
-use crate::Remap;
+use crate::{Remap, AxisMeasurementType};
 use druid::{Cursor, Data, Point, Rect, Size};
 use float_ord::FloatOrd;
 use std::cell::RefCell;
@@ -138,80 +138,64 @@ impl Sub<VisOffset> for VisIdx {
 }
 
 #[derive(Debug, Clone)]
-pub enum AxisMeasure {
+pub struct AxisMeasure{
+    inner: AxisMeasureInner
+}
+
+impl AxisMeasure{
+    pub fn new(amt: AxisMeasurementType, pixels_per_unit: f64)->AxisMeasure{
+        AxisMeasure{
+            inner: match amt {
+                AxisMeasurementType::Uniform => AxisMeasureInner::Fixed(FixedAxisMeasure::new(pixels_per_unit)),
+                AxisMeasurementType::Individual => AxisMeasureInner::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(pixels_per_unit)))),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AxisMeasureInner {
     Fixed(FixedAxisMeasure),
     Stored(Rc<RefCell<StoredAxisMeasure>>),
 }
 
+use AxisMeasureInner::*;
+
 impl AxisMeasure {
-    pub fn border(&self) -> f64 {
-        match self {
-            AxisMeasure::Fixed(f) => f.border,
-            AxisMeasure::Stored(s) => s.borrow().border(),
+
+    fn border(&self) -> f64 {
+        match &self.inner {
+            Fixed(f) => f.border,
+            Stored(s) => s.borrow().border(),
         }
     }
 
     pub fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
-        match self {
-            AxisMeasure::Fixed(f) => f.set_axis_properties(border, len, remap),
-            AxisMeasure::Stored(s) => s.borrow_mut().set_axis_properties(border, len, remap),
-        }
-    }
-
-    pub fn total_pixel_length(&self) -> f64 {
-        match self {
-            AxisMeasure::Fixed(f) => f.total_pixel_length(),
-            AxisMeasure::Stored(s) => s.borrow().total_pixel_length(),
-        }
-    }
-
-    pub fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
-        match self {
-            AxisMeasure::Fixed(f) => f.vis_idx_from_pixel(pixel),
-            AxisMeasure::Stored(s) => s.borrow().vis_idx_from_pixel(pixel),
+        match &mut self.inner {
+            Fixed(f) => f.set_axis_properties(border, len, remap),
+            Stored(s) => s.borrow_mut().set_axis_properties(border, len, remap),
         }
     }
 
     pub fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
-        match self {
-            AxisMeasure::Fixed(f) => f.vis_range_from_pixels(p0, p1),
-            AxisMeasure::Stored(s) => s.borrow().vis_range_from_pixels(p0, p1),
+        let start = self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0));
+        let end = self.vis_idx_from_pixel(p1).unwrap_or_else(||self.last_vis_idx());
+        (start, end)
+    }
+
+    pub fn total_pixel_length(&self) -> f64 {
+        match &self.inner {
+            Fixed(f) => f.total_pixel_length(),
+            Stored(s) => s.borrow().total_pixel_length(),
         }
     }
 
-    pub fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
-        match self {
-            AxisMeasure::Fixed(f) => f.first_pixel_from_vis(idx),
-            AxisMeasure::Stored(s) => s.borrow().first_pixel_from_vis(idx),
-        }
-    }
-
-    pub fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
-        match self {
-            AxisMeasure::Fixed(f) => f.pixels_length_for_vis(idx),
-            AxisMeasure::Stored(s) => s.borrow().pixels_length_for_vis(idx),
-        }
-    }
-
-    pub fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
-        match self {
-            AxisMeasure::Fixed(f) => f.set_far_pixel_for_vis(idx, pixel),
-            AxisMeasure::Stored(s) => s.borrow_mut().set_far_pixel_for_vis(idx, pixel),
-        }
-    }
-
-    pub fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64 {
-        match self {
-            AxisMeasure::Fixed(f) => f.set_far_pixel_for_vis(idx, length),
-            AxisMeasure::Stored(s) => s.borrow_mut().set_pixel_length_for_vis(idx, length),
-        }
-    }
-
-    pub fn can_resize(&self, idx: VisIdx) -> bool {
-        match self {
-            AxisMeasure::Fixed(f) => f.can_resize(idx),
-            AxisMeasure::Stored(s) => s.borrow().can_resize(idx),
-        }
+    fn last_vis_idx(&self) -> VisIdx {
+        let len = match &self.inner {
+            Fixed(f) => f.len,
+            Stored(s) => s.borrow().vis_pix_lengths.len(),
+        };
+        VisIdx(len - 1)
     }
 
     pub(crate) fn pixel_near_border(&self, pixel: f64) -> Option<VisIdx> {
@@ -230,6 +214,42 @@ impl AxisMeasure {
         }
     }
 
+    pub fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
+        match &self.inner {
+            Fixed(f) => f.vis_idx_from_pixel(pixel),
+            Stored(s) => s.borrow().vis_idx_from_pixel(pixel),
+        }
+    }
+
+    pub fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
+        match &self.inner {
+            Fixed(f) => f.first_pixel_from_vis(idx),
+            Stored(s) => s.borrow().first_pixel_from_vis(idx),
+        }
+    }
+
+    pub fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
+        match &self.inner {
+            Fixed(f) => f.pixels_length_for_vis(idx),
+            Stored(s) => s.borrow().pixels_length_for_vis(idx),
+        }
+    }
+
+    pub fn can_resize(&self, idx: VisIdx) -> bool {
+        match &self.inner {
+            Fixed(f) => f.can_resize(idx),
+            Stored(s) => s.borrow().can_resize(idx),
+        }
+    }
+
+    pub fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
+        match &mut self.inner {
+            Fixed(f) => f.set_far_pixel_for_vis(idx, pixel),
+            Stored(s) => s.borrow_mut().set_far_pixel_for_vis(idx, pixel),
+        }
+    }
+
+
     pub(crate) fn far_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         self.first_pixel_from_vis(idx)
             .map(|p| self.pixels_length_for_vis(idx).map(|l| p + l))
@@ -242,12 +262,12 @@ trait AxisMeasureT: Debug {
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap);
     fn total_pixel_length(&self) -> f64;
     fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx>;
-    fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx);
+
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64>;
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64>;
-    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64;
-    fn set_pixel_length_for_vis(&mut self, idx: VisIdx, length: f64) -> f64;
     fn can_resize(&self, idx: VisIdx) -> bool;
+
+    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -298,14 +318,6 @@ impl AxisMeasureT for FixedAxisMeasure {
         }
     }
 
-    fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
-        let start = self.vis_idx_from_pixel(p0);
-        let end = self.vis_idx_from_pixel(p1);
-
-        let start = start.unwrap_or(VisIdx(0));
-        let end = end.unwrap_or(VisIdx(self.len - 1));
-        (start, end)
-    }
 
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         if idx.0 < self.len {
@@ -323,16 +335,12 @@ impl AxisMeasureT for FixedAxisMeasure {
         }
     }
 
-    fn set_far_pixel_for_vis(&mut self, _idx: VisIdx, _pixel: f64) -> f64 {
-        self.pixels_per_unit
-    }
-
-    fn set_pixel_length_for_vis(&mut self, _idx: VisIdx, _length: f64) -> f64 {
-        self.pixels_per_unit
-    }
-
     fn can_resize(&self, _idx: VisIdx) -> bool {
         false
+    }
+
+    fn set_far_pixel_for_vis(&mut self, _idx: VisIdx, _pixel: f64) -> f64 {
+        self.pixels_per_unit
     }
 }
 
@@ -446,14 +454,6 @@ impl AxisMeasureT for StoredAxisMeasure {
             .map(|(_, v)| *v)
     }
 
-    fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
-        (
-            self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0)),
-            self.vis_idx_from_pixel(p1)
-                .unwrap_or_else(|| VisIdx(self.vis_pix_lengths.len() - 1)),
-        )
-    }
-
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         self.first_pixels.get(&idx).copied()
     }
@@ -462,12 +462,12 @@ impl AxisMeasureT for StoredAxisMeasure {
         self.vis_pix_lengths.get(idx.0).copied()
     }
 
-    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
-        let length = f64::max(0., pixel - *self.first_pixels.get(&idx).unwrap_or(&0.));
-        self.set_pixel_length_for_vis(idx, length)
+    fn can_resize(&self, _idx: VisIdx) -> bool {
+        true
     }
 
-    fn set_pixel_length_for_vis(&mut self, vis_idx: VisIdx, length: f64) -> f64 {
+    fn set_far_pixel_for_vis(&mut self, vis_idx: VisIdx, pixel: f64) -> f64 {
+        let length = f64::max(0., pixel - *self.first_pixels.get(&vis_idx).unwrap_or(&0.));
         // Todo Option
         if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
             if let Some(place) = self.log_pix_lengths.get_mut(log_idx.0) {
@@ -478,13 +478,9 @@ impl AxisMeasureT for StoredAxisMeasure {
         }
         0.
     }
-
-    fn can_resize(&self, _idx: VisIdx) -> bool {
-        true
-    }
 }
 
-#[cfg(test)]
+#[cfg(not)]
 mod test {
     use crate::axis_measure::{AxisMeasureT, VisIdx};
     use crate::{FixedAxisMeasure, Remap, StoredAxisMeasure};

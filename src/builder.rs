@@ -129,12 +129,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     }
 
     pub fn build_measure(&self, axis: TableAxis, size: f64) -> AxisMeasure {
-        match self.measurements[axis] {
-            AxisMeasurementType::Individual => {
-                AxisMeasure::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(size))))
-            }
-            AxisMeasurementType::Uniform => AxisMeasure::Fixed(FixedAxisMeasure::new(size)),
-        }
+        AxisMeasure::new(self.measurements[axis], size)
     }
 
     pub fn build_measures(&self) -> AxisPair<AxisMeasure> {
