@@ -10,12 +10,13 @@ use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::columns::{CellCtx, CellRender};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
+use crate::headings::HeaderMovement::{Disallowed, Permitted};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
+use crate::IndicesSelection;
 use druid::widget::Bindable;
 use std::collections::HashMap;
-use crate::IndicesSelection;
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -86,6 +87,12 @@ impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<Tabl
     }
 }
 
+enum HeaderMovement {
+    Disallowed,
+    Permitted,
+    Moving(VisIdx),
+}
+
 pub struct Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
@@ -97,6 +104,7 @@ where
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
+    header_movement: HeaderMovement,
     resize_dragging: Option<VisIdx>,
     selection_dragging: bool,
 }
@@ -111,6 +119,7 @@ where
         config: TableConfig,
         headers_source: HeadersSource,
         header_render: Render,
+        allow_moves: bool,
     ) -> Headings<HeadersSource, Render> {
         Headings {
             axis,
@@ -119,6 +128,7 @@ where
             headers_source,
             headers: None,
             header_render,
+            header_movement: if allow_moves { Permitted } else { Disallowed },
             resize_dragging: None,
             selection_dragging: false,
         }
@@ -136,17 +146,28 @@ where
         ctx.request_layout();
     }
 
-    fn paint_header(&mut self, ctx: &mut PaintCtx, data: &TableState<<HeadersSource as HeadersFromData>::TableData>,
-                    env: &Env, measure: &AxisMeasure, indices_selection: &IndicesSelection,
-                    sort_dirs: &HashMap<LogIdx, SortSpec>,
-                    vis_main_idx: VisIdx) -> Option<()> {
+    fn paint_header(
+        &mut self,
+        ctx: &mut PaintCtx,
+        data: &TableState<<HeadersSource as HeadersFromData>::TableData>,
+        env: &Env,
+        measure: &AxisMeasure,
+        indices_selection: &IndicesSelection,
+        sort_dirs: &HashMap<LogIdx, SortSpec>,
+        vis_main_idx: VisIdx,
+    ) -> Option<()> {
         let rtc = self.resolved_config.as_ref()?;
         let headers = self.headers.as_ref()?;
         let axis = self.axis;
         let header_render = &mut self.header_render;
 
-        let cell_rect = Rect::from_origin_size(axis.cell_origin(measure.first_pixel_from_vis(vis_main_idx)?, 0.),
-                                               axis.size(measure.pixels_length_for_vis(vis_main_idx)?, rtc.cross_axis_length(&axis)));
+        let cell_rect = Rect::from_origin_size(
+            axis.cell_origin(measure.first_pixel_from_vis(vis_main_idx)?, 0.),
+            axis.size(
+                measure.pixels_length_for_vis(vis_main_idx)?,
+                rtc.cross_axis_length(&axis),
+            ),
+        );
 
         if indices_selection.vis_index_selected(vis_main_idx) {
             ctx.fill(cell_rect, &rtc.header_selected_background);
@@ -154,11 +175,7 @@ where
 
         let padded_rect = cell_rect.inset(-rtc.cell_padding);
         if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
-            let cell = CellCtx::Header(
-                &axis,
-                log_main_idx,
-                sort_dirs.get(&log_main_idx),
-            );
+            let cell = CellCtx::Header(&axis, log_main_idx, sort_dirs.get(&log_main_idx));
 
             headers.with(log_main_idx, |col_name| {
                 ctx.with_save(|ctx| {
@@ -171,11 +188,7 @@ where
                 });
             });
 
-            ctx.stroke_bottom_left_border(
-                &cell_rect,
-                &rtc.cells_border,
-                rtc.cell_border_thickness,
-            );
+            ctx.stroke_bottom_left_border(&cell_rect, &rtc.cells_border, rtc.cell_border_thickness);
         }
         Some(())
     }
@@ -190,12 +203,12 @@ where
     fn event(
         &mut self,
         ctx: &mut EventCtx,
-        _event: &Event,
+        event: &Event,
         data: &mut TableState<HeadersSource::TableData>,
         _env: &Env,
     ) {
         let measure = &mut data.measures[self.axis];
-        match _event {
+        match event {
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if me.count == 2 {
@@ -217,13 +230,20 @@ where
                         }
                     } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
-                        if me.mods.shift() {
-                            sel.extend_in_axis(self.axis, idx, &data.remaps);
-                        } else {
-                            sel.select_in_axis(self.axis, idx, &data.remaps);
+                        // Already selected so move headings:
+                        if sel.fully_selects_heading(self.axis, idx){
+                            self.header_movement = HeaderMovement::Moving(idx);
+                            ctx.set_active(true);
+                        }else{
+                            // Change the selection
+                            if me.mods.shift() {
+                                sel.extend_in_axis(self.axis, idx, &data.remaps);
+                            } else {
+                                sel.select_in_axis(self.axis, idx, &data.remaps);
+                            }
+                            self.selection_dragging = true;
+                            ctx.set_active(true);
                         }
-                        self.selection_dragging = true;
-                        ctx.set_active(true);
                         ctx.set_handled()
                     }
                 }
@@ -239,6 +259,12 @@ where
                         ctx.set_cursor(self.axis.resize_cursor());
                     }
                     ctx.set_handled()
+                } else if let HeaderMovement::Moving(idx) = self.header_movement {
+                    // Show visual indicator
+                    if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
+
+                    }
+                    ctx.set_handled()
                 } else if self.selection_dragging {
                     if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         data.selection.extend_in_axis(self.axis, idx, &data.remaps);
@@ -250,21 +276,25 @@ where
                         } else {
                             &Cursor::NotAllowed
                         };
-                        ctx.set_handled();
                         ctx.set_cursor(cursor);
                         ctx.set_handled();
                     }
-                }
+                } // TODO grabber for when header can move (ie selected)
             }
             Event::MouseUp(me) => {
+                let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.resize_dragging {
-                    let pix_main = self.axis.main_pixel_from_point(&me.pos);
                     self.set_pix_length_for_axis(measure, ctx, idx, pix_main);
                     self.resize_dragging = None;
                     ctx.set_active(false);
                     ctx.set_handled();
-                }
-                if self.selection_dragging {
+                }else if let HeaderMovement::Moving(moved_idx) = self.header_movement {
+                    if let Some(moved_to_idx) = measure.vis_idx_from_pixel(pix_main) {
+                        data.explicit_header_move(self.axis, moved_to_idx)
+                    }
+                    ctx.set_active(false);
+                    ctx.set_handled()
+                }else if self.selection_dragging {
                     self.selection_dragging = false;
                     ctx.set_active(false);
                     ctx.set_handled()
@@ -353,12 +383,19 @@ where
 
             for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
                 // TODO: excessive unwrapping
-                self.paint_header(ctx, data, env, measure, &indices_selection, &sort_dirs,  vis_main_idx);
+                self.paint_header(
+                    ctx,
+                    data,
+                    env,
+                    measure,
+                    &indices_selection,
+                    &sort_dirs,
+                    vis_main_idx,
+                );
             }
         }
     }
 }
-
 
 impl<HeadersSource, Render> Bindable for Headings<HeadersSource, Render>
 where
@@ -366,4 +403,3 @@ where
     Render: CellRender<HeadersSource::Header>,
 {
 }
-

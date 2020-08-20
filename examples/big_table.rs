@@ -1,8 +1,4 @@
-use druid_table::{
-    AxisMeasure, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory,
-    FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap,
-    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
-};
+use druid_table::{AxisMeasure, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, AxisMeasurementType};
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::LogIdxTable;
@@ -129,8 +125,8 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
     );
 
     let measures = AxisPair::new(
-        AxisMeasure::Fixed(FixedAxisMeasure::new(25.)),
-        AxisMeasure::Fixed(FixedAxisMeasure::new(100.)),
+        AxisMeasure::new(AxisMeasurementType::Uniform, 25.),
+        AxisMeasure::new(AxisMeasurementType::Uniform, 100.),
     );
     Table::new_in_scope(
         TableArgs::new(

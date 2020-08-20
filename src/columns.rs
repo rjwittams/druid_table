@@ -577,7 +577,7 @@ where
 
     fn remap_items(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
         if remap_spec.is_empty() {
-            Remap::Pristine
+            Remap::new() // Todo: preserve moves
         } else {
             //Todo: Filter
             let mut idxs: Vector<LogIdx> = (0usize..table_data.idx_len()).map(LogIdx).collect(); //TODO Give up if too big?

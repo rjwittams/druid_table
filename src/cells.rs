@@ -288,7 +288,7 @@ where
 }
 
 pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
-pub const SORT_CHANGED: Selector<TableAxis> = Selector::new("druid-builtin.table.sort-changed");
+pub const REMAP_CHANGED: Selector<TableAxis> = Selector::new("druid-builtin.table.remap-changed");
 
 impl<TableData, ColDel> Widget<TableState<TableData>> for Cells<TableData, ColDel>
 where
@@ -352,7 +352,8 @@ where
                         data.remap_specs[TableAxis::Rows] = self.cell_delegate.initial_spec();
                         remap_changed[TableAxis::Rows] = true;
                         remap_changed[TableAxis::Columns] = true;
-                    } else if let Some(ax) = cmd.get(SORT_CHANGED) {
+                    } else if let Some(ax) = cmd.get(REMAP_CHANGED) {
+                        log::info!("Remap changed:{:?}", ax);
                         remap_changed[*ax] = true;
                     } else {
                         match &mut self.editing {
@@ -446,6 +447,10 @@ where
                 ctx.request_layout(); // Could avoid if we know we overflow scroll?
             }
             if remap_changed[TableAxis::Columns] {
+                data.remap_axis(TableAxis::Columns, |d, s| {
+                    s.remap_placements( LogIdx(self.cell_delegate.number_of_columns_in_data(d)  - 1) ) // TODO check for none
+                } );
+                log::info!("Remap for cols {:?}", data.remaps[TableAxis::Columns]);
                 data.measures[TableAxis::Columns].set_axis_properties(
                     rtc.cell_border_thickness,
                     self.cell_delegate.number_of_columns_in_data(&data.data),
@@ -488,9 +493,14 @@ where
         _env: &Env,
     ) {
         // TODO move all sorting up to table level so we don't need commands
-        if !old_data.data.same(&data.data) || !old_data.remap_specs.same(&data.remap_specs) {
-            ctx.submit_command(SORT_CHANGED.with(TableAxis::Rows), ctx.widget_id());
+        if !old_data.data.same(&data.data) || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows]) {
+            ctx.submit_command(REMAP_CHANGED.with(TableAxis::Rows), ctx.widget_id());
         }
+
+        if !old_data.remap_specs[TableAxis::Columns].same(&data.remap_specs[TableAxis::Columns]) {
+            ctx.submit_command(REMAP_CHANGED.with(TableAxis::Columns), ctx.widget_id());
+        }
+
         if !old_data.selection.same(&data.selection) {
             ctx.request_paint();
         }

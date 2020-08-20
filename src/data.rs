@@ -1,6 +1,12 @@
-use crate::axis_measure::{LogIdx, VisIdx};
+use crate::axis_measure::{LogIdx, VisIdx, VisOffset};
+use std::cmp::Reverse;
 use druid::im::Vector;
+use druid::im::HashMap;
 use druid::Data;
+use crate::data::SortDirection::Descending;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use im::HashSet;
 
 // This ended up sort of similar to Lens,
 // so I've named the methods similarly.
@@ -82,6 +88,28 @@ impl RemapDetails {
     }
 }
 
+impl Remap{
+    pub fn new()-> Remap{
+        Remap::Pristine
+    }
+
+    pub fn is_pristine(&self)->bool{
+        if let Remap::Pristine = self {
+            true
+        }else{
+            false
+        }
+    }
+
+    pub fn max_vis_idx(&self, len: usize)->VisIdx{
+        if let Remap::Selected(RemapDetails::Full(v)) = self {
+            VisIdx(v.len()) + VisOffset(-1)
+        }else{
+            VisIdx(len) + VisOffset(-1)
+        }
+    }
+}
+
 #[derive(Debug, Data, Clone)]
 pub enum Remap {
     Pristine,
@@ -105,8 +133,7 @@ impl Default for Remap {
     }
 }
 
-use crate::data::SortDirection::Descending;
-use std::cmp::Ordering;
+
 
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Copy, Data)]
 pub enum SortDirection {
@@ -140,11 +167,11 @@ impl SortSpec {
     }
 }
 
-#[derive(Clone, Debug, Data)]
+#[derive(Clone, Debug, Data)] // TODO explicit data
 pub struct RemapSpec {
     pub(crate) sort_by: Vector<SortSpec>, // columns sorted
                                           // filters
-                                          // Explicit moves
+    pub(crate) placements: im::HashMap<LogIdx, (VisIdx, usize)> // Explicit moves
 }
 
 impl RemapSpec {
@@ -178,12 +205,49 @@ impl RemapSpec {
         // Handle sorting disabled for a column
         true
     }
+
+    pub(crate) fn place(&mut self, log_idx: LogIdx, vis_idx: VisIdx){
+        self.placements.insert(log_idx, (vis_idx, self.placements.len()) );
+        log::info!("Placing {:?} at {:?}", log_idx, vis_idx)
+    }
+
+    pub(crate) fn remap_placements(&self, max_log_idx: LogIdx)->Remap{
+        if self.placements.is_empty() {
+            Remap::new()
+        }else{
+            let mut all: Vector<LogIdx> = Vector::new();
+            let unplaced_log: Vector<LogIdx> = (0..=max_log_idx.0).filter(|li| !self.placements.contains_key( &LogIdx(*li) ) ).map(LogIdx).collect();
+            let mut s_placements: Vec<_> = self.placements.iter().collect();
+            s_placements.sort_by_key(|(l, (v, o))| Reverse(*o));
+            let mut placed_by_vis: HashMap<VisIdx, LogIdx> = HashMap::new();
+
+            for (log, (vis, _)) in s_placements{
+                let mut v_a = *vis;
+                while placed_by_vis.contains_key(&v_a) {
+                    v_a = v_a + VisOffset(1)
+                }
+                placed_by_vis.insert(v_a,*log);
+            }
+
+            for log in unplaced_log{
+                while let Some(place) = placed_by_vis.remove(&VisIdx(all.len())){
+                    all.push_back(place);
+                }
+                all.push_back(log);
+            }
+            for place in placed_by_vis.values(){
+                all.push_back(*place)
+            }
+            Remap::Selected(RemapDetails::Full( all ))
+        }
+    }
 }
 
 impl Default for RemapSpec {
     fn default() -> Self {
         RemapSpec {
             sort_by: Vector::default(),
+            placements: HashMap::default()
         }
     }
 }

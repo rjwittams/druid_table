@@ -1,4 +1,4 @@
-use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis};
+use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
 use crate::headings::HeadersFromData;
 use crate::selection::CellDemap;
@@ -157,6 +157,19 @@ impl<TableData: Data> TableState<TableData> {
     pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec) -> Remap) {
         self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
     }
+
+    pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx){
+        log::info!("Move selection {:?} on {:?} to {:?}", self.selection, axis, moved_to_idx);
+        let mut offset = 0;
+        if let Some(headers_moved) = self.selection.fully_selected_on_axis(axis){
+            for vis_idx in headers_moved {
+                if let Some(log_idx) = self.remaps[axis].get_log_idx(vis_idx){
+                    self.remap_specs[axis].place(log_idx, moved_to_idx + VisOffset(offset));
+                    offset+=1;
+                }
+            }
+        }
+    }
 }
 
 impl CellDemap for AxisPair<Remap> {
@@ -271,8 +284,13 @@ impl<Args: TableArgsT + 'static> Table<Args> {
         if let (Some(AxisIds { headers, scroll }), Some(col_h)) = (ids.columns, col_h) {
             let (source, render) = col_h.content();
 
-            let col_headings =
-                Headings::new(TableAxis::Columns, table_config.clone(), source, render);
+            let col_headings = Headings::new(
+                TableAxis::Columns,
+                table_config.clone(),
+                source,
+                render,
+                true,
+            );
             let ch_scroll = Scroll::new(col_headings.with_id(headers))
                 .disable_scrollbars()
                 .with_id(scroll)
@@ -300,9 +318,8 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     ) -> TableChild<Args::TableData> {
         if let (Some(AxisIds { headers, scroll }), Some(row_h)) = (ids.rows, row_h) {
             let (source, render) = row_h.content();
-            let row_headings = Headings::new(TableAxis::Rows, table_config.clone(), source, render);
-
-            let cells_id = ids.cells;
+            let row_headings =
+                Headings::new(TableAxis::Rows, table_config.clone(), source, render, false);
 
             let row_scroll = Scroll::new(row_headings.with_id(headers))
                 .disable_scrollbars()

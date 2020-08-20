@@ -1,6 +1,6 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
 use crate::data::RemapDetails;
-use crate::{Remap, AxisMeasurementType};
+use crate::{AxisMeasurementType, Remap};
 use druid::{Cursor, Data, Point, Rect, Size};
 use float_ord::FloatOrd;
 use std::cell::RefCell;
@@ -93,7 +93,7 @@ impl TableAxis {
     }
 }
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default, Hash)]
 pub struct VisIdx(pub usize);
 
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default)]
@@ -138,17 +138,29 @@ impl Sub<VisOffset> for VisIdx {
 }
 
 #[derive(Debug, Clone)]
-pub struct AxisMeasure{
-    inner: AxisMeasureInner
+pub struct AxisMeasure {
+    inner: AxisMeasureInner,
+    version: u64,
 }
 
-impl AxisMeasure{
-    pub fn new(amt: AxisMeasurementType, pixels_per_unit: f64)->AxisMeasure{
-        AxisMeasure{
+impl Data for AxisMeasure {
+    fn same(&self, other: &Self) -> bool {
+        self.version == other.version
+    }
+}
+
+impl AxisMeasure {
+    pub fn new(amt: AxisMeasurementType, pixels_per_unit: f64) -> AxisMeasure {
+        AxisMeasure {
             inner: match amt {
-                AxisMeasurementType::Uniform => AxisMeasureInner::Fixed(FixedAxisMeasure::new(pixels_per_unit)),
-                AxisMeasurementType::Individual => AxisMeasureInner::Stored(Rc::new(RefCell::new(StoredAxisMeasure::new(pixels_per_unit)))),
-            }
+                AxisMeasurementType::Uniform => {
+                    AxisMeasureInner::Fixed(FixedAxisMeasure::new(pixels_per_unit))
+                }
+                AxisMeasurementType::Individual => AxisMeasureInner::Stored(Rc::new(RefCell::new(
+                    StoredAxisMeasure::new(pixels_per_unit),
+                ))),
+            },
+            version: 0,
         }
     }
 }
@@ -162,7 +174,6 @@ enum AxisMeasureInner {
 use AxisMeasureInner::*;
 
 impl AxisMeasure {
-
     fn border(&self) -> f64 {
         match &self.inner {
             Fixed(f) => f.border,
@@ -171,15 +182,19 @@ impl AxisMeasure {
     }
 
     pub fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
-        match &mut self.inner {
+        if match &mut self.inner {
             Fixed(f) => f.set_axis_properties(border, len, remap),
             Stored(s) => s.borrow_mut().set_axis_properties(border, len, remap),
+        } {
+            self.version += 1
         }
     }
 
     pub fn vis_range_from_pixels(&self, p0: f64, p1: f64) -> (VisIdx, VisIdx) {
         let start = self.vis_idx_from_pixel(p0).unwrap_or(VisIdx(0));
-        let end = self.vis_idx_from_pixel(p1).unwrap_or_else(||self.last_vis_idx());
+        let end = self
+            .vis_idx_from_pixel(p1)
+            .unwrap_or_else(|| self.last_vis_idx());
         (start, end)
     }
 
@@ -242,13 +257,15 @@ impl AxisMeasure {
         }
     }
 
-    pub fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64 {
-        match &mut self.inner {
+    pub fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) {
+        // Check if changed
+        if match &mut self.inner {
             Fixed(f) => f.set_far_pixel_for_vis(idx, pixel),
             Stored(s) => s.borrow_mut().set_far_pixel_for_vis(idx, pixel),
+        } {
+            self.version += 1;
         }
     }
-
 
     pub(crate) fn far_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         self.first_pixel_from_vis(idx)
@@ -259,7 +276,7 @@ impl AxisMeasure {
 
 trait AxisMeasureT: Debug {
     fn border(&self) -> f64;
-    fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap);
+
     fn total_pixel_length(&self) -> f64;
     fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx>;
 
@@ -267,7 +284,8 @@ trait AxisMeasureT: Debug {
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64>;
     fn can_resize(&self, idx: VisIdx) -> bool;
 
-    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> f64;
+    fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) -> bool;
+    fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64) -> bool;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -298,13 +316,6 @@ impl AxisMeasureT for FixedAxisMeasure {
         self.border
     }
 
-    fn set_axis_properties(&mut self, border: f64, len: usize, _remap: &Remap) {
-        self.border = border;
-        self.len = len;
-        // We don't care about remap as every item is the same... I think.
-        // TODO: Maybe we should care about the length?
-    }
-
     fn total_pixel_length(&self) -> f64 {
         self.full_pixels_per_unit() * (self.len as f64)
     }
@@ -317,7 +328,6 @@ impl AxisMeasureT for FixedAxisMeasure {
             None
         }
     }
-
 
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         if idx.0 < self.len {
@@ -339,8 +349,18 @@ impl AxisMeasureT for FixedAxisMeasure {
         false
     }
 
-    fn set_far_pixel_for_vis(&mut self, _idx: VisIdx, _pixel: f64) -> f64 {
-        self.pixels_per_unit
+    fn set_axis_properties(&mut self, border: f64, len: usize, _remap: &Remap) -> bool {
+        let changed = border != self.border || len != self.len;
+
+        self.border = border;
+        self.len = len;
+        // We don't care about remap as every item is the same... I think.
+        // TODO: Maybe we should care about the length?
+        changed
+    }
+
+    fn set_far_pixel_for_vis(&mut self, _idx: VisIdx, _pixel: f64) -> bool {
+        false
     }
 }
 
@@ -384,7 +404,7 @@ impl Debug for StoredAxisMeasure {
 impl StoredAxisMeasure {
     pub fn new(default_pixels: f64) -> Self {
         StoredAxisMeasure {
-            remap: Remap::Pristine,
+            remap: Remap::new(),
             log_pix_lengths: Default::default(),
             vis_pix_lengths: Default::default(),
             first_pixels: Default::default(),
@@ -398,15 +418,14 @@ impl StoredAxisMeasure {
     fn build_maps(&mut self) {
         let mut cur = 0.;
         self.vis_pix_lengths.clear();
-        match &self.remap {
-            Remap::Selected(RemapDetails::Full(vis_to_log)) => {
-                for log_idx in vis_to_log {
+        if self.remap.is_pristine() {
+            self.vis_pix_lengths.extend_from_slice(&self.log_pix_lengths)
+        }else{
+            for vis_idx in VisIdx::range_inc_iter(VisIdx(0), self.remap.max_vis_idx(self.log_pix_lengths.len())){
+                if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
                     self.vis_pix_lengths.push(self.log_pix_lengths[log_idx.0]);
                 }
             }
-            _ => self
-                .vis_pix_lengths
-                .extend_from_slice(&self.log_pix_lengths),
         }
 
         self.first_pixels.clear();
@@ -423,24 +442,6 @@ impl StoredAxisMeasure {
 impl AxisMeasureT for StoredAxisMeasure {
     fn border(&self) -> f64 {
         self.border
-    }
-
-    fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) {
-        self.border = border;
-        self.remap = remap.clone(); // Todo: pass by ref where needed? Or make the measure own it
-
-        let old_len = self.log_pix_lengths.len();
-
-        match old_len.cmp(&len) {
-            Ordering::Greater => self.log_pix_lengths.truncate(len),
-            Ordering::Less => {
-                let extra = vec![self.default_pixels; len - old_len];
-                self.log_pix_lengths.extend_from_slice(&extra[..]);
-                assert_eq!(self.log_pix_lengths.len(), len);
-            }
-            _ => (),
-        }
-        self.build_maps()
     }
 
     fn total_pixel_length(&self) -> f64 {
@@ -466,17 +467,39 @@ impl AxisMeasureT for StoredAxisMeasure {
         true
     }
 
-    fn set_far_pixel_for_vis(&mut self, vis_idx: VisIdx, pixel: f64) -> f64 {
+    fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) -> bool {
+        self.border = border;
+        self.remap = remap.clone(); // Todo: pass by ref where needed? Or make the measure own it
+
+        let old_len = self.log_pix_lengths.len();
+
+        match old_len.cmp(&len) {
+            Ordering::Greater => self.log_pix_lengths.truncate(len),
+            Ordering::Less => {
+                let extra = vec![self.default_pixels; len - old_len];
+                self.log_pix_lengths.extend_from_slice(&extra[..]);
+                assert_eq!(self.log_pix_lengths.len(), len);
+            }
+            _ => (),
+        }
+        self.build_maps();
+
+        true
+    }
+
+    fn set_far_pixel_for_vis(&mut self, vis_idx: VisIdx, pixel: f64) -> bool {
         let length = f64::max(0., pixel - *self.first_pixels.get(&vis_idx).unwrap_or(&0.));
         // Todo Option
         if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
             if let Some(place) = self.log_pix_lengths.get_mut(log_idx.0) {
-                *place = length;
-                self.build_maps(); // TODO : modify efficiently instead of rebuilding
-                return length;
+                if *place != length {
+                    *place = length;
+                    self.build_maps(); // TODO : modify efficiently instead of rebuilding
+                    return true;
+                }
             }
         }
-        0.
+        false
     }
 }
 
