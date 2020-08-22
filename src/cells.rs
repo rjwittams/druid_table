@@ -549,7 +549,7 @@ where
         self.cell_delegate.init(ctx, env); // TODO reduce calls? Invalidate on some changes
 
         let rtc = self.config.resolve(env);
-        let rect = ctx.region().to_rect();
+        let rect = ctx.region().bounding_box();
 
         let draw_rect = rect.intersect(Rect::from_origin_size(
             Point::ZERO,

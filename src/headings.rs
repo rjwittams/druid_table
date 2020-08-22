@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use druid::widget::prelude::*;
 use druid::{
     Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, Point, Rect, Size, UpdateCtx, Widget,
+    PaintCtx, Rect, Size, UpdateCtx, Widget,
 };
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
@@ -374,7 +374,7 @@ where
 
         if let Some(rtc) = &self.resolved_config {
             self.header_render.init(ctx, env);
-            let rect = ctx.region().to_rect();
+            let rect = ctx.region().bounding_box();
 
             ctx.fill(rect, &rtc.header_background);
 

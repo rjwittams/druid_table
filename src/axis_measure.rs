@@ -1,5 +1,4 @@
 use crate::config::{DEFAULT_COL_HEADER_HEIGHT, DEFAULT_ROW_HEADER_WIDTH};
-use crate::data::RemapDetails;
 use crate::{AxisMeasurementType, Remap};
 use druid::{Cursor, Data, Point, Rect, Size};
 use float_ord::FloatOrd;

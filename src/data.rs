@@ -5,8 +5,6 @@ use druid::im::HashMap;
 use druid::Data;
 use crate::data::SortDirection::Descending;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use im::HashSet;
 
 // This ended up sort of similar to Lens,
 // so I've named the methods similarly.

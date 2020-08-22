@@ -2,16 +2,14 @@ use crate::columns::{
     CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, StoredAxisMeasure, TableAxis};
+use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
-use crate::{CellRender, FixedAxisMeasure, HeaderBuild};
+use crate::{CellRender, HeaderBuild};
 use druid::{theme, Data, KeyOrValue};
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub enum AxisMeasurementType {

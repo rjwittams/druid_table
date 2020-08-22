@@ -8,7 +8,7 @@ use crate::selection::SingleCell;
 use crate::{CellsDelegate, IndexedData, IndexedItems, Remap, RemapSpec, Remapper, TableAxis};
 use druid::im::Vector;
 use druid::kurbo::{Line, PathEl};
-use druid::piet::{FontBuilder, PietFont, Text, TextLayout, TextLayoutBuilder};
+use druid::piet::{FontFamily, Piet, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::widget::TextBox;
 use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
@@ -239,7 +239,7 @@ pub struct TextCell {
     text_color: KeyOrValue<Color>,
     font_name: KeyOrValue<&'static str>,
     font_size: KeyOrValue<f64>,
-    cached_font: Option<PietFont>,
+    cached_font: Option<FontFamily>,
 }
 
 impl TextCell {
@@ -267,29 +267,26 @@ impl TextCell {
         self
     }
 
-    fn resolve_font(&self, ctx: &mut PaintCtx, env: &Env) -> PietFont {
-        let font: PietFont = ctx
+    fn resolve_font(&self, ctx: &mut PaintCtx, env: &Env) -> FontFamily {
+        let font: FontFamily = ctx
             .text()
-            .new_font_by_name(self.font_name.resolve(env), self.font_size.resolve(env))
-            .build()
+            .font_family(self.font_name.resolve(env) )
             .unwrap(); // TODO errors / fallback
         font
     }
 
-    fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &PietFont) {
+    fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &FontFamily) {
         // TODO: error handling
         // TODO: wrapping (multi line)
 
         if let Ok(layout) = ctx
             .text()
-            .new_text_layout(font, &data, std::f64::INFINITY)
+            .new_text_layout( &data)
+            .font(font.clone(), self.font_size.resolve(env))
+            .text_color(self.text_color.resolve(env))
             .build()
         {
-            let fill_color = self.text_color.resolve(env);
-
-            if let Some(metric) = layout.line_metric(0) {
-                ctx.draw_text(&layout, (0.0, metric.height), &fill_color);
-            }
+            ctx.draw_text(&layout, (0.0, 0.0));
         }
     }
 }
@@ -375,7 +372,8 @@ impl<T, I: CellRender<T>> CellRender<T> for HeaderCell<T, I> {
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         match cell {
             CellCtx::Header(_, _, Some(ss)) => {
-                let rect = ctx.region().to_rect().with_origin(Point::ORIGIN).inset(-3.);
+                // TODO The size should be on the CellCtx, should not be using region
+                let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN).inset(-3.);
                 let rad = rect.height() * 0.25;
                 let up = ss.direction == Ascending;
 
@@ -386,7 +384,7 @@ impl<T, I: CellRender<T>> CellRender<T> for HeaderCell<T, I> {
                     rad,
                 );
                 ctx.render_ctx.stroke(&arrow[..], &Color::WHITE, 1.0);
-                let rect1 = ctx.region().to_rect();
+                let rect1 = ctx.region().bounding_box();
                 let rect1 = rect1
                     .with_origin(Point::ORIGIN)
                     .with_size((rect1.width() - (rad + 3.) * 2., rect1.height()));

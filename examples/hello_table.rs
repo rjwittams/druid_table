@@ -78,7 +78,7 @@ impl CellRender<f64> for PieCell {
     fn init(&mut self, _ctx: &mut PaintCtx, _env: &Env) {}
 
     fn paint(&self, ctx: &mut PaintCtx, _cell: &CellCtx, data: &f64, _env: &Env) {
-        let rect = ctx.region().to_rect().with_origin(Point::ORIGIN);
+        let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN);
 
         //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
         let circle = CircleSegment::new(
