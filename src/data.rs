@@ -165,7 +165,7 @@ impl SortSpec {
     }
 }
 
-#[derive(Clone, Debug, Data)] // TODO explicit data
+#[derive(Clone, Debug, Data)]
 pub struct RemapSpec {
     pub(crate) sort_by: Vector<SortSpec>, // columns sorted
                                           // filters

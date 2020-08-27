@@ -239,7 +239,7 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     pub fn new_in_scope(args: Args, measures: AxisPair<AxisMeasure>) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
         Container::new(Scope::new(
-            DefaultScopePolicy::for_lens(move |d| TableState::new(d, measures.clone()), data_lens),
+            DefaultScopePolicy::from_lens(move |d: Args::TableData| TableState::new(d, measures.clone()), data_lens),
             Table::new(args),
         ))
     }
