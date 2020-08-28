@@ -8,7 +8,7 @@ use crate::selection::SingleCell;
 use crate::{CellsDelegate, IndexedData, IndexedItems, Remap, RemapSpec, Remapper, TableAxis};
 use druid::im::Vector;
 use druid::kurbo::{Line, PathEl};
-use druid::piet::{FontFamily, Piet, Text, TextLayout, TextLayoutBuilder};
+use druid::piet::{FontFamily, Text, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::widget::TextBox;
 use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};

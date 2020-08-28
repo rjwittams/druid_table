@@ -245,7 +245,6 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
 }
 
 pub fn main() {
-    simple_logger::init().unwrap();
 
     // describe the main window
     let main_window = WindowDesc::new(build_main_widget)
@@ -275,6 +274,7 @@ pub fn main() {
 
     // start the application
     AppLauncher::with_window(main_window)
+        .use_simple_logger()
         .launch(initial_state)
         .expect("Failed to launch application");
 }
