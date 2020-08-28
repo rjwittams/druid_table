@@ -16,6 +16,7 @@ extern crate im;
 
 fn main_widget()->impl Widget<TopLevel>{
     Vis::new(MyBarChart{
+        scales: None,
         tooltip_item: None
     } )
 }
@@ -54,14 +55,14 @@ struct TopLevel {
 }
 
 struct MyBarChart{
+    scales: Option<(BandScale<String>, LinearScale<u32>)>,
     tooltip_item: Option<CatCount>
 }
 
 impl VisPolicy for MyBarChart {
     type Input = TopLevel;
-    type Scales = (BandScale<String>, LinearScale<u32>);
 
-    fn event(&mut self, data: &mut Self::Input, event_marks: &mut Vec<Mark>, scales: &Self::Scales, event: &VisEvent) -> bool {
+    fn event(&mut self, data: &mut Self::Input, event_marks: &mut Vec<Mark>, event: &VisEvent) -> bool {
         log::info!("Event {:?}", event);
         let chg = match event {
             VisEvent::MouseEnter(MarkId::Datum { idx })=>{
@@ -76,24 +77,26 @@ impl VisPolicy for MyBarChart {
         };
         if chg {
             if let Some(tt) = &self.tooltip_item {
-                let (x, y) = scales;
-                event_marks.clear();
-                event_marks.push(Mark::new(MarkId::Unknown, MarkShape::Text {
-                    txt: tt.1.to_string(),
-                    font_fam: Default::default(),
-                    size: 12.0,
-                    point: Point::new(
-                        x.range_val( &tt.0).mid(),
-                        y.range_val( &tt.1) - 2.0
-                    )
-                }, Color::rgb8(0xD0, 0xD0, 0xD0), None));
+                if let Some((x, y)) = &self.scales {
+                    event_marks.clear();
+                    event_marks.push(Mark::new(MarkId::Unknown, MarkShape::Text {
+                        txt: tt.1.to_string(),
+                        font_fam: Default::default(),
+                        size: 12.0,
+                        point: Point::new(
+                            x.range_val(&tt.0).mid(),
+                            y.range_val(&tt.1) - 2.0
+                        )
+                    }, Color::rgb8(0xD0, 0xD0, 0xD0), None));
+                }
             }
         }
         chg
     }
 
-    fn scales(&self, data: &Self::Input, size: Size) -> Self::Scales {
-        (
+    fn scales(&mut self, data: &Self::Input, size: Size) {
+        self.scales = Some(
+            (
             BandScale::new(
                 F64Range(30.0, size.width),
                 &mut data.records.iter().map(|x| (x.0).clone()),
@@ -106,29 +109,35 @@ impl VisPolicy for MyBarChart {
                 None,
                 true,
             ),
-        )
+        ));
     }
 
-    fn data_marks(&self, data: &Self::Input, scales: &Self::Scales) -> Vec<Mark> {
-        let (x, y) = scales;
-        data.records
-            .iter()
-            .enumerate()
-            .map(|(idx, (cat, amount))| {
-                let xr = x.range_val(cat);
-                let r = Rect::new(xr.0, y.range.0, xr.1, y.range_val(amount));
-                Mark::new(
-                    MarkId::Datum { idx: LogIdx(idx) },
-                    MarkShape::Rect(r),
-                    Color::rgb8(0x46, 0x82, 0xb4),
-                    Some(Color::rgb8(0xFF, 0, 0)),
-                )
-            })
-            .collect()
+    fn data_marks(&self, data: &Self::Input) -> Vec<Mark> {
+        if let Some((x, y)) = &self.scales {
+            data.records
+                .iter()
+                .enumerate()
+                .map(|(idx, (cat, amount))| {
+                    let xr = x.range_val(cat);
+                    let r = Rect::new(xr.0, y.range.0, xr.1, y.range_val(amount));
+                    Mark::new(
+                        MarkId::Datum { idx: LogIdx(idx) },
+                        MarkShape::Rect(r),
+                        Color::rgb8(0x46, 0x82, 0xb4),
+                        Some(Color::rgb8(0xFF, 0, 0)),
+                    )
+                })
+                .collect()
+        }else{
+            vec![]
+        }
     }
 
-    fn drawable_axes(&self, scales: &Self::Scales) -> Vec<DrawableAxis> {
-        let (x, y) = scales;
-        vec![x.make_axis(), y.make_axis()]
+    fn drawable_axes(&self) -> Vec<DrawableAxis> {
+        if let Some((x, y)) = &self.scales {
+            vec![x.make_axis(), y.make_axis()]
+        }else{
+            vec![]
+        }
     }
 }

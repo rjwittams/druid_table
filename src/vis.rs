@@ -78,26 +78,25 @@ pub enum VisEvent{
 
 pub trait VisPolicy{
     type Input : Data;
-    type Scales;
 
-    fn event(&mut self, data: &mut Self::Input, event_marks:&mut Vec<Mark>, scales: &Self::Scales, event: &VisEvent)->bool;
-    fn scales(&self, data: &Self::Input, size: Size)->Self::Scales;
-    fn data_marks(&self, data: &Self::Input, scales: &Self::Scales) ->Vec<Mark>;
-    fn drawable_axes(&self, scales: &Self::Scales) ->Vec<DrawableAxis>;
+    fn event(&mut self, data: &mut Self::Input, event_marks:&mut Vec<Mark>, event: &VisEvent)->bool;
+    fn scales(&mut self, data: &Self::Input, size: Size);
+    fn data_marks(&self, data: &Self::Input)->Vec<Mark>;
+    fn drawable_axes(&self) ->Vec<DrawableAxis>;
 }
 
 struct VisState<VP: VisPolicy>{
-    scales: VP::Scales,
     event_marks: Vec<Mark>,
     data_marks: Vec<Mark>,
     drawable_axes: Vec<DrawableAxis>,
     transform: Affine,
-    focus: Option<MarkId>
+    focus: Option<MarkId>,
+    phantom_vp: PhantomData<VP>
 }
 
 impl<VP: VisPolicy> VisState<VP> {
-    pub fn new(scales: VP::Scales, data_marks: Vec<Mark>, drawable_axes: Vec<DrawableAxis>, transform: Affine) -> Self {
-        VisState { scales, event_marks: vec![], data_marks, drawable_axes, transform, focus: None }
+    pub fn new( data_marks: Vec<Mark>, drawable_axes: Vec<DrawableAxis>, transform: Affine) -> Self {
+        VisState { event_marks: vec![], data_marks, drawable_axes, transform, focus: None, phantom_vp: Default::default() }
     }
 
     fn find_mark(&mut self, pos: Point)->Option<&mut Mark>{
@@ -135,7 +134,7 @@ impl<P: VisPolicy> Vis<P> {
                     let tl = ctx.text().new_text_layout(&txt).font(font_fam.clone(), *size).text_color(color.clone()).build().unwrap();
                     ctx.with_save( |ctx| {
                         // Flip the coordinates back to draw text
-                        ctx.transform( Affine::translate( point.to_vec2() - Vec2::new( tl.size().width / 2., 0.) ) * Affine::FLIP_Y );
+                        ctx.transform( Affine::translate( point.to_vec2() - Vec2::new( tl.size().width / 2., -tl.size().height ) ) * Affine::FLIP_Y );
                         ctx.draw_text(&tl, Point::ORIGIN);
                     });
                 }
@@ -145,10 +144,10 @@ impl<P: VisPolicy> Vis<P> {
 
     fn ensure_state(&mut self, data: &P::Input, sz: Size) -> &mut VisState<P> {
         if self.state.is_none() {
-            let scales = self.policy.scales(data, sz);
-            let marks = self.policy.data_marks(data, &scales);
-            let axes = self.policy.drawable_axes( &scales);
-            self.state = Some(VisState::new(scales, marks, axes,  Affine::FLIP_Y * Affine::translate(Vec2::new(0., -sz.height))));
+            self.policy.scales(data, sz);
+            let marks = self.policy.data_marks(data);
+            let axes = self.policy.drawable_axes();
+            self.state = Some(VisState::new(marks, axes,  Affine::FLIP_Y * Affine::translate(Vec2::new(0., -sz.height))));
         }
         self.state.as_mut().unwrap()
     }
@@ -168,7 +167,7 @@ impl <VP: VisPolicy> Widget<VP::Input> for Vis<VP>{
                         _ => {
                             let mi = mark.id.clone();
                             if state.focus != Some(mi) {
-                                self.policy.event(data, &mut state.event_marks,  &state.scales, &VisEvent::MouseEnter(mi));
+                                self.policy.event(data, &mut state.event_marks,   &VisEvent::MouseEnter(mi));
                                 state.focus = Some(mi);
                                 ctx.request_paint();
                             }
@@ -176,8 +175,7 @@ impl <VP: VisPolicy> Widget<VP::Input> for Vis<VP>{
                     }
                 }else{
                     if let Some(focus) = state.focus {
-                        let scales = &state.scales;
-                        if self.policy.event(data, &mut state.event_marks, scales,&VisEvent::MouseOut(focus)){
+                        if self.policy.event(data, &mut state.event_marks, &VisEvent::MouseOut(focus)){
                             ctx.request_paint()
                         }
                     }
