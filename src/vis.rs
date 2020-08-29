@@ -4,7 +4,7 @@ use druid::piet::{FontFamily, Text, TextLayoutBuilder, TextLayout};
 use druid::widget::prelude::RenderContext;
 use druid::widget::{Axis, CrossAxisAlignment};
 use std::hash::Hash;
-use std::fmt::Display;
+use std::fmt::{Display, Debug};
 use std::collections::{HashMap, BTreeSet};
 use itertools::Itertools;
 use itertools::__std_iter::{Chain, FlatMap};
@@ -14,6 +14,7 @@ use std::f64::NAN;
 use std::marker::PhantomData;
 use std::f64::consts::LN_10;
 use crate::LogIdx;
+use std::sync::Once;
 
 #[derive(Debug)]
 pub struct Mark{
@@ -38,10 +39,6 @@ impl Mark {
             _=>false
         }
     }
-}
-
-pub enum MarkText{
-
 }
 
 #[derive(Debug)]
@@ -76,17 +73,20 @@ pub enum VisEvent{
     MouseOut(MarkId)
 }
 
-pub trait VisPolicy{
+pub trait Visualization {
     type Input : Data;
+    type State : Default + Data + Debug;
 
-    fn event(&mut self, data: &mut Self::Input, event_marks:&mut Vec<Mark>, event: &VisEvent)->bool;
-    fn scales(&mut self, data: &Self::Input, size: Size);
+    fn layout(&mut self, data: &Self::Input, size: Size);
+    fn event(&mut self, data: &mut Self::Input, state: &mut Self::State, event: &VisEvent);
+    fn state_marks(&self, data: &Self::Input, state: &Self::State)->Vec<Mark>;
     fn data_marks(&self, data: &Self::Input)->Vec<Mark>;
     fn drawable_axes(&self) ->Vec<DrawableAxis>;
 }
 
-struct VisState<VP: VisPolicy>{
-    event_marks: Vec<Mark>,
+struct VisInner<VP: Visualization>{
+    state: VP::State,
+    state_marks: Vec<Mark>,
     data_marks: Vec<Mark>,
     drawable_axes: Vec<DrawableAxis>,
     transform: Affine,
@@ -94,9 +94,9 @@ struct VisState<VP: VisPolicy>{
     phantom_vp: PhantomData<VP>
 }
 
-impl<VP: VisPolicy> VisState<VP> {
-    pub fn new( data_marks: Vec<Mark>, drawable_axes: Vec<DrawableAxis>, transform: Affine) -> Self {
-        VisState { event_marks: vec![], data_marks, drawable_axes, transform, focus: None, phantom_vp: Default::default() }
+impl<VP: Visualization> VisInner<VP> {
+    pub fn new( state: VP::State, state_marks: Vec<Mark>, data_marks: Vec<Mark>, drawable_axes: Vec<DrawableAxis>, transform: Affine) -> Self {
+        VisInner { state, state_marks, data_marks, drawable_axes, transform, focus: None, phantom_vp: Default::default() }
     }
 
     fn find_mark(&mut self, pos: Point)->Option<&mut Mark>{
@@ -104,14 +104,14 @@ impl<VP: VisPolicy> VisState<VP> {
     }
 }
 
-pub struct Vis<P: VisPolicy>{
+pub struct Vis<P: Visualization>{
     policy: P,
-    state: Option<VisState<P>>
+    inner: Option<VisInner<P>>
 }
 
-impl<P: VisPolicy> Vis<P> {
+impl<P: Visualization> Vis<P> {
     pub fn new(policy: P) -> Self {
-        Vis { policy, state: None }
+        Vis { policy, inner: None }
     }
 
     fn paint_marks<'a>(ctx: &mut PaintCtx, focus: &Option<MarkId>, marks: &mut impl Iterator<Item=&'a Mark>) {
@@ -130,11 +130,12 @@ impl<P: VisPolicy> Vis<P> {
                     ctx.stroke(l, color, 1.0);
                 },
                 MarkShape::Text { txt, font_fam, size, point } => {
-                    // TODO: Put the layout in the text?
+                    // Not saving the text layout as the color is embedded into it and we are deriving it
+
                     let tl = ctx.text().new_text_layout(&txt).font(font_fam.clone(), *size).text_color(color.clone()).build().unwrap();
                     ctx.with_save( |ctx| {
                         // Flip the coordinates back to draw text
-                        ctx.transform( Affine::translate( point.to_vec2() - Vec2::new( tl.size().width / 2., -tl.size().height ) ) * Affine::FLIP_Y );
+                        ctx.transform( Affine::translate( point.to_vec2() - Vec2::new( tl.size().width / 2.,  0.0 /*-tl.size().height */ ) ) * Affine::FLIP_Y );
                         ctx.draw_text(&tl, Point::ORIGIN);
                     });
                 }
@@ -142,52 +143,56 @@ impl<P: VisPolicy> Vis<P> {
         }
     }
 
-    fn ensure_state(&mut self, data: &P::Input, sz: Size) -> &mut VisState<P> {
-        if self.state.is_none() {
-            self.policy.scales(data, sz);
+    fn ensure_state(&mut self, data: &P::Input, sz: Size) -> &mut VisInner<P> {
+        if self.inner.is_none() {
+            self.policy.layout(data, sz);
             let marks = self.policy.data_marks(data);
             let axes = self.policy.drawable_axes();
-            self.state = Some(VisState::new(marks, axes,  Affine::FLIP_Y * Affine::translate(Vec2::new(0., -sz.height))));
+            self.inner = Some(VisInner::new(  Default::default(), Default::default(), marks, axes, Affine::FLIP_Y * Affine::translate(Vec2::new(0., -sz.height))));
         }
-        self.state.as_mut().unwrap()
+        self.inner.as_mut().unwrap()
     }
 }
 
-impl <VP: VisPolicy> Widget<VP::Input> for Vis<VP>{
+impl <VP: Visualization> Widget<VP::Input> for Vis<VP>{
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut VP::Input, env: &Env) {
         self.ensure_state(data, ctx.size());
-        let state = self.state.as_mut().unwrap();
+        let inner = self.inner.as_mut().unwrap();
+        let old_state: VP::State = inner.state.clone();
 
         match event {
             Event::MouseMove(me) => {
-                if let Some(mark) = state.find_mark( state.transform.inverse() * me.pos ){
+                if let Some(mark) = inner.find_mark( inner.transform.inverse() * me.pos ){
 
                     match mark.id {
                         MarkId::Unknown => {}
                         _ => {
                             let mi = mark.id.clone();
-                            if state.focus != Some(mi) {
-                                self.policy.event(data, &mut state.event_marks,   &VisEvent::MouseEnter(mi));
-                                state.focus = Some(mi);
+                            if inner.focus != Some(mi) {
+                                self.policy.event(data, &mut inner.state, &VisEvent::MouseEnter(mi));
+                                inner.focus = Some(mi);
                                 ctx.request_paint();
                             }
                         }
                     }
                 }else{
-                    if let Some(focus) = state.focus {
-                        if self.policy.event(data, &mut state.event_marks, &VisEvent::MouseOut(focus)){
-                            ctx.request_paint()
-                        }
+                    if let Some(focus) = inner.focus {
+                        self.policy.event(data, &mut inner.state, &VisEvent::MouseOut(focus));
                     }
-                    if state.focus.is_some(){
-                        state.focus = None;
+                    if inner.focus.is_some(){
+                        inner.focus = None;
                         ctx.request_paint()
                     }
                 }
             }
             _=>{}
         }
-        ()
+
+        if !old_state.same( &inner.state ) {
+            inner.state_marks = self.policy.state_marks(data, &mut inner.state);
+            ctx.request_paint();
+            log::info!("Change {:?}", (&old_state, &inner.state, &inner.state_marks) );
+        }
     }
 
     fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &VP::Input, env: &Env) {
@@ -198,13 +203,13 @@ impl <VP: VisPolicy> Widget<VP::Input> for Vis<VP>{
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &VP::Input, data: &VP::Input, env: &Env) {
         if !data.same(old_data){
-            self.state = None;
+            self.inner = None; // Need to give the 
             ctx.request_paint()
         }
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &VP::Input, env: &Env) -> Size {
-        self.state = None;
+        self.inner = None;
         bc.max()
     }
 
@@ -222,7 +227,7 @@ impl <VP: VisPolicy> Widget<VP::Input> for Vis<VP>{
                 Self::paint_marks(ctx, &state.focus, &mut axis.marks.iter());
             }
 
-            Self::paint_marks(ctx, &state.focus, &mut state.event_marks.iter());
+            Self::paint_marks(ctx, &state.focus, &mut state.state_marks.iter());
         });
     }
 }
@@ -404,7 +409,6 @@ impl <T: LinearValue > LinearScale<T> {
         let tick_extent = line_x - 8.;
         let label_x = tick_extent - 2.;
         marks.push( Mark::new(MarkId::Unknown,MarkShape::Line(Line::new((line_x, self.range.0), (line_x, self.range.1))), Color::WHITE, None));
-
 
         for step in 0..=self.ticks {
             let d_v = self.domain_range.0 + self.tick_step * (step as f64);

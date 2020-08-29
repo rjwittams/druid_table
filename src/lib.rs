@@ -27,7 +27,7 @@ pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirect
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};
-pub use vis::{Vis, VisPolicy, Mark, MarkShape, MarkId, DrawableAxis, BandScale, LinearScale, F64Range, VisEvent};
+pub use vis::{Vis, Visualization, Mark, MarkShape, MarkId, DrawableAxis, BandScale, LinearScale, F64Range, VisEvent};
 
 #[macro_use]
 extern crate druid;

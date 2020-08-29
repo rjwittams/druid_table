@@ -1,7 +1,7 @@
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::widget::{Axis, CrossAxisAlignment};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
-use druid_table::{BandScale, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkShape, Vis, VisPolicy, VisEvent};
+use druid_table::{BandScale, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkShape, Vis, Visualization, VisEvent};
 use im::Vector;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
@@ -16,8 +16,7 @@ extern crate im;
 
 fn main_widget()->impl Widget<TopLevel>{
     Vis::new(MyBarChart{
-        scales: None,
-        tooltip_item: None
+        scales: None
     } )
 }
 
@@ -55,46 +54,14 @@ struct TopLevel {
 }
 
 struct MyBarChart{
-    scales: Option<(BandScale<String>, LinearScale<u32>)>,
-    tooltip_item: Option<CatCount>
+    scales: Option<(BandScale<String>, LinearScale<u32>)>
 }
 
-impl VisPolicy for MyBarChart {
+impl Visualization for MyBarChart {
     type Input = TopLevel;
+    type State = Option<CatCount>;
 
-    fn event(&mut self, data: &mut Self::Input, event_marks: &mut Vec<Mark>, event: &VisEvent) -> bool {
-        log::info!("Event {:?}", event);
-        let chg = match event {
-            VisEvent::MouseEnter(MarkId::Datum { idx })=>{
-                self.tooltip_item = data.records.get(idx.0).cloned();
-                true
-            },
-            VisEvent::MouseOut(_)=>{
-                self.tooltip_item = None;
-                true
-            }
-            _=>false
-        };
-        if chg {
-            if let Some(tt) = &self.tooltip_item {
-                if let Some((x, y)) = &self.scales {
-                    event_marks.clear();
-                    event_marks.push(Mark::new(MarkId::Unknown, MarkShape::Text {
-                        txt: tt.1.to_string(),
-                        font_fam: Default::default(),
-                        size: 12.0,
-                        point: Point::new(
-                            x.range_val(&tt.0).mid(),
-                            y.range_val(&tt.1) - 2.0
-                        )
-                    }, Color::rgb8(0xD0, 0xD0, 0xD0), None));
-                }
-            }
-        }
-        chg
-    }
-
-    fn scales(&mut self, data: &Self::Input, size: Size) {
+    fn layout(&mut self, data: &Self::Input, size: Size) {
         self.scales = Some(
             (
             BandScale::new(
@@ -110,6 +77,34 @@ impl VisPolicy for MyBarChart {
                 true,
             ),
         ));
+    }
+
+    fn event(&mut self, data: &mut Self::Input, tooltip_item: &mut Option<CatCount>, event: &VisEvent) {
+        match event {
+            VisEvent::MouseEnter(MarkId::Datum { idx })=>*tooltip_item = data.records.get(idx.0).cloned(),
+            VisEvent::MouseOut(_)=> *tooltip_item = None,
+            _=>()
+        };
+    }
+
+    fn state_marks(&self, data: &Self::Input, tooltip_item: &Option<CatCount>) -> Vec<Mark> {
+        let mut marks = Vec::new();
+        if let Some(tt) = tooltip_item {
+            log::info!("TT: {:?}", tt);
+            if let Some((x, y)) = &self.scales {
+                log::info!("push: {:?}", tt);
+                marks.push(Mark::new(MarkId::Unknown, MarkShape::Text {
+                    txt: tt.1.to_string(),
+                    font_fam: Default::default(),
+                    size: 12.0,
+                    point: Point::new(
+                        x.range_val(&tt.0).mid(),
+                        y.range_val(&tt.1) - 2.0
+                    )
+                }, Color::rgb8(0xD0, 0xD0, 0xD0), None));
+            }
+        }
+        marks
     }
 
     fn data_marks(&self, data: &Self::Input) -> Vec<Mark> {
