@@ -7,14 +7,10 @@ use std::hash::Hash;
 use std::fmt::{Display, Debug};
 use std::collections::{HashMap, BTreeSet};
 use itertools::Itertools;
-use itertools::__std_iter::{Chain, FlatMap};
-use std::slice::Iter;
-use std::ops::{Add, Sub, Mul};
 use std::f64::NAN;
 use std::marker::PhantomData;
 use std::f64::consts::LN_10;
 use crate::LogIdx;
-use std::sync::Once;
 
 #[derive(Debug)]
 pub struct Mark{
@@ -76,27 +72,30 @@ pub enum VisEvent{
 pub trait Visualization {
     type Input : Data;
     type State : Default + Data + Debug;
+    type Layout;
 
-    fn layout(&mut self, data: &Self::Input, size: Size);
-    fn event(&mut self, data: &mut Self::Input, state: &mut Self::State, event: &VisEvent);
-    fn state_marks(&self, data: &Self::Input, state: &Self::State)->Vec<Mark>;
-    fn data_marks(&self, data: &Self::Input)->Vec<Mark>;
-    fn drawable_axes(&self) ->Vec<DrawableAxis>;
+    fn layout(&self, data: &Self::Input, size: Size)->Self::Layout;
+    fn event(&self, data: &mut Self::Input, layout: &Self::Layout, state: &mut Self::State, event: &VisEvent);
+
+    fn layout_marks(&self, layout: &Self::Layout) ->Vec<DrawableAxis>;
+    fn state_marks(&self, data: &Self::Input, layout: &Self::Layout, state: &Self::State)->Vec<Mark>;
+    fn data_marks(&self, data: &Self::Input, layout: &Self::Layout)->Vec<Mark>;
 }
 
 struct VisInner<VP: Visualization>{
+    layout: VP::Layout,
     state: VP::State,
+    layout_marks: Vec<DrawableAxis>,
     state_marks: Vec<Mark>,
     data_marks: Vec<Mark>,
-    drawable_axes: Vec<DrawableAxis>,
     transform: Affine,
     focus: Option<MarkId>,
     phantom_vp: PhantomData<VP>
 }
 
 impl<VP: Visualization> VisInner<VP> {
-    pub fn new( state: VP::State, state_marks: Vec<Mark>, data_marks: Vec<Mark>, drawable_axes: Vec<DrawableAxis>, transform: Affine) -> Self {
-        VisInner { state, state_marks, data_marks, drawable_axes, transform, focus: None, phantom_vp: Default::default() }
+    pub fn new(layout: VP::Layout, state: VP::State, state_marks: Vec<Mark>, data_marks: Vec<Mark>, layout_marks: Vec<DrawableAxis>, transform: Affine) -> Self {
+        VisInner {layout, state, state_marks, data_marks, layout_marks, transform, focus: None, phantom_vp: Default::default() }
     }
 
     fn find_mark(&mut self, pos: Point)->Option<&mut Mark>{
@@ -143,12 +142,22 @@ impl<P: Visualization> Vis<P> {
         }
     }
 
-    fn ensure_state(&mut self, data: &P::Input, sz: Size) -> &mut VisInner<P> {
+    fn ensure_state(&mut self, data: &P::Input, size: Size) -> &mut VisInner<P> {
         if self.inner.is_none() {
-            self.policy.layout(data, sz);
-            let marks = self.policy.data_marks(data);
-            let axes = self.policy.drawable_axes();
-            self.inner = Some(VisInner::new(  Default::default(), Default::default(), marks, axes, Affine::FLIP_Y * Affine::translate(Vec2::new(0., -sz.height))));
+
+            let state: P::State = Default::default();
+
+            let layout = self.policy.layout(data, size);
+            let state_marks = self.policy.state_marks(data, &layout, &state);
+            let data_marks = self.policy.data_marks( data, &layout);
+            let layout_marks = self.policy.layout_marks(&layout);
+            self.inner = Some(VisInner::new(
+                layout,
+                state,
+                state_marks,
+                data_marks,
+                layout_marks,
+                Affine::FLIP_Y * Affine::translate(Vec2::new(0., -size.height))));
         }
         self.inner.as_mut().unwrap()
     }
@@ -169,7 +178,7 @@ impl <VP: Visualization> Widget<VP::Input> for Vis<VP>{
                         _ => {
                             let mi = mark.id.clone();
                             if inner.focus != Some(mi) {
-                                self.policy.event(data, &mut inner.state, &VisEvent::MouseEnter(mi));
+                                self.policy.event(data, &inner.layout, &mut inner.state, &VisEvent::MouseEnter(mi));
                                 inner.focus = Some(mi);
                                 ctx.request_paint();
                             }
@@ -177,7 +186,7 @@ impl <VP: Visualization> Widget<VP::Input> for Vis<VP>{
                     }
                 }else{
                     if let Some(focus) = inner.focus {
-                        self.policy.event(data, &mut inner.state, &VisEvent::MouseOut(focus));
+                        self.policy.event(data, &inner.layout, &mut inner.state, &VisEvent::MouseOut(focus));
                     }
                     if inner.focus.is_some(){
                         inner.focus = None;
@@ -189,7 +198,7 @@ impl <VP: Visualization> Widget<VP::Input> for Vis<VP>{
         }
 
         if !old_state.same( &inner.state ) {
-            inner.state_marks = self.policy.state_marks(data, &mut inner.state);
+            inner.state_marks = self.policy.state_marks(data, &inner.layout, &mut inner.state);
             ctx.request_paint();
             log::info!("Change {:?}", (&old_state, &inner.state, &inner.state_marks) );
         }
@@ -223,7 +232,7 @@ impl <VP: Visualization> Widget<VP::Input> for Vis<VP>{
 
             Self::paint_marks(ctx, &state.focus, &mut state.data_marks.iter());
 
-            for axis in state.drawable_axes.iter() {
+            for axis in state.layout_marks.iter() {
                 Self::paint_marks(ctx, &state.focus, &mut axis.marks.iter());
             }
 
@@ -300,13 +309,13 @@ impl LinearValue for u32{
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Data)]
 pub struct F64Range(pub f64, pub f64);
 
 lazy_static! {
-static ref e10: f64 = 50.0_f64.sqrt();
-static ref e5: f64 = 10.0_f64.sqrt();
-static ref e2: f64 = 2.0_f64.sqrt();
+static ref E10: f64 = 50.0_f64.sqrt();
+static ref E5: f64 = 10.0_f64.sqrt();
+static ref E2: f64 = 2.0_f64.sqrt();
 }
 
 impl F64Range {
@@ -319,15 +328,15 @@ impl F64Range {
     }
 
     fn step_size(self, count: usize) ->f64{
-            let step = self.distance() / count.max(0) as f64 ;
-            let power = ( step.ln() / LN_10 ).floor();
-            let error = step / 10.0_f64.powf(power);
+        let step = self.distance() / count.max(0) as f64 ;
+        let power = ( step.ln() / LN_10 ).floor();
+        let error = step / 10.0_f64.powf(power);
 
-         let factor = if error >= *e10 {
+         let factor = if error >= *E10 {
              10.
-         }else if error >= *e5 {
+         }else if error >= *E5 {
              5.
-         }else if error >= *e2 {
+         }else if error >= *E2 {
              2.
          }else {
              1.
