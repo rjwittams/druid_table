@@ -245,7 +245,6 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
 }
 
 pub fn main() {
-
     // describe the main window
     let main_window = WindowDesc::new(build_main_widget)
         .title(WINDOW_TITLE)

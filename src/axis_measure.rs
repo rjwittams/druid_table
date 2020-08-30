@@ -418,9 +418,13 @@ impl StoredAxisMeasure {
         let mut cur = 0.;
         self.vis_pix_lengths.clear();
         if self.remap.is_pristine() {
-            self.vis_pix_lengths.extend_from_slice(&self.log_pix_lengths)
-        }else{
-            for vis_idx in VisIdx::range_inc_iter(VisIdx(0), self.remap.max_vis_idx(self.log_pix_lengths.len())){
+            self.vis_pix_lengths
+                .extend_from_slice(&self.log_pix_lengths)
+        } else {
+            for vis_idx in VisIdx::range_inc_iter(
+                VisIdx(0),
+                self.remap.max_vis_idx(self.log_pix_lengths.len()),
+            ) {
                 if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
                     self.vis_pix_lengths.push(self.log_pix_lengths[log_idx.0]);
                 }

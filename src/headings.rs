@@ -231,10 +231,10 @@ where
                     } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
                         // Already selected so move headings:
-                        if sel.fully_selects_heading(self.axis, idx){
+                        if sel.fully_selects_heading(self.axis, idx) {
                             self.header_movement = HeaderMovement::Moving(idx);
                             ctx.set_active(true);
-                        }else{
+                        } else {
                             // Change the selection
                             if me.mods.shift() {
                                 sel.extend_in_axis(self.axis, idx, &data.remaps);
@@ -261,9 +261,7 @@ where
                     ctx.set_handled()
                 } else if let HeaderMovement::Moving(idx) = self.header_movement {
                     // Show visual indicator
-                    if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
-
-                    }
+                    if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {}
                     ctx.set_handled()
                 } else if self.selection_dragging {
                     if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
@@ -288,13 +286,13 @@ where
                     self.resize_dragging = None;
                     ctx.set_active(false);
                     ctx.set_handled();
-                }else if let HeaderMovement::Moving(moved_idx) = self.header_movement {
+                } else if let HeaderMovement::Moving(moved_idx) = self.header_movement {
                     if let Some(moved_to_idx) = measure.vis_idx_from_pixel(pix_main) {
                         data.explicit_header_move(self.axis, moved_to_idx)
                     }
                     ctx.set_active(false);
                     ctx.set_handled()
-                }else if self.selection_dragging {
+                } else if self.selection_dragging {
                     self.selection_dragging = false;
                     ctx.set_active(false);
                     ctx.set_handled()

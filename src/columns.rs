@@ -268,10 +268,7 @@ impl TextCell {
     }
 
     fn resolve_font(&self, ctx: &mut PaintCtx, env: &Env) -> FontFamily {
-        let font: FontFamily = ctx
-            .text()
-            .font_family(self.font_name.resolve(env) )
-            .unwrap(); // TODO errors / fallback
+        let font: FontFamily = ctx.text().font_family(self.font_name.resolve(env)).unwrap(); // TODO errors / fallback
         font
     }
 
@@ -281,7 +278,7 @@ impl TextCell {
 
         if let Ok(layout) = ctx
             .text()
-            .new_text_layout( &data)
+            .new_text_layout(&data)
             .font(font.clone(), self.font_size.resolve(env))
             .text_color(self.text_color.resolve(env))
             .build()
@@ -373,7 +370,11 @@ impl<T, I: CellRender<T>> CellRender<T> for HeaderCell<T, I> {
         match cell {
             CellCtx::Header(_, _, Some(ss)) => {
                 // TODO The size should be on the CellCtx, should not be using region
-                let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN).inset(-3.);
+                let rect = ctx
+                    .region()
+                    .bounding_box()
+                    .with_origin(Point::ORIGIN)
+                    .inset(-3.);
                 let rad = rect.height() * 0.25;
                 let up = ss.direction == Ascending;
 

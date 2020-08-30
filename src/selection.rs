@@ -210,7 +210,7 @@ impl CellRange {
         CellRange { focus, extent }
     }
 
-    pub fn contains(&self, axis: TableAxis, vis_idx: VisIdx)->bool{
+    pub fn contains(&self, axis: TableAxis, vis_idx: VisIdx) -> bool {
         let (a, b) = VisIdx::ascending(self.focus.vis[axis], self.extent.vis[axis]);
         a <= vis_idx && vis_idx <= b
     }
@@ -508,22 +508,32 @@ impl TableSelection {
         }
     }
 
-    pub fn fully_selects_heading(&self, in_axis: TableAxis, idx: VisIdx)->bool{
+    pub fn fully_selects_heading(&self, in_axis: TableAxis, idx: VisIdx) -> bool {
         match self {
-            TableSelection::SingleSlice(SingleSlice{axis, focus}) if in_axis == *axis && focus.vis[*axis] == idx => true,
-            TableSelection::SliceRange(SliceRange{axis, range}) if in_axis == *axis && range.contains(in_axis, idx)  => true,
-            _=>false
+            TableSelection::SingleSlice(SingleSlice { axis, focus })
+                if in_axis == *axis && focus.vis[*axis] == idx =>
+            {
+                true
+            }
+            TableSelection::SliceRange(SliceRange { axis, range })
+                if in_axis == *axis && range.contains(in_axis, idx) =>
+            {
+                true
+            }
+            _ => false,
         }
     }
 
-    pub fn fully_selected_on_axis(&self, in_axis: TableAxis)->Option<Vec<VisIdx>>{
+    pub fn fully_selected_on_axis(&self, in_axis: TableAxis) -> Option<Vec<VisIdx>> {
         match self {
-            TableSelection::SingleSlice(SingleSlice{axis, focus}) if in_axis == *axis => Some(vec![focus.vis[in_axis]]),
-            TableSelection::SliceRange(SliceRange{axis, range}) if in_axis == *axis => {
-                let (a, b) = VisIdx::ascending( range.focus.vis[in_axis], range.extent.vis[in_axis]);
-                Some( VisIdx::range_inc_iter(a, b).collect() )
-            },
-            _=>None
+            TableSelection::SingleSlice(SingleSlice { axis, focus }) if in_axis == *axis => {
+                Some(vec![focus.vis[in_axis]])
+            }
+            TableSelection::SliceRange(SliceRange { axis, range }) if in_axis == *axis => {
+                let (a, b) = VisIdx::ascending(range.focus.vis[in_axis], range.extent.vis[in_axis]);
+                Some(VisIdx::range_inc_iter(a, b).collect())
+            }
+            _ => None,
         }
     }
 }

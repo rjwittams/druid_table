@@ -158,14 +158,19 @@ impl<TableData: Data> TableState<TableData> {
         self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
     }
 
-    pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx){
-        log::info!("Move selection {:?} on {:?} to {:?}", self.selection, axis, moved_to_idx);
+    pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx) {
+        log::info!(
+            "Move selection {:?} on {:?} to {:?}",
+            self.selection,
+            axis,
+            moved_to_idx
+        );
         let mut offset = 0;
-        if let Some(headers_moved) = self.selection.fully_selected_on_axis(axis){
+        if let Some(headers_moved) = self.selection.fully_selected_on_axis(axis) {
             for vis_idx in headers_moved {
-                if let Some(log_idx) = self.remaps[axis].get_log_idx(vis_idx){
+                if let Some(log_idx) = self.remaps[axis].get_log_idx(vis_idx) {
                     self.remap_specs[axis].place(log_idx, moved_to_idx + VisOffset(offset));
-                    offset+=1;
+                    offset += 1;
                 }
             }
         }
@@ -239,7 +244,10 @@ impl<Args: TableArgsT + 'static> Table<Args> {
     pub fn new_in_scope(args: Args, measures: AxisPair<AxisMeasure>) -> Container<Args::TableData> {
         let data_lens = lens!(TableState<Args::TableData>, data);
         Container::new(Scope::new(
-            DefaultScopePolicy::from_lens(move |d: Args::TableData| TableState::new(d, measures.clone()), data_lens),
+            DefaultScopePolicy::from_lens(
+                move |d: Args::TableData| TableState::new(d, measures.clone()),
+                data_lens,
+            ),
             Table::new(args),
         ))
     }

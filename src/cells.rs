@@ -448,8 +448,9 @@ where
             }
             if remap_changed[TableAxis::Columns] {
                 data.remap_axis(TableAxis::Columns, |d, s| {
-                    s.remap_placements( LogIdx(self.cell_delegate.number_of_columns_in_data(d)  - 1) ) // TODO check for none
-                } );
+                    s.remap_placements(LogIdx(self.cell_delegate.number_of_columns_in_data(d) - 1))
+                    // TODO check for none
+                });
                 log::info!("Remap for cols {:?}", data.remaps[TableAxis::Columns]);
                 data.measures[TableAxis::Columns].set_axis_properties(
                     rtc.cell_border_thickness,
@@ -493,7 +494,9 @@ where
         _env: &Env,
     ) {
         // TODO move all sorting up to table level so we don't need commands
-        if !old_data.data.same(&data.data) || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows]) {
+        if !old_data.data.same(&data.data)
+            || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows])
+        {
             ctx.submit_command(REMAP_CHANGED.with(TableAxis::Rows), ctx.widget_id());
         }
 

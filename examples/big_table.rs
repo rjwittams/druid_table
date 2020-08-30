@@ -1,4 +1,8 @@
-use druid_table::{AxisMeasure, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, AxisMeasurementType};
+use druid_table::{
+    AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate,
+    EditorFactory, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems,
+    LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
+};
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
 use druid_table::numbers_table::LogIdxTable;
