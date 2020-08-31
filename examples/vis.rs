@@ -1,7 +1,7 @@
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::widget::{Axis, Button, CrossAxisAlignment, Flex};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
-use druid_table::{BandScale, DataAge, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkIdMapper, MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, PlainMarkId};
+use druid_table::{BandScale, DataAge, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkIdMapper, MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, PlainMarkId, BandScaleFactory};
 use im::Vector;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
@@ -23,7 +23,7 @@ fn main_widget() -> impl Widget<TopLevel> {
                 let mut rng = rand::thread_rng();
                 for (_, am) in tl.records.iter_mut().skip(1) {
                     if rng.gen_bool(0.3) {
-                        *am = (*am as i32 + rng.gen_range(-50, 50)).max(0) as u32;
+                        *am = (*am as i32 + (rng.gen_range(-0.15, 0.16) * *am as f64) as i32 ).max(0) as u32;
                     }
                 }
 
@@ -49,7 +49,7 @@ fn main_widget() -> impl Widget<TopLevel> {
                 }
             }),
         )
-        .with_flex_child(Vis::new(MyBarChart), 1.)
+        .with_flex_child(Vis::new(MyBarChart::new()), 1.)
 }
 
 fn main() {
@@ -60,20 +60,20 @@ fn main() {
     // create the initial app state
     let initial_state = TopLevel {
         records: vector![
-            ("A".into(), 28),
-            ("B".into(), 55),
-            ("C".into(), 43),
-            ("D".into(), 91),
-            ("E".into(), 81),
-            ("F".into(), 53),
-            ("G".into(), 19),
-            ("H".into(), 87)
+            ("A".into(), 284),
+            ("B".into(), 554),
+            ("C".into(), 433),
+            ("D".into(), 912),
+            ("E".into(), 814),
+            ("F".into(), 533),
+            ("G".into(), 870),
+            ("H".into(), 872)
         ],
         others: vector![
-            ("I".into(), 34),
-            ("J".into(), 29),
-            ("K".into(), 76),
-            ("L".into(), 99)
+            ("I".into(), 342),
+            ("J".into(), 294),
+            ("K".into(), 766),
+            ("L".into(), 996)
         ],
     };
 
@@ -92,8 +92,19 @@ struct TopLevel {
     others: Vector<CatCount>,
 }
 
-struct MyBarChart;
+struct MyBarChart{
+    x: BandScaleFactory<String>
+}
 
+impl MyBarChart {
+    pub fn new() -> Self {
+        MyBarChart {
+            x: BandScaleFactory::new(AxisName("x"))
+        }
+    }
+}
+
+#[derive(Default)]
 struct RecordedMarkMapper {
     subs: HashMap<(DataAge, PlainMarkId), MarkId>,
 }
@@ -149,16 +160,15 @@ impl Visualization for MyBarChart {
     type Layout = (BandScale<String>, LinearScale<u32>);
     type IdMapper = RecordedMarkMapper;
 
-    fn layout(&self, data: &Self::Input, size: Size) -> Self::Layout {
+    fn layout(&mut self, data: &Self::Input, size: Size) -> Self::Layout {
         (
-            BandScale::new(
-                AxisName("y"),
+            self.x.make_scale(
                 F64Range(30.0, size.width),
                 &mut data.records.iter().map(|x| (x.0).clone()),
                 0.05,
             ),
             LinearScale::new(
-                AxisName("x"),
+                AxisName("y"),
                 F64Range(30.0, size.height - 10.0),
                 &mut data.records.iter().map(|x| (x.1).clone()),
                 true,
@@ -176,12 +186,14 @@ impl Visualization for MyBarChart {
         event: &VisEvent,
     ) {
         match event {
-            VisEvent::MouseEnter(MarkId::Plain(PlainMarkId::Datum(DatumId {
+            VisEvent::MouseEnter(PlainMarkId::Datum(DatumId {
                 series: SeriesId(0),
                 idx,
-            }))) => *tooltip_item = data.records.get(idx.0).cloned(),
+            })) => *tooltip_item = data.records.get(idx.0).cloned(),
             VisEvent::MouseOut(_) => *tooltip_item = None,
-            _ => (),
+            e => {
+                log::info!("Did not match event {:?}",e)
+            },
         };
     }
 
@@ -198,7 +210,7 @@ impl Visualization for MyBarChart {
         let mut marks = Vec::new();
         if let Some(tt) = tooltip_item {
             marks.push(Mark::new(
-                MarkId::Unknown,
+                MarkId::Plain(PlainMarkId::StateMark(0)),
                 MarkShape::Text( TextMark::new(
                     tt.1.to_string(),
                     Default::default(),

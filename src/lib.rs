@@ -28,7 +28,7 @@ pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};
 pub use vis::{
-    BandScale, DataAge, DatumId, DrawableAxis, F64Range, LinearScale, Mark, MarkId, MarkIdMapper,
+    BandScale, BandScaleFactory, DataAge, DatumId, DrawableAxis, F64Range, LinearScale, Mark, MarkId, MarkIdMapper,
     MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, PlainMarkId
 };
 
