@@ -1,7 +1,11 @@
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::widget::{Axis, Button, CrossAxisAlignment, Flex};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
-use druid_table::{BandScale, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, BandScaleFactory, StateName, OffsetSource};
+use druid_table::{
+    AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx,
+    Mark, MarkId, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis, VisEvent,
+    Visualization,
+};
 use im::Vector;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
@@ -23,7 +27,8 @@ fn main_widget() -> impl Widget<TopLevel> {
                 let mut rng = rand::thread_rng();
                 for (_, am) in tl.records.iter_mut().skip(1) {
                     if rng.gen_bool(0.3) {
-                        *am = (*am as i32 + (rng.gen_range(-0.15, 0.16) * *am as f64) as i32 ).max(0) as u32;
+                        *am = (*am as i32 + (rng.gen_range(-0.15, 0.16) * *am as f64) as i32).max(0)
+                            as u32;
                     }
                 }
 
@@ -92,10 +97,10 @@ struct TopLevel {
     others: Vector<CatCount>,
 }
 
-struct MyBarChart{
+struct MyBarChart {
     x: BandScaleFactory<String>,
     record_offsets: OffsetSource<String, LogIdx>,
-    rec_to_idx: HashMap<LogIdx, usize>
+    rec_to_idx: HashMap<LogIdx, usize>,
 }
 
 impl MyBarChart {
@@ -103,7 +108,7 @@ impl MyBarChart {
         MyBarChart {
             x: BandScaleFactory::new(AxisName("x")),
             record_offsets: Default::default(),
-            rec_to_idx: Default::default()
+            rec_to_idx: Default::default(),
         }
     }
 }
@@ -142,11 +147,14 @@ impl Visualization for MyBarChart {
             VisEvent::MouseEnter(MarkId::Datum(DatumId {
                 series: SeriesId(0),
                 idx,
-            })) => *tooltip_item = self.rec_to_idx.get(idx).and_then( |idx| data.records.get( *idx ).cloned()  ),
+            })) => {
+                *tooltip_item = self
+                    .rec_to_idx
+                    .get(idx)
+                    .and_then(|idx| data.records.get(*idx).cloned())
+            }
             VisEvent::MouseOut(_) => *tooltip_item = None,
-            e => {
-                log::info!("Did not match event {:?}",e)
-            },
+            e => log::info!("Did not match event {:?}", e),
         };
     }
 
@@ -164,7 +172,7 @@ impl Visualization for MyBarChart {
         if let Some(tt) = tooltip_item {
             marks.push(Mark::new(
                 MarkId::StateMark(StateName("tooltip"), 0),
-                MarkShape::Text( TextMark::new(
+                MarkShape::Text(TextMark::new(
                     tt.1.to_string(),
                     Default::default(),
                     12.0,
@@ -197,6 +205,4 @@ impl Visualization for MyBarChart {
             })
             .collect()
     }
-
-
 }
