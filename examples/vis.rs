@@ -1,7 +1,7 @@
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::widget::{Axis, Button, CrossAxisAlignment, Flex};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
-use druid_table::{BandScale, DataAge, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkIdMapper, MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, PlainMarkId, BandScaleFactory};
+use druid_table::{BandScale, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkShape, SeriesId, Vis, VisEvent, Visualization, AxisName, TextMark, BandScaleFactory, StateName, OffsetSource};
 use im::Vector;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
@@ -93,64 +93,18 @@ struct TopLevel {
 }
 
 struct MyBarChart{
-    x: BandScaleFactory<String>
+    x: BandScaleFactory<String>,
+    record_offsets: OffsetSource<String, LogIdx>,
+    rec_to_idx: HashMap<LogIdx, usize>
 }
 
 impl MyBarChart {
     pub fn new() -> Self {
         MyBarChart {
-            x: BandScaleFactory::new(AxisName("x"))
+            x: BandScaleFactory::new(AxisName("x")),
+            record_offsets: Default::default(),
+            rec_to_idx: Default::default()
         }
-    }
-}
-
-#[derive(Default)]
-struct RecordedMarkMapper {
-    subs: HashMap<(DataAge, PlainMarkId), MarkId>,
-}
-
-impl RecordedMarkMapper {
-    pub fn new() -> Self {
-        RecordedMarkMapper { subs : Default::default() }
-    }
-
-    pub fn add_mappings<I, K: Hash + Eq>(&mut self,
-                              old: impl Iterator<Item=I>,
-                              new: impl Iterator<Item=I>,
-                              key: impl Fn(I)->K,
-                              ordinal: impl Fn(usize)->PlainMarkId){
-        let mut key_to_di: HashMap<K, (Option<PlainMarkId>, Option<PlainMarkId>)> = HashMap::new();
-        for (i, k) in old.map(&key).enumerate() {
-            key_to_di.insert(k, (Some(ordinal(i)), None));
-        }
-        for (i, k) in new.map(key).enumerate() {
-            key_to_di
-                .entry(k)
-                .or_insert_with(|| (None, None))
-                .1 = Some(ordinal(i))
-        }
-
-        for (old, new) in key_to_di.into_iter().map(|x| x.1) {
-            if let Some(o) = old {
-                self.subs.insert(
-                    (DataAge::Old, o),
-                    MarkId::Transition{old, new},
-                );
-            }
-            if let Some(n) = new {
-                self.subs.insert(
-                    (DataAge::New, n),
-                    MarkId::Transition{old, new},
-                );
-            }
-        }
-
-    }
-}
-
-impl MarkIdMapper for RecordedMarkMapper {
-    fn map_id(&self, age: DataAge, id: PlainMarkId) -> MarkId {
-        self.subs.get(&(age, id)).cloned().unwrap_or_else(|| MarkId::Plain(id))
     }
 }
 
@@ -158,7 +112,6 @@ impl Visualization for MyBarChart {
     type Input = TopLevel;
     type State = Option<CatCount>;
     type Layout = (BandScale<String>, LinearScale<u32>);
-    type IdMapper = RecordedMarkMapper;
 
     fn layout(&mut self, data: &Self::Input, size: Size) -> Self::Layout {
         (
@@ -186,10 +139,10 @@ impl Visualization for MyBarChart {
         event: &VisEvent,
     ) {
         match event {
-            VisEvent::MouseEnter(PlainMarkId::Datum(DatumId {
+            VisEvent::MouseEnter(MarkId::Datum(DatumId {
                 series: SeriesId(0),
                 idx,
-            })) => *tooltip_item = data.records.get(idx.0).cloned(),
+            })) => *tooltip_item = self.rec_to_idx.get(idx).and_then( |idx| data.records.get( *idx ).cloned()  ),
             VisEvent::MouseOut(_) => *tooltip_item = None,
             e => {
                 log::info!("Did not match event {:?}",e)
@@ -210,7 +163,7 @@ impl Visualization for MyBarChart {
         let mut marks = Vec::new();
         if let Some(tt) = tooltip_item {
             marks.push(Mark::new(
-                MarkId::Plain(PlainMarkId::StateMark(0)),
+                MarkId::StateMark(StateName("tooltip"), 0),
                 MarkShape::Text( TextMark::new(
                     tt.1.to_string(),
                     Default::default(),
@@ -224,15 +177,19 @@ impl Visualization for MyBarChart {
         marks
     }
 
-    fn data_marks(&self, data: &Self::Input, (x, y): &Self::Layout) -> Vec<Mark> {
+    fn data_marks(&mut self, data: &Self::Input, (x, y): &Self::Layout) -> Vec<Mark> {
+        self.rec_to_idx.clear();
+
         data.records
             .iter()
             .enumerate()
             .map(|(idx, (cat, amount))| {
                 let xr = x.range_val(cat);
                 let r = Rect::new(xr.0, y.range.0, xr.1, y.range_val(amount));
+                let record_offset = self.record_offsets.offset(cat);
+                self.rec_to_idx.insert(record_offset, idx);
                 Mark::new(
-                       MarkId::Plain( PlainMarkId::Datum(DatumId::new(SeriesId(0), LogIdx(idx)))),
+                    MarkId::Datum(DatumId::new(SeriesId(0), record_offset)),
                     MarkShape::Rect(r),
                     Color::rgb8(0x46, 0x82, 0xb4),
                     Some(Color::rgb8(0xFF, 0, 0)),
@@ -241,14 +198,5 @@ impl Visualization for MyBarChart {
             .collect()
     }
 
-    fn id_mapper(&self, old_data: &Self::Input, data: &Self::Input) -> Self::IdMapper {
-        let mut mapper = RecordedMarkMapper::new();
-        mapper.add_mappings(old_data.records.iter(),
-                            data.records.iter(),
-                            |(k,_)|k,
-            |idx|PlainMarkId::Datum( DatumId::new(SeriesId(0), LogIdx(idx)))
-        );
 
-        mapper
-    }
 }

@@ -101,6 +101,18 @@ pub struct VisOffset(pub isize);
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Data, Default, Hash)]
 pub struct LogIdx(pub usize);
 
+impl From<usize> for LogIdx{
+    fn from(a: usize) -> Self {
+        Self(a)
+    }
+}
+
+impl From<LogIdx> for usize{
+    fn from(a: LogIdx) -> Self {
+        a.0
+    }
+}
+
 impl VisIdx {
     // Todo work out how to support custom range
     pub fn range_inc_iter(

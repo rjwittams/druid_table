@@ -15,12 +15,29 @@ use std::f64::NAN;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use crate::vis::InterpError::{ValueMismatch, IndexOutOfBounds};
-use std::ops::IndexMut;
+use InterpError::*;
+use std::thread::current;
+use std::collections::hash_map::Entry;
 
 // Could new type with bounds check
 // Number between 0 and 1
-type Frac = f64;
+struct Frac<'a>{
+    cur_idx: usize,
+    fracs: &'a [f64]
+}
+
+impl Frac<'_> {
+    pub fn new(cur_idx: usize, fracs: &[f64]) -> Frac {
+        if cur_idx >= fracs.len(){
+            panic!("frac index out of range")
+        }
+        Frac { cur_idx, fracs }
+    }
+
+    pub fn current(&self)->f64{
+        self.fracs[self.cur_idx]
+    }
+}
 
 #[derive(Debug, Data, Clone)]
 pub struct Mark {
@@ -45,22 +62,32 @@ const OK : InterpResult = Ok(());
 
 trait Interp: Sized {
     type Value: Clone + Debug;
-    fn interp(&self, frac: Frac, val: &mut Self::Value)->InterpResult;
+    fn interp(&self, frac: &Frac, val: &mut Self::Value)->InterpResult;
+
     fn wrap(self)->ConstOr<Self>{
         ConstOr::Interp(self)
     }
 
-    fn interp_default(&self, frac: f64)->Result<Self::Value, InterpError> where Self::Value : Default {
+    fn leaf()->bool{
+        false
+    }
+
+    fn select_anim(self, idx: usize)->Self;
+
+    fn interp_default(&self, frac: &Frac)->Result<Self::Value, InterpError> where Self::Value : Default {
         let mut temp: Self::Value = Default::default();
         self.interp(frac, &mut temp).map(move |_| temp)
     }
+
+    fn merge(self, other: Self)->Self;
 }
 
 #[derive(Debug)]
 enum ConstOr<P: Interp> {
     Const(P::Value),
     Noop,
-    Interp(P)
+    Interp(P),
+    SelectAnim(usize, P)
 }
 
 impl <P: Interp> ConstOr<P>{
@@ -68,28 +95,46 @@ impl <P: Interp> ConstOr<P>{
     fn is_noop(&self) ->bool{
         matches!(self, ConstOr::Noop)
     }
+
+
 }
 
 impl <T: Clone + Debug, P: Interp<Value=T>> From<T> for ConstOr<P> {
     fn from(t: P::Value) -> Self {
         ConstOr::Const(t)
     }
+
 }
 
 impl<P: Interp> Interp for ConstOr<P>{
     type Value = P::Value;
-    fn interp(&self, frac: f64, val: &mut Self::Value)->InterpResult {
+    fn interp(&self, frac: &Frac, val: &mut Self::Value)->InterpResult {
         match self {
             ConstOr::Const(t) => {
                 *val = t.clone();
                 OK
             },
             ConstOr::Noop => OK,
-            ConstOr::Interp(i) => i.interp(frac, val)
+            ConstOr::Interp(interp) => interp.interp(frac, val),
+            ConstOr::SelectAnim(cur_idx, interp) => {
+                let new_frac = Frac{
+                    cur_idx:*cur_idx,
+                    fracs: frac.fracs
+                };
+                interp.interp(&new_frac, val)
+            }
         }
     }
 
-    fn interp_default(&self, frac: f64) -> Result<Self::Value, InterpError> where Self::Value: Default {
+    fn select_anim(self, idx: usize)->Self {
+        match self{
+            ConstOr::Interp(interp) => ConstOr::SelectAnim(idx, interp),
+            s=>s
+        }
+    }
+
+
+    fn interp_default(&self, frac: &Frac) -> Result<Self::Value, InterpError> where Self::Value: Default {
         match self{
             ConstOr::Noop => Err(InterpError::NoDefaultForNoop),
             _=>{
@@ -98,40 +143,61 @@ impl<P: Interp> Interp for ConstOr<P>{
             }
         }
     }
+
+    fn merge(self, other: ConstOr<P>)->Self{
+        fn wrap_anim<P: Interp>(p: P, idx: usize)->ConstOr<P>{
+            if P::leaf() { ConstOr::SelectAnim(idx, p) } else { ConstOr::Interp(p) }
+        }
+        match (self, other){
+            (ConstOr::Noop, other)=>other,
+            (other, ConstOr::Noop)=>other,
+            //(ConstOr::Const(t1), ConstOr::Const(t2)) if t1 == t2 => ConstOr::Const(t1),
+            (ConstOr::SelectAnim(a1, i1), ConstOr::SelectAnim(a2, i2))=> {
+                wrap_anim(i1.select_anim(a1).merge(i2.select_anim(a2)), a2)
+            },
+            (ConstOr::SelectAnim(a1, i1), ConstOr::Interp(p))=> {
+                wrap_anim(i1.select_anim(a1).merge(p), a1)
+            },
+            (ConstOr::Interp(p), ConstOr::SelectAnim(a2, i2))=>{
+                wrap_anim(p.merge( i2.select_anim(a2)), a2)
+            },
+            (_, other)=>other
+        }
+    }
 }
 
 #[derive(Debug)]
-struct VecInterp<TInterp: Interp> {
-    interps: Vec<(usize, ConstOr<TInterp>)>
+struct MapInterp<TInterp: Interp, Key: Hash + Eq> {
+    interps: Vec<(Key, ConstOr<TInterp>)>
 }
 
-impl <TInterp: Interp> VecInterp<TInterp> {
-    pub fn new(interps_iter: impl Iterator<Item=ConstOr<TInterp>>) -> ConstOr<Self> where TInterp::Value: Clone {
+impl <TInterp: Interp, Key: Hash + Eq + Clone + Debug> MapInterp<TInterp, Key> {
+    pub fn new(interps_iter: impl Iterator<Item=(Key, ConstOr<TInterp>)>) -> ConstOr<Self> where TInterp::Value: Clone {
         let mut all_noop = true;
         let mut interps = Vec::new();
-        for (idx, interp) in interps_iter.enumerate(){
+        for (key, interp) in interps_iter{
             if !interp.is_noop(){
                 all_noop = false;
-                interps.push( (idx, interp))
+                interps.push( (key, interp))
             }
         }
 
         if all_noop{
             ConstOr::Noop
         }else {
-            VecInterp {
+            MapInterp {
                 interps
             }.wrap()
         }
     }
 }
 
-impl <TInterp: Interp> Interp for VecInterp<TInterp> {
-    type Value = Vec<TInterp::Value>;
-    fn interp(&self, frac: f64, val: &mut Vec<TInterp::Value>)->InterpResult {
+impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInterp, Key> {
+    type Value = HashMap<Key, TInterp::Value>;
+    fn interp(&self, frac: &Frac, val: &mut HashMap<Key, TInterp::Value>)->InterpResult {
         let mut loop_err: Option<InterpError> = None;
-        for (idx, interp) in self.interps.iter() {
-            let cur_err = val.get_mut( *idx ).map(|value|{
+        for (key, interp) in self.interps.iter() {
+            let cur_err = val.get_mut( key ).map(|value|{
                 interp.interp(frac, value)
             }).unwrap_or(Err(IndexOutOfBounds));
 
@@ -143,11 +209,54 @@ impl <TInterp: Interp> Interp for VecInterp<TInterp> {
         }
         loop_err.map(Err).unwrap_or(OK)
     }
+
+    fn select_anim(self, a_idx: usize) ->Self{
+        MapInterp {
+            interps: self.interps.into_iter().map(|(key, interp)| (key, interp.select_anim(a_idx))).collect()
+        }
+    }
+
+    fn merge(self, other: MapInterp<TInterp, Key>) -> Self {
+        // let mut s_iter = self.interps.into_iter();
+        // let mut o_iter = other.interps.into_iter();
+        // let mut interps = Vec::new();
+        // let mut s_next = s_iter.next();
+        // let mut o_next = o_iter.next();
+        // while s_next.is_some() || o_next.is_some() {
+        //     let (s_idx, o_idx) = (s_next.as_ref().map(|x|x.0).unwrap_or(usize::MAX),
+        //                           o_next.as_ref().map(|x|x.0).unwrap_or(usize::MAX));
+        //     if s_idx < o_idx {
+        //         interps.push( s_next.take().unwrap() );
+        //         s_next = s_iter.next();
+        //     }else if s_idx > o_idx {
+        //         interps.push( o_next.take().unwrap() );
+        //         o_next = o_iter.next();
+        //     }else{
+        //         interps.push((s_idx,  s_next.take().unwrap().1.merge(o_next.take().unwrap().1)));
+        //         s_next = s_iter.next();
+        //         o_next = o_iter.next();
+        //     }
+        // }
+
+        let mut interps : HashMap<_, _> = self.interps.into_iter().collect();
+        for (key, interp) in other.interps.into_iter(){
+            let new_interp = if let Some(cur) = interps.remove(&key){
+                cur.merge(interp)
+            }else{
+                interp
+            };
+            interps.insert( key, new_interp);
+        }
+
+        MapInterp {
+            interps: interps.into_iter().collect()
+        }
+    }
 }
 
 #[derive(Debug)]
 enum F64Interp {
-    Linear(f64, f64),
+    Linear(f64, f64)
 }
 
 impl F64Interp{
@@ -162,19 +271,36 @@ impl F64Interp{
             F64Interp::Linear(start, end).wrap()
         }
     }
+
+    fn interp_raw(start: f64, end: f64, frac: f64)->f64{
+        start + (end - start) * frac
+    }
 }
 
 impl Interp for F64Interp {
     type Value = f64;
-    fn interp(&self, frac: f64, val: &mut f64) -> InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut f64) -> InterpResult{
+        let frac = frac.current();
         if frac < 0.0 || frac > 1.0 {
             Err(InterpError::FracOutOfBounds)
         }else {
             match self {
-                F64Interp::Linear(start, end) => *val = start + (end - start) * frac,
+                F64Interp::Linear(start, end) => *val = Self::interp_raw(*start, *end, frac),
             }
             OK
         }
+    }
+
+    fn leaf() -> bool {
+        true
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        self
+    }
+
+    fn merge(self, other: Self) -> Self {
+        other
     }
 }
 
@@ -200,7 +326,7 @@ impl PointInterp {
 
 impl Interp for PointInterp {
     type Value = Point;
-    fn interp(&self, frac: f64, val: &mut Point) ->InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut Point) ->InterpResult{
         match self {
             PointInterp::Point(x, y) => {
                 x.interp(frac, &mut val.x)?;
@@ -208,6 +334,18 @@ impl Interp for PointInterp {
             }
         }
         OK
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        match self {
+            PointInterp::Point(x, y)=>PointInterp::Point(x.select_anim(idx), y.select_anim(idx))
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        match (self, other){
+            (PointInterp::Point(x1, y1), PointInterp::Point(x2, y2))=>PointInterp::Point(x1.merge(x2), y1.merge(y2))
+        }
     }
 }
 
@@ -241,9 +379,9 @@ impl StringInterp{
 impl Interp for StringInterp{
     type Value = String;
 
-    fn interp(&self, frac: f64, val: &mut Self::Value) -> InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut Self::Value) -> InterpResult{
         // TODO: do this by modifying? Can't assume that calls are in order though
-        let step = ((self.steps as f64) * frac) as isize;
+        let step = ((self.steps as f64) * frac.current() ) as isize;
         let r_len = self.remove.len() as isize;
         let step = step - r_len;
         if step > 0 {
@@ -254,6 +392,14 @@ impl Interp for StringInterp{
             *val = self.prefix.clone()
         }
         OK
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        self
+    }
+
+    fn merge(self, other: Self) -> Self {
+        other
     }
 }
 
@@ -276,11 +422,36 @@ impl TextMarkInterp {
 
 impl Interp for TextMarkInterp {
     type Value = TextMark;
-    fn interp(&self, frac: f64, val: &mut TextMark) -> InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut TextMark) -> InterpResult{
         self.txt.interp(frac, &mut val.txt)?;
         self.size.interp(frac, &mut val.size)?;
         self.point.interp(frac, &mut val.point)?;
         OK
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        let TextMarkInterp{
+            txt, size, point
+        } = self;
+        TextMarkInterp{
+            txt: txt.select_anim(idx),
+            size: size.select_anim(idx),
+            point: point.select_anim(idx)
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        let TextMarkInterp{
+            txt, size, point
+        } = self;
+        let TextMarkInterp{
+            txt:txt2, size:size2, point:point2
+        } = other;
+        TextMarkInterp{
+            txt: txt.merge(txt2),
+            size: size.merge(size2),
+            point: point.merge(point2)
+        }
     }
 }
 
@@ -319,7 +490,7 @@ impl MarkShapeInterp {
 impl Interp for MarkShapeInterp {
     type Value = MarkShape;
 
-    fn interp(&self, frac: f64, val: &mut MarkShape) -> InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut MarkShape) -> InterpResult{
         match (self, val) {
             (MarkShapeInterp::Rect(o, other), MarkShape::Rect(r)) => {
                 // TODO: Do coords not points
@@ -343,6 +514,23 @@ impl Interp for MarkShapeInterp {
             }
         }
     }
+
+    fn select_anim(self, idx: usize) -> Self {
+        match self{
+            MarkShapeInterp::Rect(orig, other) => MarkShapeInterp::Rect(orig.select_anim(idx), other.select_anim(idx)),
+            MarkShapeInterp::Line(start, end) => MarkShapeInterp::Line(start.select_anim(idx), end.select_anim(idx)),
+            MarkShapeInterp::Text(text) => MarkShapeInterp::Text(text.select_anim(idx)),
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        match (self, other){
+            (MarkShapeInterp::Rect(orig1, other1), MarkShapeInterp::Rect(orig2, other2))=>MarkShapeInterp::Rect(orig1.merge(orig2), other1.merge(other2)),
+            (MarkShapeInterp::Line(s1, e1), MarkShapeInterp::Line(s2, e2))=>MarkShapeInterp::Line(s1.merge(s2), e1.merge(e2)),
+            (MarkShapeInterp::Text(t1), MarkShapeInterp::Text(t2))=>MarkShapeInterp::Text(t1.merge(t2)),
+            (_, other)=>other
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -353,7 +541,7 @@ enum ColorInterp {
 impl Interp for ColorInterp {
     type Value = Color;
 
-    fn interp(&self, frac: f64, val: &mut Color) -> InterpResult{
+    fn interp(&self, frac: &Frac, val: &mut Color) -> InterpResult{
         match self {
             ColorInterp::Rgba(r, g, b, a) => {
                 // TODO: mutate this?
@@ -365,6 +553,18 @@ impl Interp for ColorInterp {
                 );
                 OK
             }
+        }
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        match self{
+            ColorInterp::Rgba(r, g, b, a) => ColorInterp::Rgba(r.select_anim(idx), g.select_anim(idx), b.select_anim(idx), a.select_anim(idx)),
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        match (self, other){
+            (ColorInterp::Rgba(r, g, b, a), ColorInterp::Rgba(r1, g1, b1, a1))=>ColorInterp::Rgba(r.merge(r1), g.merge(g1), b.merge(b1), a.merge(a1))
         }
     }
 }
@@ -408,10 +608,27 @@ impl MarkInterp {
 
 impl Interp for MarkInterp {
     type Value = Mark;
-    fn interp(&self, frac: f64, val: &mut Mark)->InterpResult {
+    fn interp(&self, frac: &Frac, val: &mut Mark)->InterpResult {
         self.shape.interp(frac, &mut val.shape)?;
         self.color.interp(frac, &mut val.color)?;
         OK
+    }
+
+    fn select_anim(self, idx: usize) -> Self {
+        let MarkInterp{ shape, color } = self;
+        MarkInterp{
+            shape: shape.select_anim(idx),
+            color: color.select_anim(idx)
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        let MarkInterp{ shape, color } = self;
+        let MarkInterp{ shape: s1, color: c1 } = other;
+        MarkInterp{
+            shape: shape.merge(s1),
+            color: color.merge(c1)
+        }
     }
 }
 
@@ -441,8 +658,11 @@ impl Mark {
         let shape = match &self.shape {
             MarkShape::Rect(r) => MarkShape::Rect(Rect::from_center_size(r.center(), Size::ZERO)),
             MarkShape::Line(l) => {
-                let mid = PointInterp::new(l.p0, l.p1).interp_default(0.5).unwrap_or( Point::ZERO );
-                MarkShape::Line(Line::new(mid.clone(), mid))
+                let arr = [0.5];
+                let mut mid = l.p0;
+                PointInterp::new(l.p0, l.p1).interp(&Frac::new(0, &arr) , &mut mid);
+                log::info!("Line enter {:?}", &mid);
+                MarkShape::Line(Line::new(mid, mid))
             }
             s => s.clone(),
         };
@@ -454,9 +674,9 @@ impl Mark {
         )
     }
 
-    pub fn paint(&self, ctx: &mut PaintCtx, focus: &Option<PlainMarkId>) {
+    pub fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
         // This should be done as some interpolation of the mark before paint? Maybe
-        let color = if focus.is_some() && self.id.new_plain_id() == *focus {
+        let color = if Some(self.id) == *focus {
            self.hover.as_ref().unwrap_or(&self.color)
         }else{
             &self.color
@@ -553,33 +773,22 @@ pub enum TickLocator {
     U64Bits(u64),
 }
 
-#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum PlainMarkId {
-    Datum(DatumId),
-    AxisDomain(AxisName),
-    Tick(AxisName, TickLocator),
-    TickText(AxisName, TickLocator),
-    StateMark(u32)
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct StateName(pub &'static str);
+
+impl Data for StateName{
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
 }
 
 #[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum MarkId {
-    Transition {
-        old: Option<PlainMarkId>,
-        new: Option<PlainMarkId>,
-    },
-    Plain(PlainMarkId),
-    Unknown,
-}
-
-impl MarkId{
-    pub fn new_plain_id(&self)->Option<PlainMarkId>{
-        match self{
-            MarkId::Plain(p)=>Some(*p),
-            MarkId::Transition {new, ..} if new.is_some()=>*new,
-            _=>None
-        }
-    }
+    Datum(DatumId),
+    AxisDomain(AxisName),
+    Tick(AxisName, TickLocator),
+    TickText(AxisName, TickLocator),
+    StateMark(StateName, u32)
 }
 
 #[derive(Clone, Debug)]
@@ -600,52 +809,15 @@ impl DrawableAxis {
 }
 
 #[derive(Debug)]
-struct DrawableAxisInterp {
-    mark_interp: ConstOr<VecInterp<MarkInterp>>,
-}
-
-impl Interp for DrawableAxisInterp {
-    type Value = DrawableAxis;
-    fn interp(&self, frac: f64, val: &mut DrawableAxis) -> InterpResult{
-        self.mark_interp.interp(frac, &mut val.marks)
-    }
-}
-
-impl DrawableAxisInterp {
-    fn new(id_mapper: &impl MarkIdMapper, old: DrawableAxis, new: &DrawableAxis) -> (ConstOr<Self>, DrawableAxis) {
-        if old.same(new) {
-            (ConstOr::Noop, old)
-        } else {
-            let (m_ints, marks) =
-                VisMarksInterp::make_mark_interps(id_mapper, old.marks, &new.marks);
-            (Self {
-                mark_interp: VecInterp::new(m_ints.into_iter())
-            }.wrap(), DrawableAxis::new(marks))
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum VisEvent {
-    MouseEnter(PlainMarkId),
-    MouseOut(PlainMarkId),
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum DataAge {
-    Old,
-    New,
-}
-
-pub trait MarkIdMapper: Default {
-    fn map_id(&self, age: DataAge, id: PlainMarkId) -> MarkId;
+    MouseEnter(MarkId),
+    MouseOut(MarkId),
 }
 
 pub trait Visualization {
     type Input: Data;
     type State: Default + Data + Debug;
     type Layout;
-    type IdMapper: MarkIdMapper;
 
     fn layout(&mut self, data: &Self::Input, size: Size) -> Self::Layout;
     fn event(
@@ -663,136 +835,97 @@ pub trait Visualization {
         layout: &Self::Layout,
         state: &Self::State,
     ) -> Vec<Mark>;
-    fn data_marks(&self, data: &Self::Input, layout: &Self::Layout) -> Vec<Mark>;
-
-    fn id_mapper(&self, old_data: &Self::Input, data: &Self::Input) -> Self::IdMapper;
+    fn data_marks(&mut self, data: &Self::Input, layout: &Self::Layout) -> Vec<Mark>;
 }
 
 #[derive(Clone, Debug)]
 struct VisMarks {
-    layout: Vec<DrawableAxis>,
-    state: Vec<Mark>,
-    data: Vec<Mark>,
+    // TODO: slotmap?
+    marks: HashMap<MarkId, Mark>
 }
 
 impl VisMarks {
     fn find_mark(&mut self, pos: Point) -> Option<&mut Mark> {
-        self.data
-            .iter_mut()
-            .chain(self.state.iter_mut())
-            .chain(self.layout.iter_mut().flat_map(|a| a.marks.iter_mut()))
+        self.marks.values_mut()
             .filter(|mark| mark.hit(pos))
             .next()
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, focus: &Option<PlainMarkId>) {
-        self.data.iter().for_each(|x| x.paint(ctx, focus));
-        for axis in self.layout.iter() {
-            axis.marks.iter().for_each(|x| x.paint(ctx, focus));
+    fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
+        for mark in self.marks.values() {
+            mark.paint(ctx, focus);
         }
-        self.state.iter().for_each(|x| x.paint(ctx, focus));
+    }
+
+    fn build(layout_marks: Vec<DrawableAxis>,
+             state_marks: Vec<Mark>,
+             data_marks: Vec<Mark> ) -> VisMarks {
+        let mut marks = HashMap::new();
+        for mark in state_marks.into_iter().chain(data_marks.into_iter()).chain(layout_marks.into_iter().flat_map(|x|x.marks)){
+            marks.insert(mark.id, mark);
+        }
+
+        VisMarks {
+            marks
+        }
     }
 }
 
 #[derive(Debug)]
 struct VisMarksInterp {
-    layout: ConstOr<VecInterp<DrawableAxisInterp>>,
-    state: ConstOr<VecInterp<MarkInterp>>,
-    data: ConstOr<VecInterp<MarkInterp>>,
+    marks: ConstOr<MapInterp<MarkInterp, MarkId>>,
 }
 
 impl VisMarksInterp {
     fn make_mark_interps(
-        id_mapper: &impl MarkIdMapper,
-        old: Vec<Mark>,
-        new: &Vec<Mark>,
-    ) -> (Vec<ConstOr<MarkInterp>>, Vec<Mark>) {
+        old: HashMap<MarkId, Mark>,
+        new: &HashMap<MarkId, Mark>,
+    ) -> (Vec<(MarkId, ConstOr<MarkInterp>)>, HashMap<MarkId, Mark>) {
         let mut matched_marks: HashMap<MarkId, (Option<Mark>, Option<Mark>)> = HashMap::new();
 
-        let mut exiting = Vec::new();
-        for s in old.into_iter() {
-            let p_id = match s.id {
-                MarkId::Plain(p) => Some(p),
-                MarkId::Transition {new, ..} if new.is_some() =>{
-                    new
-                },
-                s_id => {
-                    None
-                }
-            };
-            if let Some(p) = p_id{
-                matched_marks
-                    .entry(id_mapper.map_id(DataAge::Old, p))
-                    .or_insert_with(|| (Some(s), None));
-            }else{
-                exiting.push(s)
-            }
+        for (id, mark)  in old.into_iter() {
+            matched_marks.entry(id)
+                    .or_insert_with(|| (Some(mark), None));
         }
 
-        for e in new.iter().filter(|m| m.id != MarkId::Unknown) {
-            if let MarkId::Plain(p) = e.id {
-                matched_marks
-                    .entry(id_mapper.map_id(DataAge::New, p))
-                    .or_insert_with(|| (None, None))
-                    .1 = Some(e.clone())
-            }
+        for (id, mark) in new.iter() {
+            matched_marks
+                .entry(*id)
+                .or_insert_with(|| (None, None))
+                .1 = Some(mark.clone())
         }
 
         matched_marks
             .into_iter()
             .flat_map(|(k, v)| match v {
-                (Some(o), Some(n)) => Some((MarkInterp::new( o.clone(), n), o)),
+                (Some(o), Some(n)) => Some(( (k, MarkInterp::new( o.clone(), n)), (k, o))),
                 (None, Some(n)) => {
                     let e = n.enter();
-                    Some((MarkInterp::new( e.clone(), n),  e))
+                    Some(((k,MarkInterp::new( e.clone(), n)),  (k, e)))
                 },
                 (Some(o), None) => {
                     let e = o.enter(); // TODO: exit
-                    Some((MarkInterp::new( o.clone(), e), o))
+                    Some(((k, MarkInterp::new( o.clone(), e)), (k, o)))
                 }
                 _ => None,
-            }).chain(
-                exiting.into_iter().map(|o|{
-                    let e = o.enter();
-                    (MarkInterp::new( o.clone(), e), o)
-                })
-            )
+            })
             .unzip()
     }
 
-    fn make_axis_interps(
-        id_mapper: &impl MarkIdMapper,
-        old: Vec<DrawableAxis>,
-        new: &Vec<DrawableAxis>,
-    ) -> (Vec<ConstOr<DrawableAxisInterp>>, Vec<DrawableAxis>) {
-        // TODO: should match them up by AxisId and handle enter/exit
-        old.into_iter()
-            .zip(new.iter())
-            .map(|(o, n)| DrawableAxisInterp::new(id_mapper, o, n))
-            .unzip()
-    }
 
-    fn build(id_mapper: &impl MarkIdMapper, old: VisMarks, new: &VisMarks) -> (ConstOr<Self>, VisMarks) {
-        let VisMarks{layout, state, data} = old;
-
-        let (l_ints, layout)= Self::make_axis_interps(id_mapper, layout, &new.layout);
-        let (s_ints, state) = Self::make_mark_interps(id_mapper, state, &new.state);
-        let (d_ints, data) = Self::make_mark_interps(id_mapper, data, &new.data);
+    fn build(old: VisMarks, new: &VisMarks) -> (ConstOr<Self>, VisMarks) {
+        let (interps, marks) = Self::make_mark_interps( old.marks, &new.marks);
 
         let vis_marks = VisMarks{
-            layout, state, data
+            marks
         };
 
-        let (layout, state, data) = (
-            VecInterp::new(l_ints.into_iter()),
-            VecInterp::new(s_ints.into_iter()),
-            VecInterp::new(d_ints.into_iter()),
-        );
+        let marks_interp = MapInterp::new(interps.into_iter());
 
-        let vmi = if layout.is_noop() && state.is_noop() && data.is_noop() {
+        let vmi = if marks_interp.is_noop() {
             ConstOr::Noop
         } else {
-           VisMarksInterp { layout, state, data }.wrap()
+           VisMarksInterp { marks: marks_interp }.wrap()
         };
 
         (vmi, vis_marks)
@@ -802,18 +935,39 @@ impl VisMarksInterp {
 impl Interp for VisMarksInterp {
     type Value = VisMarks;
 
-    fn interp(&self, frac: f64, val: &mut VisMarks) -> InterpResult{
-        self.layout.interp(frac, &mut val.layout)?;
-        self.state.interp(frac, &mut val.state)?;
-        self.data.interp(frac, &mut val.data)
+    fn interp(&self, frac: &Frac, val: &mut VisMarks) -> InterpResult{
+        self.marks.interp(frac, &mut val.marks)
     }
 
+    fn select_anim(self, idx: usize) -> Self {
+        VisMarksInterp{
+            marks: self.marks.select_anim(idx)
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self{
+            marks: self.marks.merge(other.marks),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Anim{
+    start_nanos: u64,
+    end_nanos: u64
+}
+
+impl Anim {
+    pub fn new(start_nanos: u64, end_nanos: u64) -> Self {
+        Anim { start_nanos, end_nanos }
+    }
 }
 
 struct VisTransition {
     // matched_marks: HashMap<MarkId, MarkInterp>,
     cur_nanos: u64,
-    end_nanos: u64,
+    anims: Vec<Anim>,
     interp: ConstOr<VisMarksInterp>,
     current: VisMarks
 }
@@ -821,9 +975,15 @@ struct VisTransition {
 impl VisTransition {
     fn advance(&mut self, nanos: u64) -> bool {
         self.cur_nanos += nanos;
-        let frac = (self.cur_nanos as f64) / (self.end_nanos as f64);
-        self.interp.interp(frac, &mut self.current);
-        self.cur_nanos >= self.end_nanos
+        let fracs : Vec<_> = self.anims.iter().map(|a|{
+            let since_start = self.cur_nanos - a.start_nanos;
+            let dur = a.end_nanos - a.start_nanos;
+            let frac = since_start as f64 / dur as f64;
+            frac.max(0.).min( 1.)
+        }).collect();
+        let frac = Frac::new(0,  &fracs );
+        self.interp.interp(&frac, &mut self.current);
+        self.anims.iter().all(|a| self.cur_nanos >= a.end_nanos)
     }
 }
 
@@ -833,7 +993,7 @@ struct VisInner<VP: Visualization> {
     marks: VisMarks,
     transition: Option<VisTransition>,
     transform: Affine,
-    focus: Option<PlainMarkId>,
+    focus: Option<MarkId>,
     phantom_vp: PhantomData<VP>,
 }
 
@@ -841,19 +1001,13 @@ impl<VP: Visualization> VisInner<VP> {
     pub fn new(
         layout: VP::Layout,
         state: VP::State,
-        state_marks: Vec<Mark>,
-        data_marks: Vec<Mark>,
-        layout_marks: Vec<DrawableAxis>,
+        marks: VisMarks,
         transform: Affine,
     ) -> Self {
         VisInner {
             layout,
             state,
-            marks: VisMarks {
-                state: state_marks,
-                data: data_marks,
-                layout: layout_marks,
-            },
+            marks,
             transition: None,
             transform,
             focus: None,
@@ -884,47 +1038,57 @@ impl<V: Visualization> Vis<V> {
             let data_marks = self.visual.data_marks(data, &layout);
             let layout_marks = self.visual.layout_marks(&layout);
 
+            let marks = VisMarks::build(layout_marks, state_marks, data_marks, );
+
             self.inner = Some(VisInner::new(
                 layout,
                 state,
-                state_marks,
-                data_marks,
-                layout_marks,
+                marks,
                 Affine::FLIP_Y * Affine::translate(Vec2::new(0., -size.height)),
             ));
         }
         self.inner.as_mut().unwrap()
     }
 
-    fn start_transition(&mut self, size: Size, data: &V::Input, id_mapper: V::IdMapper) {
+    fn start_transition(&mut self, size: Size, data: &V::Input) {
         if let Some(inner) = &mut self.inner {
 
             inner.layout = self.visual.layout(data, size);
 
-            let mut temp = VisMarks {
-                layout: self.visual.layout_marks(&inner.layout),
-                state: self.visual.state_marks(data, &inner.layout, &inner.state),
-                data: self.visual.data_marks(data, &inner.layout)
-            };
+            let mut temp = VisMarks::build(
+                 self.visual.layout_marks(&inner.layout),
+                self.visual.state_marks(data, &inner.layout, &inner.state),
+                 self.visual.data_marks(data, &inner.layout)
+            );
             std::mem::swap(&mut inner.marks, &mut temp);
 
-            let start = if let Some(old_transit) = inner.transition.take() {
-                old_transit.current
-            }else{
-                temp
-            };
-            let (interp, current) = VisMarksInterp::build(&id_mapper, start, &inner.marks);
-            log::info!("Interp: {:#?}", interp);
-
-            inner.transition = if interp.is_noop(){
-                None
-            } else {
-                Some(VisTransition {
-                    cur_nanos: 0,
-                    end_nanos: 250 * 1_000_000,
+            let vt = if let Some(mut old_transit) = inner.transition.take() {
+                let start = old_transit.current;
+                let (interp, current) = VisMarksInterp::build( start, &inner.marks);
+                let interp = interp.select_anim(old_transit.anims.len());
+                let interp = old_transit.interp.merge(interp);
+                old_transit.anims.push( Anim::new(old_transit.cur_nanos, old_transit.cur_nanos + 10 * 250 * 1_000_000) );
+                VisTransition{
+                    cur_nanos: old_transit.cur_nanos,
+                    anims: old_transit.anims,
                     interp,
                     current
-                })
+                }
+            }else{
+                let start = temp;
+                let (interp, current) = VisMarksInterp::build( start, &inner.marks);
+                VisTransition {
+                    cur_nanos: 0,
+                    interp: interp.select_anim(0),
+                    current,
+                    anims: vec![Anim::new(0, 10 * 250 * 1_000_000)]
+                }
+            };
+
+            inner.transition = if vt.interp.is_noop(){
+                None
+            } else {
+                Some(vt)
             };
         }
     }
@@ -940,17 +1104,15 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         match event {
             Event::MouseMove(me) => {
                 if let Some(mark) = inner.marks.find_mark(inner.transform.inverse() * me.pos) {
-                    if let Some(mi) = mark.id.new_plain_id() {
-                        if inner.focus != Some(mi) {
-                            self.visual.event(
-                                data,
-                                &inner.layout,
-                                &mut inner.state,
-                                &VisEvent::MouseEnter(mi),
-                            );
-                            inner.focus = Some(mi);
-                            ctx.request_paint();
-                        }
+                    if inner.focus != Some(mark.id) {
+                        self.visual.event(
+                            data,
+                            &inner.layout,
+                            &mut inner.state,
+                            &VisEvent::MouseEnter(mark.id),
+                        );
+                        inner.focus = Some(mark.id);
+                        ctx.request_paint();
                     }
                 } else {
                     if let Some(focus) = inner.focus {
@@ -971,7 +1133,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         }
 
         if !old_state.same(&inner.state) {
-            self.start_transition(ctx.size(), data, V::IdMapper::default());
+            self.start_transition(ctx.size(), data);
             ctx.request_anim_frame();
         }
     }
@@ -997,6 +1159,9 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
             };
 
             if done {
+                transition.iter().for_each (|t| {
+                    log::info!("Stopping animations {:?} {:?}", t.cur_nanos, t.anims)
+                });
                 *transition = None;
             } else {
                 ctx.request_anim_frame();
@@ -1007,7 +1172,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, env: &Env) {
         if !data.same(old_data) {
-            self.start_transition(ctx.size(), data, self.visual.id_mapper(old_data, data));
+            self.start_transition(ctx.size(), data);
             ctx.request_anim_frame();
         }
     }
@@ -1041,14 +1206,33 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
 type PersistentId = usize;
 
+pub struct OffsetSource<T, Id>{
+    val_to_id: HashMap<T, Id>
+}
+
+impl <T: Hash + Eq, Id> Default for OffsetSource<T, Id>{
+    fn default() -> Self {
+        Self{
+            val_to_id: Default::default()
+        }
+    }
+}
+
+impl <T: Clone + Hash + Eq, Id: From<usize> + Into<usize> + Clone> OffsetSource<T, Id>{
+    pub fn offset(&mut self, item: &T) ->Id{
+        let next: Id = self.val_to_id.len().into();
+        self.val_to_id.entry(item.clone()).or_insert(next).clone()
+    }
+}
+
 pub struct BandScaleFactory<T> {
     name: AxisName,
-    cat_to_id: HashMap<T, PersistentId>
+    offset_source: OffsetSource<T, PersistentId>
 }
 
 impl<T: Clone + Ord + Hash + Display> BandScaleFactory<T> {
     pub fn new(name: AxisName) -> Self {
-        BandScaleFactory { name, cat_to_id: Default::default() }
+        BandScaleFactory { name, offset_source: Default::default() }
     }
 
     pub fn make_scale(
@@ -1057,16 +1241,10 @@ impl<T: Clone + Ord + Hash + Display> BandScaleFactory<T> {
         bands_it: &mut impl Iterator<Item = T>,
         padding_ratio: f64
     )->BandScale<T>{
-        BandScale::new(self.name, range, |cat_item| self.get_id(cat_item)
-        , bands_it, padding_ratio)
+        BandScale::new(self.name, range, &mut self.offset_source, bands_it, padding_ratio)
     }
 
-    pub fn get_id(&mut self, item: &T)->PersistentId{
-        let next = self.cat_to_id.len();
-        self.cat_to_id.entry(item.clone()).or_insert(next).clone()
-    }
 }
-
 
 pub struct BandScale<T: Clone + Ord + Hash + Display> {
     name: AxisName,
@@ -1081,7 +1259,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
     pub fn new(
         name: AxisName,
         range: F64Range,
-        mut get_persistent_id: impl FnMut(&T)->PersistentId,
+        offset_source: &mut OffsetSource<T, PersistentId>,
         bands_it: &mut impl Iterator<Item = T>,
         padding_ratio: f64,
     ) -> Self {
@@ -1090,7 +1268,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
             uniq.insert(item);
         }
         let bands: Vec<_> = uniq.iter().map(|band|{
-            let persistent_id = get_persistent_id(&band);
+            let persistent_id = offset_source.offset(&band);
             (band.clone(), persistent_id)
         }).collect();
         let bands_lookup: HashMap<_, _> =
@@ -1127,7 +1305,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
         let tick_extent = line_y - 8.;
         let label_top = tick_extent - 2.;
         marks.push(Mark::new(
-            MarkId::Plain(PlainMarkId::AxisDomain(self.name)),
+            MarkId::AxisDomain(self.name),
             MarkShape::Line(Line::new((self.range.0, line_y), (self.range.1, line_y))),
             Color::WHITE,
             None,
@@ -1136,13 +1314,13 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
             let tick_loc = TickLocator::Persistent(*p_id);
             let b_mid = self.range_val(v).mid();
             marks.push(Mark::new(
-                 MarkId::Plain(PlainMarkId::Tick(self.name, tick_loc)),
+                 MarkId::Tick(self.name, tick_loc),
                 MarkShape::Line(Line::new((b_mid, tick_extent), (b_mid, line_y))),
                 Color::WHITE,
                 None,
             ));
             marks.push(Mark::new(
-                MarkId::Plain(PlainMarkId::TickText(self.name, tick_loc)),
+                MarkId::TickText(self.name, tick_loc),
                 MarkShape::Text(TextMark::new(
                     v.to_string(),
                     Default::default(),
@@ -1300,7 +1478,7 @@ impl<T: LinearValue> LinearScale<T> {
         let tick_extent = line_x - 8.;
         let label_x = tick_extent - 2.;
         marks.push(Mark::new(
-            MarkId::Plain(PlainMarkId::AxisDomain(self.name)),
+            MarkId::AxisDomain(self.name),
             MarkShape::Line(Line::new((line_x, self.range.0), (line_x, self.range.1))),
             Color::WHITE,
             None,
@@ -1312,13 +1490,13 @@ impl<T: LinearValue> LinearScale<T> {
 
             let r_v = self.range_val_raw(d_v);
             marks.push(Mark::new(
-                MarkId::Plain(PlainMarkId::Tick(self.name, TickLocator::U64Bits(d_v.to_bits()))),
+                MarkId::Tick(self.name, TickLocator::U64Bits(d_v.to_bits())),
                 MarkShape::Line(Line::new((tick_extent, r_v), (line_x, r_v))),
                 Color::WHITE,
                 None,
             ));
             marks.push(Mark::new(
-                MarkId::Plain(PlainMarkId::TickText(self.name, TickLocator::U64Bits(d_v.to_bits()))),
+                MarkId::TickText(self.name, TickLocator::U64Bits(d_v.to_bits())),
                 MarkShape::Text(TextMark::new(
                     value.to_string(),
                     Default::default(),
