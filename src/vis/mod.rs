@@ -78,6 +78,8 @@ trait Interp: Sized {
     fn select_anim(self, idx: usize)->Self;
 
     fn merge(self, other: Self)->Self;
+
+    fn build(start: Self::Value, end: Self::Value)->Self;
 }
 
 trait HasInterp: Clone + Debug{
@@ -90,7 +92,6 @@ enum Pod<P: Interp> {
     Interp(P),
     SelectAnim(usize, P)
 }
-
 
 impl <P: Interp> Pod<P>{
     fn is_noop(&self) ->bool{
@@ -215,6 +216,25 @@ impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInt
             interps: interps.into_iter().collect()
         }
     }
+
+    fn build(start: HashMap<Key, TInterp::Value>, end: HashMap<Key, TInterp::Value>) -> Self {
+        panic!();
+        // let mut interps = HashMap::new();
+        // for (key, interp) in end.into_iter(){
+        //     let new_interp = if let Some(cur) = interps.remove(&key){
+        //         cur.merge(interp)
+        //     }else{
+        //         interp
+        //     };
+        //     if !new_interp.is_noop() {
+        //         interps.insert(key, new_interp);
+        //     }
+        // }
+        //
+        // MapInterp{
+        //     interps: interps.into_iter().collect()
+        // }
+    }
 }
 
 #[derive(Debug)]
@@ -224,9 +244,6 @@ struct F64Interp {
 }
 
 impl F64Interp{
-    fn new(start: f64, end: f64)-> F64Interp{
-        Self{start, end}
-    }
 
     fn interp_raw(start: f64, end: f64, frac: f64)->f64{
         start + (end - start) * frac
@@ -259,6 +276,10 @@ impl Interp for F64Interp {
     fn merge(self, other: Self) -> Self {
         other
     }
+
+    fn build(start: Self::Value, end: Self::Value) -> Self {
+        Self{start, end}
+    }
 }
 
 #[derive(Debug)]
@@ -269,14 +290,8 @@ struct PointInterp {
 
 
 impl PointInterp {
-    // Pass around some context/ rule thing to control construction if more weird
-    // interp options needed?
-    fn new(old: Point, new: Point) -> PointInterp {
-        PointInterp {
-            x: F64Interp::new(old.x, new.x).pod(),
-            y: F64Interp::new(old.y, new.y).pod(),
-        }
-    }
+
+
 }
 
 impl HasInterp for Point{
@@ -306,6 +321,13 @@ impl Interp for PointInterp {
         PointInterp {
             x: self.x.merge(other.x),
             y: self.y.merge(other.y),
+        }
+    }
+
+    fn build(old: Point, new: Point) -> PointInterp {
+        PointInterp {
+            x: F64Interp::build(old.x, new.x).pod(),
+            y: F64Interp::build(old.y, new.y).pod(),
         }
     }
 }
@@ -366,6 +388,10 @@ impl Interp for StringInterp{
     fn merge(self, other: Self) -> Self {
         other
     }
+
+    fn build(start: Self::Value, end: Self::Value) -> Self {
+        Self::new(&start, &end)
+    }
 }
 
 #[derive(Debug)]
@@ -373,16 +399,6 @@ struct TextMarkInterp {
     txt: Pod<StringInterp>,
     size: Pod<F64Interp>,
     point: Pod<PointInterp>,
-}
-
-impl TextMarkInterp {
-    pub fn new(txt: Pod<StringInterp>, size: Pod<F64Interp>, point: Pod<PointInterp>) -> Self {
-        TextMarkInterp {
-            txt,
-            size,
-            point,
-        }
-    }
 }
 
 impl HasInterp for TextMark{
@@ -426,6 +442,14 @@ impl Interp for TextMarkInterp {
             point: point.merge(point2)
         }
     }
+
+    fn build(o: Self::Value, n: Self::Value) -> Self {
+        TextMarkInterp {
+            txt:   StringInterp::build(o.txt, n.txt).pod(),
+            size:  F64Interp::build(o.size, n.size).pod(),
+            point: PointInterp::build(o.point, n.point).pod(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -437,28 +461,7 @@ enum MarkShapeInterp {
 }
 
 impl MarkShapeInterp {
-    fn new(old: MarkShape, new: MarkShape) -> MarkShapeInterp {
-        fn other_point(r: &Rect) -> Point {
-            Point::new(r.x1, r.y1)
-        }
 
-        match (old, new) {
-            (o, n) if o.same(&n) => MarkShapeInterp::Noop,
-            (MarkShape::Rect(o), MarkShape::Rect(n)) => MarkShapeInterp::Rect(
-                PointInterp::new(o.origin(), n.origin()).pod(),
-                PointInterp::new(other_point(&o), other_point(&n)).pod(),
-            ),
-            (MarkShape::Line(o), MarkShape::Line(n)) => {
-                MarkShapeInterp::Line(PointInterp::new(o.p0, n.p0).pod(), PointInterp::new(o.p1, n.p1).pod())
-            }
-            (MarkShape::Text(o), MarkShape::Text(n)) => MarkShapeInterp::Text(TextMarkInterp::new(
-                StringInterp::new(&o.txt, &n.txt).pod(),
-                F64Interp::new(o.size, n.size).pod(),
-                PointInterp::new(o.point, n.point).pod(),
-            ).pod()),
-            _=>MarkShapeInterp::Noop
-        }
-    }
 }
 
 impl HasInterp for MarkShape{
@@ -519,6 +522,25 @@ impl Interp for MarkShapeInterp {
             (_, other)=>other
         }
     }
+
+    fn build(old: MarkShape, new: MarkShape) -> MarkShapeInterp {
+        fn other_point(r: &Rect) -> Point {
+            Point::new(r.x1, r.y1)
+        }
+
+        match (old, new) {
+            (o, n) if o.same(&n) => MarkShapeInterp::Noop,
+            (MarkShape::Rect(o), MarkShape::Rect(n)) => MarkShapeInterp::Rect(
+                PointInterp::build(o.origin(), n.origin()).pod(),
+                PointInterp::build(other_point(&o), other_point(&n)).pod(),
+            ),
+            (MarkShape::Line(o), MarkShape::Line(n)) => {
+                MarkShapeInterp::Line(PointInterp::build(o.p0, n.p0).pod(), PointInterp::build(o.p1, n.p1).pod())
+            }
+            (MarkShape::Text(o), MarkShape::Text(n)) => MarkShapeInterp::Text(TextMarkInterp::build(o, n).pod()),
+            _=>MarkShapeInterp::Noop
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -566,21 +588,20 @@ impl Interp for ColorInterp {
             (ColorInterp::Rgba(r, g, b, a), ColorInterp::Rgba(r1, g1, b1, a1))=>ColorInterp::Rgba(r.merge(r1), g.merge(g1), b.merge(b1), a.merge(a1))
         }
     }
-}
 
-impl ColorInterp {
-    fn new(old: Color, new: Color) -> ColorInterp {
+    fn build(old: Color, new: Color) -> ColorInterp {
         let (r, g, b, a) = old.as_rgba();
         let (r2, g2, b2, a2) = new.as_rgba();
 
         ColorInterp::Rgba(
-            F64Interp::new(r, r2).pod(),
-            F64Interp::new(g, g2).pod(),
-            F64Interp::new(b, b2).pod(),
-            F64Interp::new(a, a2).pod(),
+            F64Interp::build(r, r2).pod(),
+            F64Interp::build(g, g2).pod(),
+            F64Interp::build(b, b2).pod(),
+            F64Interp::build(a, a2).pod(),
         )
     }
 }
+
 
 #[derive(Debug)]
 struct MarkInterp {
@@ -589,16 +610,7 @@ struct MarkInterp {
 }
 
 impl MarkInterp {
-    pub fn new(old: Mark, new: Mark) -> Pod<Self> {
-        if old.same(&new){
-            Pod::Noop
-        }else {
-            MarkInterp {
-                shape: MarkShapeInterp::new(old.shape, new.shape).pod(),
-                color: ColorInterp::new(old.color, new.color).pod()
-            }.pod()
-        }
-    }
+
 }
 
 impl HasInterp for Mark{
@@ -633,6 +645,13 @@ impl Interp for MarkInterp {
             color: color.merge(c1)
         }
     }
+
+    fn build(old: Mark, new: Mark) -> Self {
+        MarkInterp {
+            shape: MarkShapeInterp::build(old.shape, new.shape).pod(),
+            color: ColorInterp::build(old.color, new.color).pod()
+        }
+    }
 }
 
 impl Mark {
@@ -663,7 +682,7 @@ impl Mark {
             MarkShape::Line(l) => {
                 let arr = [0.5];
                 let mut mid = l.p0;
-                PointInterp::new(l.p0, l.p1).interp(&Frac::new(0, &arr) , &mut mid);
+                PointInterp::build(l.p0, l.p1).interp(&Frac::new(0, &arr) , &mut mid);
                 log::info!("Line enter {:?}", &mid);
                 MarkShape::Line(Line::new(mid, mid))
             }
@@ -901,14 +920,14 @@ impl VisMarksInterp {
         matched_marks
             .into_iter()
             .flat_map(|(k, v)| match v {
-                (Some(o), Some(n)) => Some(( (k, MarkInterp::new( o.clone(), n)), (k, o))),
+                (Some(o), Some(n)) => Some(( (k, MarkInterp::build( o.clone(), n).pod()), (k, o))),
                 (None, Some(n)) => {
                     let e = n.enter();
-                    Some(((k,MarkInterp::new( e.clone(), n)),  (k, e)))
+                    Some(((k,MarkInterp::build( e.clone(), n).pod()),  (k, e)))
                 },
                 (Some(o), None) => {
                     let e = o.enter(); // TODO: exit
-                    Some(((k, MarkInterp::new( o.clone(), e)), (k, o)))
+                    Some(((k, MarkInterp::build( o.clone(), e).pod()), (k, o)))
                 }
                 _ => None,
             })
@@ -960,6 +979,10 @@ impl Interp for VisMarksInterp {
         Self{
             marks: self.marks.merge(other.marks),
         }
+    }
+
+    fn build(start: Self::Value, end: Self::Value) -> Self {
+        unimplemented!()
     }
 }
 
