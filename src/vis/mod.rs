@@ -16,8 +16,6 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use InterpError::*;
-use std::thread::current;
-use std::collections::hash_map::Entry;
 
 // Could new type with bounds check
 // Number between 0 and 1
@@ -50,7 +48,6 @@ pub struct Mark {
 
 #[derive(Eq, PartialEq, Debug)]
 enum InterpError{
-    NoDefaultForNoop,
     FracOutOfBounds,
     ValueMismatch,
     IndexOutOfBounds,
@@ -61,12 +58,18 @@ type InterpResult = Result<(), InterpError>;
 const OK : InterpResult = Ok(());
 
 trait Interp: Sized {
-    type Value: Clone + Debug;
+    type Value: HasInterp<Interp=Self>;
     fn interp(&self, frac: &Frac, val: &mut Self::Value)->InterpResult;
 
-    fn wrap(self)->ConstOr<Self>{
-        ConstOr::Interp(self)
+    fn pod(self) -> Pod<Self>{
+        if self.is_noop(){
+            Pod::Noop
+        }else {
+            Pod::Interp(self)
+        }
     }
+
+    fn is_noop(&self)->bool;
 
     fn leaf()->bool{
         false
@@ -74,49 +77,31 @@ trait Interp: Sized {
 
     fn select_anim(self, idx: usize)->Self;
 
-    fn interp_default(&self, frac: &Frac)->Result<Self::Value, InterpError> where Self::Value : Default {
-        let mut temp: Self::Value = Default::default();
-        self.interp(frac, &mut temp).map(move |_| temp)
-    }
-
     fn merge(self, other: Self)->Self;
 }
 
+trait HasInterp: Clone + Debug{
+    type Interp : Interp<Value=Self>;
+}
+
 #[derive(Debug)]
-enum ConstOr<P: Interp> {
-    Const(P::Value),
+enum Pod<P: Interp> {
     Noop,
     Interp(P),
     SelectAnim(usize, P)
 }
 
-impl <P: Interp> ConstOr<P>{
 
+impl <P: Interp> Pod<P>{
     fn is_noop(&self) ->bool{
-        matches!(self, ConstOr::Noop)
+        matches!(self, Pod::Noop)
     }
 
-
-}
-
-impl <T: Clone + Debug, P: Interp<Value=T>> From<T> for ConstOr<P> {
-    fn from(t: P::Value) -> Self {
-        ConstOr::Const(t)
-    }
-
-}
-
-impl<P: Interp> Interp for ConstOr<P>{
-    type Value = P::Value;
-    fn interp(&self, frac: &Frac, val: &mut Self::Value)->InterpResult {
+    fn interp(&self, frac: &Frac, val: &mut P::Value)->InterpResult {
         match self {
-            ConstOr::Const(t) => {
-                *val = t.clone();
-                OK
-            },
-            ConstOr::Noop => OK,
-            ConstOr::Interp(interp) => interp.interp(frac, val),
-            ConstOr::SelectAnim(cur_idx, interp) => {
+            Pod::Noop => OK,
+            Pod::Interp(interp) => interp.interp(frac, val),
+            Pod::SelectAnim(cur_idx, interp) => {
                 let new_frac = Frac{
                     cur_idx:*cur_idx,
                     fracs: frac.fracs
@@ -128,37 +113,26 @@ impl<P: Interp> Interp for ConstOr<P>{
 
     fn select_anim(self, idx: usize)->Self {
         match self{
-            ConstOr::Interp(interp) => ConstOr::SelectAnim(idx, interp),
+            Pod::Interp(interp) => Pod::SelectAnim(idx, interp),
             s=>s
         }
     }
 
-
-    fn interp_default(&self, frac: &Frac) -> Result<Self::Value, InterpError> where Self::Value: Default {
-        match self{
-            ConstOr::Noop => Err(InterpError::NoDefaultForNoop),
-            _=>{
-                let mut temp: Self::Value = Default::default();
-                self.interp(frac, &mut temp).map(move |_| temp)
-            }
-        }
-    }
-
-    fn merge(self, other: ConstOr<P>)->Self{
-        fn wrap_anim<P: Interp>(p: P, idx: usize)->ConstOr<P>{
-            if P::leaf() { ConstOr::SelectAnim(idx, p) } else { ConstOr::Interp(p) }
+    fn merge(self, other: Pod<P>) ->Self{
+        fn wrap_anim<P: Interp>(p: P, idx: usize)-> Pod<P>{
+            if P::leaf() { Pod::SelectAnim(idx, p) } else { Pod::Interp(p) }
         }
         match (self, other){
-            (ConstOr::Noop, other)=>other,
-            (other, ConstOr::Noop)=>other,
+            (Pod::Noop, other)=>other,
+            (other, Pod::Noop)=>other,
             //(ConstOr::Const(t1), ConstOr::Const(t2)) if t1 == t2 => ConstOr::Const(t1),
-            (ConstOr::SelectAnim(a1, i1), ConstOr::SelectAnim(a2, i2))=> {
+            (Pod::SelectAnim(a1, i1), Pod::SelectAnim(a2, i2))=> {
                 wrap_anim(i1.select_anim(a1).merge(i2.select_anim(a2)), a2)
             },
-            (ConstOr::SelectAnim(a1, i1), ConstOr::Interp(p))=> {
+            (Pod::SelectAnim(a1, i1), Pod::Interp(p))=> {
                 wrap_anim(i1.select_anim(a1).merge(p), a1)
             },
-            (ConstOr::Interp(p), ConstOr::SelectAnim(a2, i2))=>{
+            (Pod::Interp(p), Pod::SelectAnim(a2, i2))=>{
                 wrap_anim(p.merge( i2.select_anim(a2)), a2)
             },
             (_, other)=>other
@@ -168,11 +142,11 @@ impl<P: Interp> Interp for ConstOr<P>{
 
 #[derive(Debug)]
 struct MapInterp<TInterp: Interp, Key: Hash + Eq> {
-    interps: Vec<(Key, ConstOr<TInterp>)>
+    interps: Vec<(Key, Pod<TInterp>)>
 }
 
 impl <TInterp: Interp, Key: Hash + Eq + Clone + Debug> MapInterp<TInterp, Key> {
-    pub fn new(interps_iter: impl Iterator<Item=(Key, ConstOr<TInterp>)>) -> ConstOr<Self> where TInterp::Value: Clone {
+    pub fn new(interps_iter: impl Iterator<Item=(Key, Pod<TInterp>)>) -> Pod<Self> where TInterp::Value: Clone {
         let mut all_noop = true;
         let mut interps = Vec::new();
         for (key, interp) in interps_iter{
@@ -183,13 +157,17 @@ impl <TInterp: Interp, Key: Hash + Eq + Clone + Debug> MapInterp<TInterp, Key> {
         }
 
         if all_noop{
-            ConstOr::Noop
+            Pod::Noop
         }else {
             MapInterp {
                 interps
-            }.wrap()
+            }.pod()
         }
     }
+}
+
+impl <HI: HasInterp, K: Eq + Hash + Clone + Debug> HasInterp for HashMap<K, HI> {
+    type Interp = MapInterp<HI::Interp, K>;
 }
 
 impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInterp, Key> {
@@ -210,6 +188,10 @@ impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInt
         loop_err.map(Err).unwrap_or(OK)
     }
 
+    fn is_noop(&self) -> bool {
+        self.interps.is_empty()
+    }
+
     fn select_anim(self, a_idx: usize) ->Self{
         MapInterp {
             interps: self.interps.into_iter().map(|(key, interp)| (key, interp.select_anim(a_idx))).collect()
@@ -217,27 +199,6 @@ impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInt
     }
 
     fn merge(self, other: MapInterp<TInterp, Key>) -> Self {
-        // let mut s_iter = self.interps.into_iter();
-        // let mut o_iter = other.interps.into_iter();
-        // let mut interps = Vec::new();
-        // let mut s_next = s_iter.next();
-        // let mut o_next = o_iter.next();
-        // while s_next.is_some() || o_next.is_some() {
-        //     let (s_idx, o_idx) = (s_next.as_ref().map(|x|x.0).unwrap_or(usize::MAX),
-        //                           o_next.as_ref().map(|x|x.0).unwrap_or(usize::MAX));
-        //     if s_idx < o_idx {
-        //         interps.push( s_next.take().unwrap() );
-        //         s_next = s_iter.next();
-        //     }else if s_idx > o_idx {
-        //         interps.push( o_next.take().unwrap() );
-        //         o_next = o_iter.next();
-        //     }else{
-        //         interps.push((s_idx,  s_next.take().unwrap().1.merge(o_next.take().unwrap().1)));
-        //         s_next = s_iter.next();
-        //         o_next = o_iter.next();
-        //     }
-        // }
-
         let mut interps : HashMap<_, _> = self.interps.into_iter().collect();
         for (key, interp) in other.interps.into_iter(){
             let new_interp = if let Some(cur) = interps.remove(&key){
@@ -245,7 +206,9 @@ impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInt
             }else{
                 interp
             };
-            interps.insert( key, new_interp);
+            if !new_interp.is_noop() {
+                interps.insert(key, new_interp);
+            }
         }
 
         MapInterp {
@@ -255,21 +218,14 @@ impl <TInterp: Interp, Key: Debug + Hash + Eq + Clone> Interp for MapInterp<TInt
 }
 
 #[derive(Debug)]
-enum F64Interp {
-    Linear(f64, f64)
+struct F64Interp {
+    start: f64,
+    end: f64
 }
 
 impl F64Interp{
-    fn linear(start: f64, end: f64, noop: bool)->ConstOr<F64Interp>{
-        if start == end{
-            if noop {
-                ConstOr::Noop
-            }else {
-                start.into()
-            }
-        }else{
-            F64Interp::Linear(start, end).wrap()
-        }
+    fn new(start: f64, end: f64)-> F64Interp{
+        Self{start, end}
     }
 
     fn interp_raw(start: f64, end: f64, frac: f64)->f64{
@@ -277,18 +233,19 @@ impl F64Interp{
     }
 }
 
+impl HasInterp for f64{
+    type Interp = F64Interp;
+}
+
 impl Interp for F64Interp {
     type Value = f64;
     fn interp(&self, frac: &Frac, val: &mut f64) -> InterpResult{
-        let frac = frac.current();
-        if frac < 0.0 || frac > 1.0 {
-            Err(InterpError::FracOutOfBounds)
-        }else {
-            match self {
-                F64Interp::Linear(start, end) => *val = Self::interp_raw(*start, *end, frac),
-            }
-            OK
-        }
+        *val = Self::interp_raw(self.start, self.end, frac.current());
+        OK
+    }
+
+    fn is_noop(&self) -> bool {
+        self.start == self.end
     }
 
     fn leaf() -> bool {
@@ -305,46 +262,50 @@ impl Interp for F64Interp {
 }
 
 #[derive(Debug)]
-enum PointInterp {
-    Point(ConstOr<F64Interp>, ConstOr<F64Interp>),
+struct PointInterp {
+    x: Pod<F64Interp>,
+    y: Pod<F64Interp>
 }
+
 
 impl PointInterp {
     // Pass around some context/ rule thing to control construction if more weird
     // interp options needed?
-    fn new(old: Point, new: Point) -> ConstOr<PointInterp> {
-        if old == new {
-            ConstOr::Noop
-        }else {
-            PointInterp::Point(
-                F64Interp::linear(old.x, new.x, true),
-                F64Interp::linear(old.y, new.y, true),
-            ).wrap()
+    fn new(old: Point, new: Point) -> PointInterp {
+        PointInterp {
+            x: F64Interp::new(old.x, new.x).pod(),
+            y: F64Interp::new(old.y, new.y).pod(),
         }
     }
+}
+
+impl HasInterp for Point{
+    type Interp = PointInterp;
 }
 
 impl Interp for PointInterp {
     type Value = Point;
     fn interp(&self, frac: &Frac, val: &mut Point) ->InterpResult{
-        match self {
-            PointInterp::Point(x, y) => {
-                x.interp(frac, &mut val.x)?;
-                y.interp(frac, &mut val.y)?;
-            }
-        }
-        OK
+        self.x.interp(frac, &mut val.x)?;
+        self.y.interp(frac, &mut val.y)
     }
 
+    fn is_noop(&self) -> bool {
+        self.x.is_noop() && self.y.is_noop()
+    }
+
+
     fn select_anim(self, idx: usize) -> Self {
-        match self {
-            PointInterp::Point(x, y)=>PointInterp::Point(x.select_anim(idx), y.select_anim(idx))
+        Self {
+            x: self.x.select_anim(idx),
+            y: self.y.select_anim(idx)
         }
     }
 
     fn merge(self, other: Self) -> Self {
-        match (self, other){
-            (PointInterp::Point(x1, y1), PointInterp::Point(x2, y2))=>PointInterp::Point(x1.merge(x2), y1.merge(y2))
+        PointInterp {
+            x: self.x.merge(other.x),
+            y: self.y.merge(other.y),
         }
     }
 }
@@ -358,22 +319,22 @@ struct StringInterp{
 }
 
 impl StringInterp{
-    fn new(a: &str, b: &str)-> ConstOr<StringInterp>{
+    fn new(a: &str, b: &str)-> StringInterp {
         let prefix: String = a.chars().zip(b.chars()).take_while(|(a,b)|a==b).map(|v|v.0).collect();
-        if prefix.len() == a.len() && prefix.len() == b.len(){
-            ConstOr::Noop
-        }else{
-            let remove: String = a[prefix.len()..].into();
-            let add: String = b[prefix.len()..].into();
-            let steps = remove.len() + add.len();
-            StringInterp{
+        let remove: String = a[prefix.len()..].into();
+        let add: String = b[prefix.len()..].into();
+        let steps = remove.len() + add.len();
+        StringInterp{
                 prefix,
                 remove,
                 add,
                 steps
-            }.wrap()
         }
     }
+}
+
+impl HasInterp for String{
+    type Interp = StringInterp;
 }
 
 impl Interp for StringInterp{
@@ -394,6 +355,10 @@ impl Interp for StringInterp{
         OK
     }
 
+    fn is_noop(&self) -> bool {
+        self.steps == 0
+    }
+
     fn select_anim(self, idx: usize) -> Self {
         self
     }
@@ -405,19 +370,23 @@ impl Interp for StringInterp{
 
 #[derive(Debug)]
 struct TextMarkInterp {
-    txt: ConstOr<StringInterp>,
-    size: ConstOr<F64Interp>,
-    point: ConstOr<PointInterp>,
+    txt: Pod<StringInterp>,
+    size: Pod<F64Interp>,
+    point: Pod<PointInterp>,
 }
 
 impl TextMarkInterp {
-    pub fn new(txt: ConstOr<StringInterp>, size: ConstOr<F64Interp>, point: ConstOr<PointInterp>) -> Self {
+    pub fn new(txt: Pod<StringInterp>, size: Pod<F64Interp>, point: Pod<PointInterp>) -> Self {
         TextMarkInterp {
             txt,
             size,
             point,
         }
     }
+}
+
+impl HasInterp for TextMark{
+    type Interp = TextMarkInterp;
 }
 
 impl Interp for TextMarkInterp {
@@ -427,6 +396,10 @@ impl Interp for TextMarkInterp {
         self.size.interp(frac, &mut val.size)?;
         self.point.interp(frac, &mut val.point)?;
         OK
+    }
+
+    fn is_noop(&self) -> bool {
+        self.point.is_noop() && self.size.is_noop() && self.txt.is_noop()
     }
 
     fn select_anim(self, idx: usize) -> Self {
@@ -457,34 +430,39 @@ impl Interp for TextMarkInterp {
 
 #[derive(Debug)]
 enum MarkShapeInterp {
-    Rect(ConstOr<PointInterp>, ConstOr<PointInterp>),
-    Line(ConstOr<PointInterp>, ConstOr<PointInterp>),
-    Text(ConstOr<TextMarkInterp>)
+    Rect(Pod<PointInterp>, Pod<PointInterp>),
+    Line(Pod<PointInterp>, Pod<PointInterp>),
+    Text(Pod<TextMarkInterp>),
+    Noop
 }
 
 impl MarkShapeInterp {
-    fn new(old: MarkShape, new: MarkShape) -> ConstOr<MarkShapeInterp> {
+    fn new(old: MarkShape, new: MarkShape) -> MarkShapeInterp {
         fn other_point(r: &Rect) -> Point {
             Point::new(r.x1, r.y1)
         }
 
         match (old, new) {
-            (o, n) if o.same(&n) => ConstOr::Noop,
+            (o, n) if o.same(&n) => MarkShapeInterp::Noop,
             (MarkShape::Rect(o), MarkShape::Rect(n)) => MarkShapeInterp::Rect(
-                PointInterp::new(o.origin(), n.origin()),
-                PointInterp::new(other_point(&o), other_point(&n)),
-            ).wrap(),
+                PointInterp::new(o.origin(), n.origin()).pod(),
+                PointInterp::new(other_point(&o), other_point(&n)).pod(),
+            ),
             (MarkShape::Line(o), MarkShape::Line(n)) => {
-                MarkShapeInterp::Line(PointInterp::new(o.p0, n.p0), PointInterp::new(o.p1, n.p1)).wrap()
+                MarkShapeInterp::Line(PointInterp::new(o.p0, n.p0).pod(), PointInterp::new(o.p1, n.p1).pod())
             }
             (MarkShape::Text(o), MarkShape::Text(n)) => MarkShapeInterp::Text(TextMarkInterp::new(
-                StringInterp::new(&o.txt, &n.txt),
-                F64Interp::linear(o.size, n.size, true),
-                PointInterp::new(o.point, n.point),
-            ).wrap()).wrap(),
-            (_, n) => ConstOr::Noop
+                StringInterp::new(&o.txt, &n.txt).pod(),
+                F64Interp::new(o.size, n.size).pod(),
+                PointInterp::new(o.point, n.point).pod(),
+            ).pod()),
+            _=>MarkShapeInterp::Noop
         }
     }
+}
+
+impl HasInterp for MarkShape{
+    type Interp = MarkShapeInterp;
 }
 
 impl Interp for MarkShapeInterp {
@@ -515,11 +493,21 @@ impl Interp for MarkShapeInterp {
         }
     }
 
+    fn is_noop(&self) -> bool {
+        match self{
+            MarkShapeInterp::Rect(orig, other) => orig.is_noop() && other.is_noop(),
+            MarkShapeInterp::Line(start, end) => start.is_noop() && end.is_noop(),
+            MarkShapeInterp::Text(text) => text.is_noop(),
+            MarkShapeInterp::Noop=>true
+        }
+    }
+
     fn select_anim(self, idx: usize) -> Self {
         match self{
             MarkShapeInterp::Rect(orig, other) => MarkShapeInterp::Rect(orig.select_anim(idx), other.select_anim(idx)),
             MarkShapeInterp::Line(start, end) => MarkShapeInterp::Line(start.select_anim(idx), end.select_anim(idx)),
             MarkShapeInterp::Text(text) => MarkShapeInterp::Text(text.select_anim(idx)),
+            other=>other
         }
     }
 
@@ -535,7 +523,11 @@ impl Interp for MarkShapeInterp {
 
 #[derive(Debug)]
 enum ColorInterp {
-    Rgba(ConstOr<F64Interp>, ConstOr<F64Interp>, ConstOr<F64Interp>, ConstOr<F64Interp>),
+    Rgba(Pod<F64Interp>, Pod<F64Interp>, Pod<F64Interp>, Pod<F64Interp>),
+}
+
+impl HasInterp for Color{
+    type Interp = ColorInterp;
 }
 
 impl Interp for ColorInterp {
@@ -543,16 +535,23 @@ impl Interp for ColorInterp {
 
     fn interp(&self, frac: &Frac, val: &mut Color) -> InterpResult{
         match self {
-            ColorInterp::Rgba(r, g, b, a) => {
+            ColorInterp::Rgba(ri, gi, bi, ai) => {
+                let (mut r, mut g, mut b, mut a) = val.as_rgba();
+                ri.interp(frac, &mut r)?;
+                gi.interp(frac, &mut g)?;
+                bi.interp(frac, &mut b)?;
+                ai.interp(frac, &mut a)?;
+
                 // TODO: mutate this?
-                *val = Color::rgba(
-                    r.interp_default(frac)?,
-                g.interp_default(frac)?,
-                b.interp_default(frac)?,
-                a.interp_default(frac)?
-                );
+                *val = Color::rgba(r, g, b, a);
                 OK
             }
+        }
+    }
+
+    fn is_noop(&self) -> bool {
+        match self{
+            ColorInterp::Rgba(r, g, b, a) => r.is_noop() && g.is_noop() && b.is_noop() && a.is_noop(),
         }
     }
 
@@ -570,40 +569,40 @@ impl Interp for ColorInterp {
 }
 
 impl ColorInterp {
-    fn new(old: Color, new: Color) -> ConstOr<ColorInterp> {
-        if old.same(&new) {
-            ConstOr::Noop
-        }else{
-            let (r, g, b, a) = old.as_rgba();
-            let (r2, g2, b2, a2) = new.as_rgba();
+    fn new(old: Color, new: Color) -> ColorInterp {
+        let (r, g, b, a) = old.as_rgba();
+        let (r2, g2, b2, a2) = new.as_rgba();
 
-            ColorInterp::Rgba(
-                F64Interp::linear(r, r2, false),
-                F64Interp::linear(g, g2, false),
-                F64Interp::linear(b, b2, false),
-                F64Interp::linear(a, a2, false),
-            ).wrap()
-        }
+        ColorInterp::Rgba(
+            F64Interp::new(r, r2).pod(),
+            F64Interp::new(g, g2).pod(),
+            F64Interp::new(b, b2).pod(),
+            F64Interp::new(a, a2).pod(),
+        )
     }
 }
 
 #[derive(Debug)]
 struct MarkInterp {
-    shape: ConstOr<MarkShapeInterp>,
-    color: ConstOr<ColorInterp>
+    shape: Pod<MarkShapeInterp>,
+    color: Pod<ColorInterp>
 }
 
 impl MarkInterp {
-    pub fn new(old: Mark, new: Mark) -> ConstOr<Self> {
+    pub fn new(old: Mark, new: Mark) -> Pod<Self> {
         if old.same(&new){
-            ConstOr::Noop
+            Pod::Noop
         }else {
             MarkInterp {
-                shape: MarkShapeInterp::new(old.shape, new.shape),
-                color: ColorInterp::new(old.color, new.color),
-            }.wrap()
+                shape: MarkShapeInterp::new(old.shape, new.shape).pod(),
+                color: ColorInterp::new(old.color, new.color).pod()
+            }.pod()
         }
     }
+}
+
+impl HasInterp for Mark{
+    type Interp = MarkInterp;
 }
 
 impl Interp for MarkInterp {
@@ -612,6 +611,10 @@ impl Interp for MarkInterp {
         self.shape.interp(frac, &mut val.shape)?;
         self.color.interp(frac, &mut val.color)?;
         OK
+    }
+
+    fn is_noop(&self) -> bool {
+        self.shape.is_noop() && self.color.is_noop()
     }
 
     fn select_anim(self, idx: usize) -> Self {
@@ -873,14 +876,14 @@ impl VisMarks {
 
 #[derive(Debug)]
 struct VisMarksInterp {
-    marks: ConstOr<MapInterp<MarkInterp, MarkId>>,
+    marks: Pod<MapInterp<MarkInterp, MarkId>>,
 }
 
 impl VisMarksInterp {
     fn make_mark_interps(
         old: HashMap<MarkId, Mark>,
         new: &HashMap<MarkId, Mark>,
-    ) -> (Vec<(MarkId, ConstOr<MarkInterp>)>, HashMap<MarkId, Mark>) {
+    ) -> (Vec<(MarkId, Pod<MarkInterp>)>, HashMap<MarkId, Mark>) {
         let mut matched_marks: HashMap<MarkId, (Option<Mark>, Option<Mark>)> = HashMap::new();
 
         for (id, mark)  in old.into_iter() {
@@ -913,7 +916,7 @@ impl VisMarksInterp {
     }
 
 
-    fn build(old: VisMarks, new: &VisMarks) -> (ConstOr<Self>, VisMarks) {
+    fn build(old: VisMarks, new: &VisMarks) -> (Pod<Self>, VisMarks) {
         let (interps, marks) = Self::make_mark_interps( old.marks, &new.marks);
 
         let vis_marks = VisMarks{
@@ -923,13 +926,17 @@ impl VisMarksInterp {
         let marks_interp = MapInterp::new(interps.into_iter());
 
         let vmi = if marks_interp.is_noop() {
-            ConstOr::Noop
+            Pod::Noop
         } else {
-           VisMarksInterp { marks: marks_interp }.wrap()
+           VisMarksInterp { marks: marks_interp }.pod()
         };
 
         (vmi, vis_marks)
     }
+}
+
+impl HasInterp for VisMarks{
+    type Interp = VisMarksInterp;
 }
 
 impl Interp for VisMarksInterp {
@@ -937,6 +944,10 @@ impl Interp for VisMarksInterp {
 
     fn interp(&self, frac: &Frac, val: &mut VisMarks) -> InterpResult{
         self.marks.interp(frac, &mut val.marks)
+    }
+
+    fn is_noop(&self) -> bool {
+        self.marks.is_noop()
     }
 
     fn select_anim(self, idx: usize) -> Self {
@@ -968,7 +979,7 @@ struct VisTransition {
     // matched_marks: HashMap<MarkId, MarkInterp>,
     cur_nanos: u64,
     anims: Vec<Anim>,
-    interp: ConstOr<VisMarksInterp>,
+    interp: Pod<VisMarksInterp>,
     current: VisMarks
 }
 
