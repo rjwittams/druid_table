@@ -1,5 +1,5 @@
-use druid::kurbo::{Line, Point, Rect, Size};
-use druid::widget::{Axis, Button, CrossAxisAlignment, Flex};
+use druid::kurbo::{Point, Rect, Size};
+use druid::widget::{Button, Flex};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
 use druid_table::{
     AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx,
@@ -7,10 +7,7 @@ use druid_table::{
     Visualization,
 };
 use im::Vector;
-use itertools::Itertools;
-use std::collections::{BTreeSet, HashMap};
-use std::fmt::Display;
-use std::hash::Hash;
+use std::collections::{HashMap};
 
 #[macro_use]
 extern crate im;

@@ -1,38 +1,51 @@
 use crate::LogIdx;
-use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2};
+use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2, BezPath};
 use druid::piet::{FontFamily, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::RenderContext;
-use druid::{
-    BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, UpdateCtx, Widget,
-};
+use druid::{BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, UpdateCtx, Widget, Value};
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
 use std::f64::consts::LN_10;
 use std::f64::NAN;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Add;
+use std::ops::{Add};
 use InterpError::*;
+use std::fmt;
+use crate::data::Remap::Selected;
 
-// Could new type with bounds check
-// Number between 0 and 1
-struct Frac<'a> {
-    cur_idx: usize,
-    fracs: &'a [f64],
+#[derive(Debug, Copy, Clone)]
+struct AnimationSegmentState {
+    fraction: f64,
+    eased_fraction: f64
 }
 
-impl Frac<'_> {
-    pub fn new(cur_idx: usize, fracs: &[f64]) -> Frac {
-        if cur_idx >= fracs.len() {
-            panic!("frac index out of range")
+impl AnimationSegmentState {
+    const START : Self = Self::new(0.0, 0.0);
+    const END : Self = Self::new(1.0, 1.0);
+
+    pub const fn new(fraction: f64, eased_fraction: f64) -> Self {
+        AnimationSegmentState { fraction, eased_fraction }
+    }
+}
+
+
+struct AnimationCtx<'a> {
+    current_segment: usize,
+    segment_fractions: &'a [AnimationSegmentState],
+}
+
+impl AnimationCtx<'_> {
+    pub fn new(current_segment: usize, segment_fractions: &[AnimationSegmentState]) -> AnimationCtx {
+        if current_segment >= segment_fractions.len() {
+            panic!("animation segment out of range {:?} {:?}", current_segment, segment_fractions)
         }
-        Frac { cur_idx, fracs }
+        AnimationCtx { current_segment, segment_fractions }
     }
 
     pub fn current(&self) -> f64 {
-        self.fracs[self.cur_idx]
+        self.segment_fractions[self.current_segment].eased_fraction
     }
 }
 
@@ -41,43 +54,44 @@ pub struct Mark {
     id: MarkId,
     shape: MarkShape,
     color: Color,
+    original: Color,
     hover: Option<Color>, // Maybe a bunch more properties / states, but could be dependent on state or something?
                           // Could be somewhere else perhaps
 }
 
 #[derive(Eq, PartialEq, Debug)]
 enum InterpError {
-    FracOutOfBounds,
     ValueMismatch,
     IndexOutOfBounds,
     Multiple,
+    NotRunning
 }
 
 type InterpResult = Result<(), InterpError>;
 const OK: InterpResult = Ok(());
 
-trait Interp: Sized + Debug {
+trait Interp: Default + Sized + Debug {
     type Value: HasInterp<Interp = Self>;
 
     fn prime(&mut self, val: &mut Self::Value) -> InterpResult;
 
-    fn interp(&self, frac: &Frac, val: &mut Self::Value) -> InterpResult;
+    fn interp(&self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult;
 
-    fn pod(self) -> Pod<Self::Value> {
+    fn pod(self) -> Animation<Self::Value> {
         if self.is_noop() {
-            Pod::Noop
+            Animation::Noop
         } else {
-            Pod::Interp(self)
+            Animation::Interp(self)
         }
     }
 
     fn is_noop(&self) -> bool;
 
-    fn leaf() -> bool {
+    fn is_leaf() -> bool {
         false
     }
 
-    fn select_anim(self, idx: usize) -> Self;
+    fn select_animation_segment(self, idx: usize) -> Self;
 
     fn merge(self, other: Self) -> Self;
 
@@ -85,69 +99,157 @@ trait Interp: Sized + Debug {
 }
 
 trait HasInterp: Clone + Debug {
-    type Interp: Interp<Value = Self> + Debug;
-    fn tween(self, other: Self) -> Pod<Self> {
+    type Interp: Interp<Value = Self>;
+    fn tween(self, other: Self) -> Animation<Self> {
         Self::Interp::build(self, other).pod()
     }
 }
 
 #[derive(Debug)]
-enum Pod<Value: HasInterp> {
-    Noop,
-    Interp(Value::Interp),
-    SelectAnim(usize, Value::Interp),
+enum SelectAnim<Interp> {
+    Single(AnimationSegmentId, Interp),
+    Many(Vec<(AnimationSegmentId, Interp)>)
 }
 
-impl<Value: HasInterp> Pod<Value> {
+impl <TInterp: Interp> SelectAnim<TInterp>{
+    fn prime(&mut self, val: &mut TInterp::Value)->InterpResult{
+        match self{
+            SelectAnim::Single(_, interp) => interp.prime(val),
+            SelectAnim::Many(sels)=> sels.iter_mut().fold(OK, |r, (_, interp)|r.and_then(|_|interp.prime(val) )) // TODO do this based on status
+        }
+    }
+
+    fn first(&mut self) ->&mut TInterp{
+        match self{
+            SelectAnim::Single(_, interp) => interp,
+            SelectAnim::Many(selects) => {
+                let idx = selects.len() - 1;
+                &mut selects[idx].1
+            }
+        }
+    }
+
+    fn interp(&self, frac: &AnimationCtx, val: &mut TInterp::Value) -> InterpResult {
+        match self {
+            SelectAnim::Single(cur_idx, interp) => {
+                // TODO check if running
+                let new_frac = AnimationCtx::new(*cur_idx, frac.segment_fractions);
+                interp.interp(&new_frac, val)
+            },
+            SelectAnim::Many( selects )=>{
+                // TODO check if running
+                for (idx, interp) in selects{
+                    let new_frac = AnimationCtx::new(*idx, frac.segment_fractions);
+                    interp.interp(&new_frac, val)?
+                }
+                OK
+            }
+        }
+    }
+
+    fn append(self, other: Self)->Self{
+        let mut vec = self.vec();
+        vec.append(&mut other.vec());
+        SelectAnim::Many( vec )
+    }
+
+    fn vec(self)->Vec<(AnimationSegmentId, TInterp)>{
+        match self{
+            SelectAnim::Single(ai, interp) => vec![(ai, interp)],
+            SelectAnim::Many(vec) => vec,
+        }
+    }
+
+    fn select_internal(self)->(AnimationSegmentId, TInterp){
+        match self{
+            SelectAnim::Single(ai, interp) => (ai, interp.select_animation_segment(ai)),
+            SelectAnim::Many(vec) => {
+                vec.into_iter().fold( (0, TInterp::default()), |(_, cur), (ai, item)| (ai, cur.merge(item)))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Animation<Value: HasInterp> {
+    Noop,
+    Interp(Value::Interp),
+    Select(SelectAnim<Value::Interp>)
+}
+
+impl <Value: HasInterp> Default for Animation<Value>{
+    fn default() -> Self {
+        Animation::Noop
+    }
+}
+
+impl<Value: HasInterp> Animation<Value> {
     fn is_noop(&self) -> bool {
-        matches!(self, Pod::Noop)
+        matches!(self, Animation::Noop)
     }
 
     fn prime(&mut self, val: &mut Value) -> InterpResult {
         match self {
-            Pod::Noop => OK,
-            Pod::Interp(interp) => interp.prime(val),
-            Pod::SelectAnim(_, interp) => interp.prime(val),
+            Animation::Noop => OK,
+            Animation::Interp(interp) => interp.prime(val),
+            Animation::Select(sa) => sa.prime(val),
         }
     }
 
-    fn interp(&self, frac: &Frac, val: &mut Value) -> InterpResult {
+    fn first(&mut self) ->&mut Value::Interp{
+        if let Animation::Noop = self {
+            *self = Animation::Interp(Value::Interp::default());
+        }
+        match self{
+            Animation::Noop => unreachable!("Just ensured we aren't noop"),
+            Animation::Interp(interp) => interp,
+            Animation::Select(sa) => sa.first()
+        }
+    }
+
+    fn interp(&self, frac: &AnimationCtx, val: &mut Value) -> InterpResult {
         match self {
-            Pod::Noop => OK,
-            Pod::Interp(interp) => interp.interp(frac, val),
-            Pod::SelectAnim(cur_idx, interp) => {
-                let new_frac = Frac {
-                    cur_idx: *cur_idx,
-                    fracs: frac.fracs,
-                };
-                interp.interp(&new_frac, val)
-            }
+            Animation::Noop => OK,
+            Animation::Interp(interp) => interp.interp(frac, val),
+            Animation::Select(sa) => sa.interp(frac, val)
         }
     }
 
     fn select_anim(self, idx: usize) -> Self {
         match self {
-            Pod::Interp(interp) => Pod::SelectAnim(idx, interp),
+            Animation::Interp(interp) => Animation::Select(SelectAnim::Single(idx, interp)),
             s => s,
         }
     }
 
-    fn merge(self, other: Pod<Value>) -> Self {
-        fn wrap_anim<P: Interp>(p: P, idx: usize) -> Pod<P::Value> {
-            if P::leaf() {
-                Pod::SelectAnim(idx, p)
+    fn merge(self, other: Animation<Value>) -> Self {
+
+        fn wrap_anim<P: Interp>(p: P, idx: usize) -> Animation<P::Value> {
+            if P::is_leaf() {
+                Animation::Select(SelectAnim::Single(idx, p))
             } else {
-                Pod::Interp(p)
+                Animation::Interp(p)
             }
         }
         match (self, other) {
-            (Pod::Noop, other) => other,
-            (other, Pod::Noop) => other,
-            (Pod::SelectAnim(a1, i1), Pod::SelectAnim(a2, i2)) => {
-                wrap_anim(i1.select_anim(a1).merge(i2.select_anim(a2)), a2)
+            (Animation::Noop, other) => other,
+            (other, Animation::Noop) => other,
+            (Animation::Select(sa1), Animation::Select(sa2)) => {
+                //let (_, si1) = sa1.select_internal();
+                //let (a2, si2) = sa2.select_internal();
+                //wrap_anim(si2.merge(si1), a2)
+
+                //TODO: descending merge
+                Animation::Select( sa1.append(sa2) )
             }
-            (Pod::SelectAnim(a1, i1), Pod::Interp(p)) => wrap_anim(i1.select_anim(a1).merge(p), a1),
-            (Pod::Interp(p), Pod::SelectAnim(a2, i2)) => wrap_anim(p.merge(i2.select_anim(a2)), a2),
+            (Animation::Select(sa), Animation::Interp(p)) => {
+                let (a1, si1) = sa.select_internal();
+                wrap_anim(si1.merge(p), a1)
+            }
+            (Animation::Interp(p), Animation::Select(sa)) => {
+                let (a2, si2) = sa.select_internal();
+                wrap_anim(p.merge(si2), a2)
+            },
             (_, other) => other,
         }
     }
@@ -156,7 +258,30 @@ impl<Value: HasInterp> Pod<Value> {
 #[derive(Debug)]
 struct MapInterp<Value: HasInterp, Key: Hash + Eq> {
     to_prime: Vec<(Key, Value)>,
-    interps: Vec<(Key, Pod<Value>)>,
+    interps: Vec<(Key, Animation<Value>)>,
+}
+
+impl <Value: HasInterp, Key: Hash + Eq + Clone> MapInterp<Value, Key>{
+    fn for_key(&mut self, key: &Key)->&mut Animation<Value>{
+        let idx = self.interps.iter().position(|(k, v)| *k == *key).unwrap_or_else(|| {
+            let idx = self.interps.len();
+            self.interps.push((key.clone(), Default::default()));
+            idx
+        });
+        &mut self.interps[idx].1
+    }
+}
+
+impl <Value: HasInterp, Key: Hash + Eq >  Default for MapInterp<Value, Key> {
+    fn default() -> Self {
+        MapInterp{to_prime: Default::default(), interps: Default::default() }
+    }
+}
+
+impl<Value: HasInterp, Key: Hash + Eq> MapInterp<Value, Key> {
+    pub fn new(to_prime: Vec<(Key, Value)>, interps: Vec<(Key, Animation<Value>)>) -> Self {
+        MapInterp { to_prime, interps }
+    }
 }
 
 impl<Value: HasInterp + EnterExit, Key: Eq + Hash + Clone + Debug> HasInterp
@@ -187,7 +312,7 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
         OK
     }
 
-    fn interp(&self, frac: &Frac, val: &mut HashMap<Key, Value>) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut HashMap<Key, Value>) -> InterpResult {
         let mut loop_err: Option<InterpError> = None;
         for (key, interp) in self.interps.iter() {
             let cur_err = val
@@ -208,7 +333,7 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
         self.interps.is_empty()
     }
 
-    fn select_anim(self, a_idx: usize) -> Self {
+    fn select_animation_segment(self, a_idx: usize) -> Self {
         MapInterp {
             to_prime: self.to_prime,
             interps: self
@@ -232,8 +357,11 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
             }
         }
 
+        let mut to_prime = self.to_prime;
+        let mut o_to_prime = other.to_prime;
+        to_prime.append(&mut o_to_prime);
         MapInterp {
-            to_prime: self.to_prime,
+            to_prime ,
             interps: interps.into_iter().collect(),
         }
     }
@@ -276,7 +404,7 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct F64Interp {
     start: f64,
     end: f64,
@@ -299,7 +427,7 @@ impl Interp for F64Interp {
         OK
     }
 
-    fn interp(&self, frac: &Frac, val: &mut f64) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut f64) -> InterpResult {
         *val = Self::interp_raw(self.start, self.end, frac.current());
         OK
     }
@@ -308,11 +436,11 @@ impl Interp for F64Interp {
         self.start == self.end
     }
 
-    fn leaf() -> bool {
+    fn is_leaf() -> bool {
         true
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         self
     }
 
@@ -325,10 +453,10 @@ impl Interp for F64Interp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct PointInterp {
-    x: Pod<f64>,
-    y: Pod<f64>,
+    x: Animation<f64>,
+    y: Animation<f64>,
 }
 
 impl HasInterp for Point {
@@ -343,7 +471,7 @@ impl Interp for PointInterp {
         self.y.prime(&mut val.y)
     }
 
-    fn interp(&self, frac: &Frac, val: &mut Point) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut Point) -> InterpResult {
         self.x.interp(frac, &mut val.x)?;
         self.y.interp(frac, &mut val.y)
     }
@@ -352,7 +480,7 @@ impl Interp for PointInterp {
         self.x.is_noop() && self.y.is_noop()
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         Self {
             x: self.x.select_anim(idx),
             y: self.y.select_anim(idx),
@@ -374,7 +502,7 @@ impl Interp for PointInterp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct StringInterp {
     prefix: String,
     remove: String,
@@ -413,7 +541,7 @@ impl Interp for StringInterp {
         OK
     }
 
-    fn interp(&self, frac: &Frac, val: &mut Self::Value) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult {
         // TODO: do this by modifying? Can't assume that calls are in order though
         let step = ((self.steps as f64) * frac.current()) as isize;
         let r_len = self.remove.len() as isize;
@@ -434,11 +562,11 @@ impl Interp for StringInterp {
         self.steps == 0
     }
 
-    fn leaf() -> bool {
+    fn is_leaf() -> bool {
         true
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         self
     }
 
@@ -451,11 +579,11 @@ impl Interp for StringInterp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct TextMarkInterp {
-    txt: Pod<String>,
-    size: Pod<f64>,
-    point: Pod<Point>,
+    txt: Animation<String>,
+    size: Animation<f64>,
+    point: Animation<Point>,
 }
 
 impl HasInterp for TextMark {
@@ -471,7 +599,7 @@ impl Interp for TextMarkInterp {
         self.point.prime(&mut val.point)
     }
 
-    fn interp(&self, frac: &Frac, val: &mut TextMark) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut TextMark) -> InterpResult {
         self.txt.interp(frac, &mut val.txt)?;
         self.size.interp(frac, &mut val.size)?;
         self.point.interp(frac, &mut val.point)
@@ -481,7 +609,7 @@ impl Interp for TextMarkInterp {
         self.point.is_noop() && self.size.is_noop() && self.txt.is_noop()
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         let TextMarkInterp { txt, size, point } = self;
         TextMarkInterp {
             txt: txt.select_anim(idx),
@@ -515,10 +643,16 @@ impl Interp for TextMarkInterp {
 
 #[derive(Debug)]
 enum MarkShapeInterp {
-    Rect(Pod<Point>, Pod<Point>),
-    Line(Pod<Point>, Pod<Point>),
-    Text(Pod<TextMark>),
+    Rect(Animation<Point>, Animation<Point>),
+    Line(Animation<Point>, Animation<Point>),
+    Text(Animation<TextMark>),
     Noop,
+}
+
+impl Default for MarkShapeInterp{
+    fn default() -> Self {
+        MarkShapeInterp::Noop
+    }
 }
 
 impl HasInterp for MarkShape {
@@ -547,7 +681,7 @@ impl Interp for MarkShapeInterp {
         }
     }
 
-    fn interp(&self, frac: &Frac, val: &mut MarkShape) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut MarkShape) -> InterpResult {
         match (self, val) {
             (MarkShapeInterp::Rect(o, other), MarkShape::Rect(r)) => {
                 // TODO: Do coords not points
@@ -566,7 +700,7 @@ impl Interp for MarkShapeInterp {
                 t_interp.interp(frac, t)?;
                 OK
             }
-            (int, val) => Err(InterpError::ValueMismatch),
+            _ => Err(InterpError::ValueMismatch),
         }
     }
 
@@ -579,7 +713,7 @@ impl Interp for MarkShapeInterp {
         }
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         match self {
             MarkShapeInterp::Rect(orig, other) => {
                 MarkShapeInterp::Rect(orig.select_anim(idx), other.select_anim(idx))
@@ -629,7 +763,14 @@ impl Interp for MarkShapeInterp {
 
 #[derive(Debug)]
 enum ColorInterp {
-    Rgba(Pod<f64>, Pod<f64>, Pod<f64>, Pod<f64>),
+    Rgba(Animation<f64>, Animation<f64>, Animation<f64>, Animation<f64>),
+    Noop
+}
+
+impl Default for ColorInterp{
+    fn default() -> Self {
+        ColorInterp::Noop
+    }
 }
 
 impl HasInterp for Color {
@@ -643,7 +784,7 @@ impl Interp for ColorInterp {
         OK
     }
 
-    fn interp(&self, frac: &Frac, val: &mut Color) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut Color) -> InterpResult {
         match self {
             ColorInterp::Rgba(ri, gi, bi, ai) => {
                 let (mut r, mut g, mut b, mut a) = val.as_rgba();
@@ -656,6 +797,7 @@ impl Interp for ColorInterp {
                 *val = Color::rgba(r, g, b, a);
                 OK
             }
+            ColorInterp::Noop => OK
         }
     }
 
@@ -664,10 +806,11 @@ impl Interp for ColorInterp {
             ColorInterp::Rgba(r, g, b, a) => {
                 r.is_noop() && g.is_noop() && b.is_noop() && a.is_noop()
             }
+            ColorInterp::Noop => true
         }
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         match self {
             ColorInterp::Rgba(r, g, b, a) => ColorInterp::Rgba(
                 r.select_anim(idx),
@@ -675,6 +818,7 @@ impl Interp for ColorInterp {
                 b.select_anim(idx),
                 a.select_anim(idx),
             ),
+            ColorInterp::Noop => self
         }
     }
 
@@ -683,6 +827,8 @@ impl Interp for ColorInterp {
             (ColorInterp::Rgba(r, g, b, a), ColorInterp::Rgba(r1, g1, b1, a1)) => {
                 ColorInterp::Rgba(r.merge(r1), g.merge(g1), b.merge(b1), a.merge(a1))
             }
+            (ColorInterp::Noop, other)=>other,
+            (s, ColorInterp::Noop)=>s
         }
     }
 
@@ -699,10 +845,10 @@ impl Interp for ColorInterp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct MarkInterp {
-    shape: Pod<MarkShape>,
-    color: Pod<Color>,
+    shape: Animation<MarkShape>,
+    color: Animation<Color>,
 }
 
 impl HasInterp for Mark {
@@ -716,7 +862,7 @@ impl Interp for MarkInterp {
         OK
     }
 
-    fn interp(&self, frac: &Frac, val: &mut Mark) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut Mark) -> InterpResult {
         self.shape.interp(frac, &mut val.shape)?;
         self.color.interp(frac, &mut val.color)?;
         OK
@@ -726,7 +872,7 @@ impl Interp for MarkInterp {
         self.shape.is_noop() && self.color.is_noop()
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         let MarkInterp { shape, color } = self;
         MarkInterp {
             shape: shape.select_anim(idx),
@@ -759,9 +905,9 @@ impl EnterExit for Mark {
         let shape = match &self.shape {
             MarkShape::Rect(r) => MarkShape::Rect(Rect::from_center_size(r.center(), Size::ZERO)),
             MarkShape::Line(l) => {
-                let arr = [0.5];
+                let arr = [AnimationSegmentState::new(0.0, 0.5)];
                 let mut mid = l.p0;
-                PointInterp::build(l.p0, l.p1).interp(&Frac::new(0, &arr), &mut mid);
+                l.p0.tween(l.p1).interp(&AnimationCtx::new(0, &arr), &mut mid);
                 MarkShape::Line(Line::new(mid, mid))
             }
             s => s.clone(),
@@ -784,7 +930,8 @@ impl Mark {
         Mark {
             id,
             shape,
-            color,
+            color: color.clone(),
+            original: color,
             hover,
         }
     }
@@ -802,11 +949,12 @@ impl Mark {
 
     pub fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
         // This should be done as some interpolation of the mark before paint? Maybe
-        let color = if Some(self.id) == *focus {
-            self.hover.as_ref().unwrap_or(&self.color)
-        } else {
-            &self.color
-        };
+        // let color = if Some(self.id) == *focus {
+        //     self.hover.as_ref().unwrap_or(&self.color)
+        // } else {
+        //     &self.color
+        // };
+        let color = &self.color;
         match &self.shape {
             MarkShape::Rect(r) => {
                 ctx.stroke(r, &Color::BLACK, 1.0);
@@ -871,10 +1019,10 @@ pub enum MarkShape {
 }
 
 // A data series
-#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct SeriesId(pub usize);
 
-#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumId {
     pub series: SeriesId,
     pub idx: LogIdx,
@@ -886,7 +1034,7 @@ impl DatumId {
     }
 } // Series, Generator etc
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct AxisName(pub &'static str);
 
 impl Data for AxisName {
@@ -895,14 +1043,14 @@ impl Data for AxisName {
     }
 }
 
-#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum TickLocator {
     Ordinal(usize),
     Persistent(PersistentId),
     U64Bits(u64),
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct StateName(pub &'static str);
 
 impl Data for StateName {
@@ -911,7 +1059,7 @@ impl Data for StateName {
     }
 }
 
-#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Data, Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum MarkId {
     Datum(DatumId),
     AxisDomain(AxisName),
@@ -972,19 +1120,19 @@ pub trait Visualization {
     fn data_marks(&mut self, data: &Self::Input, layout: &Self::Layout) -> Vec<Mark>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct VisMarks {
     // TODO: slotmap?
     marks: HashMap<MarkId, Mark>,
 }
 
 impl VisMarks {
-    fn find_mark(&mut self, pos: Point) -> Option<&mut Mark> {
-        self.marks.values_mut().filter(|mark| mark.hit(pos)).next()
+    fn find_mark(&self, pos: Point) -> Option<&Mark> {
+        self.marks.values().filter(|mark| mark.hit(pos)).next()
     }
 
     fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
-        for mark in self.marks.values() {
+        for (_, mark) in self.marks.iter().sorted_by_key(|(k, v)| k.clone()) {
             mark.paint(ctx, focus);
         }
     }
@@ -1007,16 +1155,14 @@ impl VisMarks {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct VisMarksInterp {
-    marks: Pod<HashMap<MarkId, Mark>>,
+    marks: Animation<HashMap<MarkId, Mark>>,
 }
 
 impl VisMarksInterp {
-    fn build(old: VisMarks, new: VisMarks) -> Self {
-        Self {
-            marks: MapInterp::build(old.marks, new.marks).pod(),
-        }
+    pub fn new(marks: Animation<HashMap<MarkId, Mark>>) -> Self {
+        VisMarksInterp { marks }
     }
 }
 
@@ -1031,7 +1177,7 @@ impl Interp for VisMarksInterp {
         self.marks.prime(&mut val.marks)
     }
 
-    fn interp(&self, frac: &Frac, val: &mut VisMarks) -> InterpResult {
+    fn interp(&self, frac: &AnimationCtx, val: &mut VisMarks) -> InterpResult {
         self.marks.interp(frac, &mut val.marks)
     }
 
@@ -1039,7 +1185,7 @@ impl Interp for VisMarksInterp {
         self.marks.is_noop()
     }
 
-    fn select_anim(self, idx: usize) -> Self {
+    fn select_animation_segment(self, idx: usize) -> Self {
         VisMarksInterp {
             marks: self.marks.select_anim(idx),
         }
@@ -1051,70 +1197,251 @@ impl Interp for VisMarksInterp {
         }
     }
 
-    fn build(start: Self::Value, end: Self::Value) -> Self {
-        unimplemented!()
-    }
-}
-
-#[derive(Debug)]
-struct Anim {
-    start_nanos: u64,
-    end_nanos: u64,
-}
-
-impl Anim {
-    pub fn new(start_nanos: u64, end_nanos: u64) -> Self {
-        Anim {
-            start_nanos,
-            end_nanos,
+    fn build(old: VisMarks, new: VisMarks) -> Self {
+        Self {
+            marks: MapInterp::build(old.marks, new.marks).pod(),
         }
     }
 }
 
-struct VisTransition {
-    // matched_marks: HashMap<MarkId, MarkInterp>,
-    cur_nanos: u64,
-    anims: Vec<Anim>,
-    interp: Pod<VisMarks>,
-    current: VisMarks,
+#[derive(Debug, PartialEq)]
+enum AnimationSegmentStatus{
+    Pending,
+    Waiting, // Move start time in here
+    Running,
+    Done
 }
 
-impl VisTransition {
-    fn advance(&mut self, nanos: u64) -> bool {
+enum CustomAnimationCurve {
+    Function(fn(f64) -> f64),
+    Boxed(Box<dyn Fn(f64) -> f64>)
+}
+
+impl CustomAnimationCurve{
+    fn translate(&self, t: f64) ->f64 {
+        match self {
+            CustomAnimationCurve::Function(f) => f(t),
+            CustomAnimationCurve::Boxed(f) => f(t)
+        }
+    }
+}
+
+impl Debug for CustomAnimationCurve{
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self{
+            CustomAnimationCurve::Function(f)=> {
+                formatter.debug_struct("CustomAnimationCurve::Function").field("f", f).finish()
+            }
+            CustomAnimationCurve::Boxed(_) => {
+                formatter.debug_struct("CustomAnimationCurve::Closure").finish()
+            }
+        }
+
+    }
+}
+
+#[derive(Debug)]
+enum AnimationCurve {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    OutElastic,
+    OutBounce,
+    OutSine,
+    //CubicBezier
+    Custom(CustomAnimationCurve)
+}
+
+impl AnimationCurve {
+    fn translate(&self, t: f64) ->f64{
+        use std::f64::consts::PI;
+        match self {
+            AnimationCurve::Linear => t,
+            AnimationCurve::EaseIn => t * t,
+            AnimationCurve::EaseOut => t * (2.0 - t),
+            AnimationCurve::EaseInOut => {
+                let t = t * 2.0;
+                if t < 1. {
+                    0.5 * t * t
+                } else {
+                    let t = t - 1.;
+                    -0.5 * (t * (t - 2.) - 1.)
+                }
+            }
+            AnimationCurve::OutElastic => {
+                let p = 0.3;
+                let s = p / 4.0;
+
+                if t < 0.001 {
+                    0.
+                }else if t > 0.999 {
+                    1.
+                }else {
+                    2.0f64.powf(-10.0 * t) * ((t - s) * (2.0 * PI) / p).sin() + 1.0
+                }
+            }
+            AnimationCurve::OutSine => {
+                (t * PI * 0.5).sin()
+            }
+            AnimationCurve::OutBounce => {
+                if t < (1. / 2.75) {
+                    7.5625 * t * t
+                }else if t < (2. / 2.75) {
+                    let t = t - (1.5 / 2.75);
+                    7.5625 * t * t + 0.75
+                }else if t < (2.5 / 2.75) {
+                    let t = t - (2.25 / 2.75);
+                    7.5625 * t * t + 0.9375
+                }else {
+                    let t = t - (2.625 / 2.75);
+                    7.5625 * t * t + 0.984375
+                }
+            },
+            AnimationCurve::Custom(c) => c.translate(t)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AnimationSegment {
+    start_nanos: f64,
+    dur_nanos: f64,
+    curve: AnimationCurve,
+    status: AnimationSegmentStatus
+}
+
+impl AnimationSegment {
+    pub fn new(start_nanos: f64, dur_nanos: f64, curve: AnimationCurve, status: AnimationSegmentStatus) -> Self {
+        AnimationSegment {
+            start_nanos,
+            dur_nanos,
+            curve,
+            status
+        }
+    }
+}
+
+type AnimationSegmentId = usize;
+
+#[derive(Eq, PartialEq, Hash, Debug)]
+enum AnimationEvent{
+    Named(&'static str),
+    SegmentEnded(AnimationSegmentId)
+}
+
+#[derive(Default)]
+struct Animator<T : HasInterp> {
+    cur_nanos: f64,
+    pending_starts: HashMap<AnimationEvent, Vec<AnimationSegmentId>>,
+    // slot map?
+    segments: Vec<AnimationSegment>,
+    pod: Animation<T>,
+}
+
+impl <T: HasInterp> Animator<T> {
+    pub fn advance(&mut self, nanos: f64, current: &mut T) -> InterpResult {
+        if self.segments.len() == 0 {
+            return InterpResult::Err(InterpError::NotRunning)
+        }
         self.cur_nanos += nanos;
-        let fracs: Vec<_> = self
-            .anims
-            .iter()
-            .map(|a| {
-                let since_start = self.cur_nanos - a.start_nanos;
-                let dur = a.end_nanos - a.start_nanos;
-                let frac = since_start as f64 / dur as f64;
-                frac.max(0.).min(1.)
-            })
-            .collect();
-        let frac = Frac::new(0, &fracs);
-        self.interp.interp(&frac, &mut self.current);
-        self.anims.iter().all(|a| self.cur_nanos >= a.end_nanos)
+        let cur_nanos = self.cur_nanos;
+        let fracs: Vec<_> = self.segments.iter_mut().map(|segment|{
+            let since_start = cur_nanos - segment.start_nanos;
+            if AnimationSegmentStatus::Waiting == segment.status && since_start >= 0. {
+                segment.status = AnimationSegmentStatus::Running
+            }
+            match &mut segment.status {
+                AnimationSegmentStatus::Waiting | AnimationSegmentStatus::Pending => AnimationSegmentState::START,
+                stat@AnimationSegmentStatus::Running => {
+                    let frac = since_start / segment.dur_nanos;
+                    if frac > 1.0 {
+                        *stat = AnimationSegmentStatus::Done;
+                        AnimationSegmentState::END
+                    } else {
+                        AnimationSegmentState::new(frac, segment.curve.translate(frac).max(0.).min(1.))
+                    }
+                },
+                AnimationSegmentStatus::Done => AnimationSegmentState::END
+            }
+        }).collect();
+
+        let frac = AnimationCtx::new(0, &fracs[..]);
+        let res = self.pod.interp(&frac, current);
+        let done = self.segments.iter().all(|a| a.status == AnimationSegmentStatus::Done);
+        if done {
+            self.segments.clear();
+            self.pod = Animation::Noop;
+        }
+        res
+    }
+
+    pub fn event(&mut self, event: AnimationEvent){
+        // TODO: with repeating segments do not remove
+        if let Some(ids) = self.pending_starts.remove(&event){
+            for id in ids{
+                if let Some(seg) = self.segments.get_mut(id){
+                    seg.status = AnimationSegmentStatus::Waiting;
+                    seg.start_nanos = self.cur_nanos;
+                    log::info!("Starting pending anim {} {:?}\n {:#?}", id, seg, self.pod);
+                }
+            }
+        }
+    }
+
+    pub fn running(&self)->bool{
+        // TODO: If we had waiting ones we could return a minimum time until one had to start
+        // then use a timer to get it
+        !self.segments.iter().all(|s|s.status == AnimationSegmentStatus::Pending)
+    }
+
+    pub fn add_animation_segment(&mut self, from_now_nanos: u64, dur_nanos: u64, curve: AnimationCurve, after:Option<AnimationEvent>)->usize{
+        let anim_idx = self.segments.len();
+        let start = self.cur_nanos + from_now_nanos as f64;
+        let status = if after.is_some(){
+            AnimationSegmentStatus::Pending
+        } else if from_now_nanos > 0 { AnimationSegmentStatus::Waiting } else { AnimationSegmentStatus::Running };
+        self.segments.push(AnimationSegment::new(
+            start as f64,
+            dur_nanos.max(1) as f64,
+             curve,
+            status
+        ));
+        if let Some(after) = after {
+            self.pending_starts.entry(after).or_insert(vec![]).push(anim_idx);
+        }
+        return anim_idx;
+    }
+
+    pub fn add_animation(&mut self, interp: Animation<T>, from_now_nanos: u64, dur_nanos: u64, curve: AnimationCurve, after: Option<AnimationEvent>, current: &mut T) -> Result<(), InterpError> {
+        let mut interp = interp;
+        interp.prime(current).and_then(|()| {
+            let anim_idx = self.add_animation_segment(from_now_nanos, dur_nanos, curve, after);
+            let mut temp = Animation::Noop;
+            std::mem::swap(&mut temp, &mut self.pod);
+            self.pod = temp.merge(interp.select_anim(anim_idx));
+            OK
+        })
     }
 }
 
 struct VisInner<VP: Visualization> {
     layout: VP::Layout,
     state: VP::State,
-    marks: VisMarks,
-    transition: Option<VisTransition>,
+    animator: Animator<VisMarks>,
+    current: VisMarks,
     transform: Affine,
     focus: Option<MarkId>,
     phantom_vp: PhantomData<VP>,
 }
 
 impl<VP: Visualization> VisInner<VP> {
-    pub fn new(layout: VP::Layout, state: VP::State, marks: VisMarks, transform: Affine) -> Self {
+    pub fn new(layout: VP::Layout, state: VP::State, animator: Animator<VisMarks>, current: VisMarks, transform: Affine) -> Self {
         VisInner {
             layout,
             state,
-            marks,
-            transition: None,
+            animator,
+            current,
             transform,
             focus: None,
             phantom_vp: Default::default(),
@@ -1128,6 +1455,9 @@ pub struct Vis<V: Visualization> {
 }
 
 impl<V: Visualization> Vis<V> {
+    const UNHOVER: AnimationEvent = AnimationEvent::Named("vis:unhover");
+
+
     pub fn new(visual: V) -> Self {
         Vis {
             visual,
@@ -1135,7 +1465,7 @@ impl<V: Visualization> Vis<V> {
         }
     }
 
-    fn ensure_state(&mut self, data: &V::Input, size: Size) -> &mut VisInner<V> {
+    fn ensure_inner(&mut self, data: &V::Input, size: Size) -> &mut VisInner<V> {
         if self.inner.is_none() {
             let state: V::State = Default::default();
 
@@ -1144,12 +1474,14 @@ impl<V: Visualization> Vis<V> {
             let data_marks = self.visual.data_marks(data, &layout);
             let layout_marks = self.visual.layout_marks(&layout);
 
-            let marks = VisMarks::build(layout_marks, state_marks, data_marks);
+            let current = VisMarks::build(layout_marks, state_marks, data_marks);
+            let animator = Default::default();
 
             self.inner = Some(VisInner::new(
                 layout,
                 state,
-                marks,
+                animator,
+                current,
                 Affine::FLIP_Y * Affine::translate(Vec2::new(0., -size.height)),
             ));
         }
@@ -1160,56 +1492,32 @@ impl<V: Visualization> Vis<V> {
         if let Some(inner) = &mut self.inner {
             inner.layout = self.visual.layout(data, size);
 
-            let mut temp = VisMarks::build(
+            let destination = VisMarks::build(
                 self.visual.layout_marks(&inner.layout),
                 self.visual.state_marks(data, &inner.layout, &inner.state),
                 self.visual.data_marks(data, &inner.layout),
             );
-            std::mem::swap(&mut inner.marks, &mut temp);
 
-            let vt = if let Some(mut old_transit) = inner.transition.take() {
-                let mut start = old_transit.current;
-                let mut interp = VisMarksInterp::build(start.clone(), inner.marks.clone()).pod();
-                interp.prime(&mut start);
-
-                let interp = interp.select_anim(old_transit.anims.len());
-                let interp = old_transit.interp.merge(interp);
-                old_transit.anims.push(Anim::new(
-                    old_transit.cur_nanos,
-                    old_transit.cur_nanos + 10 * 250 * 1_000_000,
-                ));
-                VisTransition {
-                    cur_nanos: old_transit.cur_nanos,
-                    anims: old_transit.anims,
-                    interp,
-                    current: start,
-                }
-            } else {
-                let mut start = temp;
-                let mut interp = VisMarksInterp::build(start.clone(), inner.marks.clone()).pod();
-                interp.prime(&mut start);
-                VisTransition {
-                    cur_nanos: 0,
-                    interp: interp.select_anim(0),
-                    current: start,
-                    anims: vec![Anim::new(0, 10 * 250 * 1_000_000)],
-                }
-            };
-
-            inner.transition = if vt.interp.is_noop() { None } else { Some(vt) };
-        }
+            let interp = VisMarksInterp::build(inner.current.clone(), destination).pod();
+            inner.animator.add_animation(interp, 0, 250 * 1_000_000, AnimationCurve::EaseInOut, None, &mut inner.current);
+        };
     }
+
 }
 
+
+
 impl<V: Visualization> Widget<V::Input> for Vis<V> {
+
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut V::Input, env: &Env) {
-        self.ensure_state(data, ctx.size());
+        self.ensure_inner(data, ctx.size());
         let inner = self.inner.as_mut().unwrap();
         let old_state: V::State = inner.state.clone();
+        let VisInner {animator, current, ..} = inner;
 
         match event {
             Event::MouseMove(me) => {
-                if let Some(mark) = inner.marks.find_mark(inner.transform.inverse() * me.pos) {
+                if let Some(mark) = current.find_mark(inner.transform.inverse() * me.pos) {
                     if inner.focus != Some(mark.id) {
                         self.visual.event(
                             data,
@@ -1218,48 +1526,61 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                             &VisEvent::MouseEnter(mark.id),
                         );
                         inner.focus = Some(mark.id);
-                        ctx.request_paint();
+
+
+                        if let Some(hover) = &mark.hover {
+                            let hover_idx = animator.add_animation_segment(0, 250 * 1_000_000, AnimationCurve::EaseIn, None);
+                            let color_change = mark.color.clone().tween(hover.clone()).select_anim(hover_idx);
+
+                            let unhover_idx = animator.add_animation_segment( 0, 2500 * 1_000_000, AnimationCurve::EaseOut,  Some(Self::UNHOVER));
+                            let change_back = hover.clone().tween(mark.original.clone()).select_anim(unhover_idx);
+
+                            animator.pod.first().marks.first().for_key(&mark.id).first().color = color_change.merge(change_back);
+
+                        }
                     }
                 } else {
-                    if let Some(focus) = inner.focus {
-                        self.visual.event(
-                            data,
-                            &inner.layout,
-                            &mut inner.state,
-                            &VisEvent::MouseOut(focus),
-                        );
+                    match &mut inner.focus {
+                        Some(focus) => {
+                            self.visual.event(
+                                data,
+                                &inner.layout,
+                                &mut inner.state,
+                                &VisEvent::MouseOut(*focus),
+                            );
+                            animator.event(Self::UNHOVER)
+                        }
+                        None => {}
                     }
                     if inner.focus.is_some() {
                         inner.focus = None;
-                        ctx.request_paint()
                     }
                 }
+
             }
             _ => {}
         }
 
-        if !old_state.same(&inner.state) {
-            self.start_transition(ctx.size(), data);
-            ctx.request_anim_frame();
+        if inner.animator.running(){
+            ctx.request_anim_frame()
         }
+
+       // if !old_state.same(&inner.state) {
+         //   self.start_transition(ctx.size(), data);
+        //    ctx.request_anim_frame();
+        //}
     }
 
     fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &V::Input, env: &Env) {
-        if let (LifeCycle::AnimFrame(nanos), Some(VisInner { transition, .. })) =
+        if let (LifeCycle::AnimFrame(nanos), Some(VisInner { animator, current, .. })) =
             (event, &mut self.inner)
         {
-            let done = if let Some(transit) = transition {
-                transit.advance(*nanos)
-            } else {
-                true
-            };
+            let res = animator.advance((*nanos) as f64, current);
+            if let Result::Err(e) = res{
+                log::warn!("InterpError running animator {:?}", e);
+            }
 
-            if done {
-                transition.iter().for_each(|t| {
-                    log::info!("Stopping animations {:?}\n {:#?}", t.cur_nanos, t.anims)
-                });
-                *transition = None;
-            } else {
+            if animator.running() {
                 ctx.request_anim_frame();
             }
             ctx.request_paint()
@@ -1287,15 +1608,10 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
     fn paint(&mut self, ctx: &mut PaintCtx, data: &V::Input, env: &Env) {
         let size = ctx.size();
 
-        let state = self.ensure_state(data, size);
+        let state = self.ensure_inner(data, size);
         ctx.with_save(|ctx| {
             ctx.transform(state.transform);
-            if let Some(transit) = &state.transition {
-                transit.current.paint(ctx, &state.focus);
-            } else {
-                let marks = &state.marks;
-                marks.paint(ctx, &state.focus);
-            }
+            state.current.paint(ctx, &state.focus);
         });
     }
 }
