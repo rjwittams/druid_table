@@ -13,31 +13,31 @@ use std::marker::PhantomData;
 use std::ops::{Add};
 use InterpError::*;
 use std::fmt;
-use crate::data::Remap::Selected;
 
 #[derive(Debug, Copy, Clone)]
 struct AnimationSegmentState {
     fraction: f64,
-    eased_fraction: f64
+    eased_fraction: f64,
+    running: bool
 }
 
 impl AnimationSegmentState {
-    const START : Self = Self::new(0.0, 0.0);
-    const END : Self = Self::new(1.0, 1.0);
+    const START : Self = Self::new(0.0, 0.0, false);
+    const END : Self = Self::new(1.0, 1.0, false);
 
-    pub const fn new(fraction: f64, eased_fraction: f64) -> Self {
-        AnimationSegmentState { fraction, eased_fraction }
+    pub const fn new(fraction: f64, eased_fraction: f64, running: bool) -> Self {
+        AnimationSegmentState { fraction, eased_fraction, running }
     }
 }
 
 
-struct AnimationCtx<'a> {
+pub struct AnimationCtx<'a> {
     current_segment: usize,
     segment_fractions: &'a [AnimationSegmentState],
 }
 
 impl AnimationCtx<'_> {
-    pub fn new(current_segment: usize, segment_fractions: &[AnimationSegmentState]) -> AnimationCtx {
+    fn new(current_segment: usize, segment_fractions: &[AnimationSegmentState]) -> AnimationCtx {
         if current_segment >= segment_fractions.len() {
             panic!("animation segment out of range {:?} {:?}", current_segment, segment_fractions)
         }
@@ -47,20 +47,16 @@ impl AnimationCtx<'_> {
     pub fn current(&self) -> f64 {
         self.segment_fractions[self.current_segment].eased_fraction
     }
+
+    pub fn running(&self, idx: usize)->bool{
+        self.segment_fractions[idx].running
+    }
 }
 
-#[derive(Debug, Data, Clone)]
-pub struct Mark {
-    id: MarkId,
-    shape: MarkShape,
-    color: Color,
-    original: Color,
-    hover: Option<Color>, // Maybe a bunch more properties / states, but could be dependent on state or something?
-                          // Could be somewhere else perhaps
-}
+
 
 #[derive(Eq, PartialEq, Debug)]
-enum InterpError {
+pub enum InterpError {
     ValueMismatch,
     IndexOutOfBounds,
     Multiple,
@@ -70,19 +66,19 @@ enum InterpError {
 type InterpResult = Result<(), InterpError>;
 const OK: InterpResult = Ok(());
 
-trait Interp: Default + Sized + Debug {
+pub trait Interp: Default + Sized + Debug {
     type Value: HasInterp<Interp = Self>;
 
     fn prime(&mut self, val: &mut Self::Value) -> InterpResult;
 
     fn interp(&self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult;
 
-    fn pod(self) -> Animation<Self::Value> {
-        if self.is_noop() {
-            Animation::Noop
+    fn animation(self) -> Animation<Self::Value> {
+        Animation::Focused(if self.is_noop() {
+            FocusedAnim::Noop
         } else {
-            Animation::Interp(self)
-        }
+            FocusedAnim::Interp(self)
+        })
     }
 
     fn is_noop(&self) -> bool;
@@ -98,15 +94,15 @@ trait Interp: Default + Sized + Debug {
     fn build(start: Self::Value, end: Self::Value) -> Self;
 }
 
-trait HasInterp: Clone + Debug {
+pub trait HasInterp: Clone + Debug {
     type Interp: Interp<Value = Self>;
     fn tween(self, other: Self) -> Animation<Self> {
-        Self::Interp::build(self, other).pod()
+        Self::Interp::build(self, other).animation()
     }
 }
 
 #[derive(Debug)]
-enum SelectAnim<Interp> {
+pub enum SelectAnim<Interp> {
     Single(AnimationSegmentId, Interp),
     Many(Vec<(AnimationSegmentId, Interp)>)
 }
@@ -133,14 +129,20 @@ impl <TInterp: Interp> SelectAnim<TInterp>{
         match self {
             SelectAnim::Single(cur_idx, interp) => {
                 // TODO check if running
-                let new_frac = AnimationCtx::new(*cur_idx, frac.segment_fractions);
-                interp.interp(&new_frac, val)
+                if frac.running(*cur_idx) {
+                    let new_frac = AnimationCtx::new(*cur_idx, frac.segment_fractions);
+                    interp.interp(&new_frac, val)
+                }else {
+                    OK
+                }
             },
             SelectAnim::Many( selects )=>{
                 // TODO check if running
                 for (idx, interp) in selects{
-                    let new_frac = AnimationCtx::new(*idx, frac.segment_fractions);
-                    interp.interp(&new_frac, val)?
+                    if frac.running(*idx) {
+                        let new_frac = AnimationCtx::new(*idx, frac.segment_fractions);
+                        interp.interp(&new_frac, val)?
+                    }
                 }
                 OK
             }
@@ -171,84 +173,130 @@ impl <TInterp: Interp> SelectAnim<TInterp>{
 }
 
 #[derive(Debug)]
-enum Animation<Value: HasInterp> {
+pub enum FocusedAnim<Interp>{
     Noop,
-    Interp(Value::Interp),
-    Select(SelectAnim<Value::Interp>)
+    Interp(Interp),
+}
+
+impl <TInterp> Default for FocusedAnim<TInterp>{
+    fn default() -> Self {
+        FocusedAnim::Noop
+    }
+}
+
+impl <TInterp: Interp> FocusedAnim<TInterp>{
+    fn prime(&mut self, val: &mut TInterp::Value) -> InterpResult {
+        match self {
+            FocusedAnim::Noop => OK,
+            FocusedAnim::Interp(interp) => interp.prime(val),
+        }
+    }
+
+    fn interp(&self, frac: &AnimationCtx, val: &mut TInterp::Value) -> InterpResult {
+        match self {
+            FocusedAnim::Noop => OK,
+            FocusedAnim::Interp(interp) => interp.interp(frac, val),
+        }
+    }
+
+    fn expand(&mut self) ->&mut TInterp {
+        if matches!(self, FocusedAnim::Noop){
+            *self = FocusedAnim::Interp(Default::default())
+        }
+
+        match self{
+            FocusedAnim::Noop => unreachable!("Just ensured we are expanded"),
+            FocusedAnim::Interp(interp) => interp,
+        }
+    }
+
+    fn merge(self, other: FocusedAnim<TInterp>) -> Self{
+        match (self, other) {
+            (FocusedAnim::Noop, other) => other,
+            (other, FocusedAnim::Noop) => other,
+            (FocusedAnim::Interp(i1), FocusedAnim::Interp(i2))=>FocusedAnim::Interp(i1.merge(i2))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Animation<Value: HasInterp> {
+    Focused(FocusedAnim<Value::Interp>),
+    Select(SelectAnim<Value::Interp>, FocusedAnim<Value::Interp>)
 }
 
 impl <Value: HasInterp> Default for Animation<Value>{
     fn default() -> Self {
-        Animation::Noop
+        Animation::Focused(FocusedAnim::Noop)
     }
 }
 
 impl<Value: HasInterp> Animation<Value> {
     fn is_noop(&self) -> bool {
-        matches!(self, Animation::Noop)
+        matches!(self, Animation::Focused(FocusedAnim::Noop))
     }
 
     fn prime(&mut self, val: &mut Value) -> InterpResult {
         match self {
-            Animation::Noop => OK,
-            Animation::Interp(interp) => interp.prime(val),
-            Animation::Select(sa) => sa.prime(val),
+            Animation::Focused(foc) => foc.prime(val),
+            Animation::Select(sa, other) => {
+                sa.prime(val)?;
+                other.prime(val)
+            },
         }
     }
 
-    fn first(&mut self) ->&mut Value::Interp{
-        if let Animation::Noop = self {
-            *self = Animation::Interp(Value::Interp::default());
-        }
+    pub fn first(&mut self) ->&mut Value::Interp{
         match self{
-            Animation::Noop => unreachable!("Just ensured we aren't noop"),
-            Animation::Interp(interp) => interp,
-            Animation::Select(sa) => sa.first()
+            Animation::Focused(foc) => foc.expand(),
+            Animation::Select(_, foc) => foc.expand()
         }
     }
 
-    fn interp(&self, frac: &AnimationCtx, val: &mut Value) -> InterpResult {
+    fn interp(&self, ctx: &AnimationCtx, val: &mut Value) -> InterpResult {
         match self {
-            Animation::Noop => OK,
-            Animation::Interp(interp) => interp.interp(frac, val),
-            Animation::Select(sa) => sa.interp(frac, val)
+            Animation::Focused(foc) => foc.interp(ctx, val),
+            Animation::Select(sa, foc) => {
+                sa.interp(ctx, val)?;
+                foc.interp(ctx, val)
+            }
         }
     }
 
     fn select_anim(self, idx: usize) -> Self {
         match self {
-            Animation::Interp(interp) => Animation::Select(SelectAnim::Single(idx, interp)),
+            Animation::Focused(FocusedAnim::Interp(interp)) => Animation::Select(SelectAnim::Single(idx, interp), Default::default()),
+            Animation::Select(sa, FocusedAnim::Interp(interp)) => Animation::Select(sa.append( SelectAnim::Single(idx, interp)), Default::default()),
             s => s,
         }
     }
 
     fn merge(self, other: Animation<Value>) -> Self {
 
-        fn wrap_anim<P: Interp>(p: P, idx: usize) -> Animation<P::Value> {
-            if P::is_leaf() {
-                Animation::Select(SelectAnim::Single(idx, p))
-            } else {
-                Animation::Interp(p)
+        fn wrap_anim<P: Interp>(f: FocusedAnim<P>, idx: usize) -> Animation<P::Value> {
+            match f {
+                FocusedAnim::Interp(interp) if P::is_leaf() =>Animation::Select(SelectAnim::Single(idx, interp), FocusedAnim::Noop),
+                f=>Animation::Focused(f)
             }
         }
         match (self, other) {
-            (Animation::Noop, other) => other,
-            (other, Animation::Noop) => other,
-            (Animation::Select(sa1), Animation::Select(sa2)) => {
+            (Animation::Focused(FocusedAnim::Noop), other) => other,
+            (other, Animation::Focused(FocusedAnim::Noop)) => other,
+            (Animation::Select(sa1, f1), Animation::Select(sa2, f2)) => {
                 //let (_, si1) = sa1.select_internal();
                 //let (a2, si2) = sa2.select_internal();
                 //wrap_anim(si2.merge(si1), a2)
 
                 //TODO: descending merge
-                Animation::Select( sa1.append(sa2) )
+                Animation::Select( sa1.append(sa2), f1.merge(f2) )
             }
-            (Animation::Select(sa), Animation::Interp(p)) => {
+            (Animation::Select(sa, f1), Animation::Focused(f2)) => {
                 let (a1, si1) = sa.select_internal();
-                wrap_anim(si1.merge(p), a1)
+                wrap_anim(FocusedAnim::Interp(si1).merge(f1.merge(f2) ) , a1)
             }
-            (Animation::Interp(p), Animation::Select(sa)) => {
+            (Animation::Focused(f1), Animation::Select(sa, f2)) => {
                 let (a2, si2) = sa.select_internal();
-                wrap_anim(p.merge(si2), a2)
+                wrap_anim(f1.merge(f2).merge(FocusedAnim::Interp(si2) ), a2)
             },
             (_, other) => other,
         }
@@ -256,13 +304,13 @@ impl<Value: HasInterp> Animation<Value> {
 }
 
 #[derive(Debug)]
-struct MapInterp<Value: HasInterp, Key: Hash + Eq> {
+pub struct MapInterp<Value: HasInterp, Key: Hash + Eq> {
     to_prime: Vec<(Key, Value)>,
     interps: Vec<(Key, Animation<Value>)>,
 }
 
 impl <Value: HasInterp, Key: Hash + Eq + Clone> MapInterp<Value, Key>{
-    fn for_key(&mut self, key: &Key)->&mut Animation<Value>{
+    pub fn for_key(&mut self, key: &Key) ->&mut Animation<Value>{
         let idx = self.interps.iter().position(|(k, v)| *k == *key).unwrap_or_else(|| {
             let idx = self.interps.len();
             self.interps.push((key.clone(), Default::default()));
@@ -290,7 +338,7 @@ impl<Value: HasInterp + EnterExit, Key: Eq + Hash + Clone + Debug> HasInterp
     type Interp = MapInterp<Value, Key>;
 }
 
-trait EnterExit {
+pub trait EnterExit {
     fn enter(&self) -> Self;
     fn exit(&self) -> Self;
 }
@@ -385,16 +433,16 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
         for (k, v) in matched_marks.into_iter() {
             match v {
                 (Some(o), Some(n)) => {
-                    interps.push((k, Value::Interp::build(o.clone(), n).pod()));
+                    interps.push((k, o.clone().tween( n)));
                 }
                 (None, Some(n)) => {
                     let e = n.enter();
-                    interps.push((k.clone(), Value::Interp::build(e.clone(), n).pod()));
+                    interps.push((k.clone(), e.clone().tween(n)));
                     to_prime.push((k, e));
                 }
                 (Some(o), None) => {
                     let e = o.exit();
-                    interps.push((k, Value::Interp::build(o.clone(), e).pod()));
+                    interps.push((k, o.clone().tween(e)));
                 }
                 _ => (),
             }
@@ -405,7 +453,7 @@ impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
 }
 
 #[derive(Debug, Default)]
-struct F64Interp {
+pub struct F64Interp {
     start: f64,
     end: f64,
 }
@@ -454,7 +502,7 @@ impl Interp for F64Interp {
 }
 
 #[derive(Debug, Default)]
-struct PointInterp {
+pub struct PointInterp {
     x: Animation<f64>,
     y: Animation<f64>,
 }
@@ -503,7 +551,7 @@ impl Interp for PointInterp {
 }
 
 #[derive(Debug, Default)]
-struct StringInterp {
+pub struct StringInterp {
     prefix: String,
     remove: String,
     add: String,
@@ -580,7 +628,7 @@ impl Interp for StringInterp {
 }
 
 #[derive(Debug, Default)]
-struct TextMarkInterp {
+pub struct TextMarkInterp {
     txt: Animation<String>,
     size: Animation<f64>,
     point: Animation<Point>,
@@ -642,7 +690,7 @@ impl Interp for TextMarkInterp {
 }
 
 #[derive(Debug)]
-enum MarkShapeInterp {
+pub enum MarkShapeInterp {
     Rect(Animation<Point>, Animation<Point>),
     Line(Animation<Point>, Animation<Point>),
     Text(Animation<TextMark>),
@@ -762,7 +810,7 @@ impl Interp for MarkShapeInterp {
 }
 
 #[derive(Debug)]
-enum ColorInterp {
+pub enum ColorInterp {
     Rgba(Animation<f64>, Animation<f64>, Animation<f64>, Animation<f64>),
     Noop
 }
@@ -837,18 +885,108 @@ impl Interp for ColorInterp {
         let (r2, g2, b2, a2) = new.as_rgba();
 
         ColorInterp::Rgba(
-            F64Interp::build(r, r2).pod(),
-            F64Interp::build(g, g2).pod(),
-            F64Interp::build(b, b2).pod(),
-            F64Interp::build(a, a2).pod(),
+            F64Interp::build(r, r2).animation(),
+            F64Interp::build(g, g2).animation(),
+            F64Interp::build(b, b2).animation(),
+            F64Interp::build(a, a2).animation(),
         )
     }
 }
 
 #[derive(Debug, Default)]
-struct MarkInterp {
+pub struct MarkInterp {
     shape: Animation<MarkShape>,
-    color: Animation<Color>,
+    current: Animation<MarkProps>,
+}
+
+#[derive(Debug, Data, Clone)]
+pub struct MarkOverrides{
+    color: Option<Color>
+}
+
+impl MarkOverrides {
+    pub fn new(color: impl Into<Option<Color>>) -> Self {
+        MarkOverrides { color: color.into() }
+    }
+}
+
+impl MarkOverrides{
+    fn apply(&self, props: &mut MarkProps){
+        if let Some(col) = &self.color {
+           props.color = col.clone();
+        }
+    }
+}
+
+#[derive(Debug, Data, Clone)]
+pub struct MarkProps {
+    color: Color
+}
+
+impl MarkProps {
+    pub fn new(color: Color) -> Self {
+        MarkProps { color }
+    }
+}
+
+impl Default for MarkProps{
+    fn default() -> Self {
+        MarkProps{
+            color: Color::BLACK.with_alpha(0.)
+        }
+    }
+}
+
+impl HasInterp for MarkProps{
+    type Interp = MarkPropsInterp;
+}
+
+#[derive(Debug, Default)]
+pub struct MarkPropsInterp{
+    color: Animation<Color>
+}
+
+impl Interp for MarkPropsInterp{
+    type Value = MarkProps;
+
+    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
+        OK
+    }
+
+    fn interp(&self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult {
+        self.color.interp(frac, &mut val.color)
+    }
+
+    fn is_noop(&self) -> bool {
+        self.color.is_noop()
+    }
+
+    fn select_animation_segment(self, idx: usize) -> Self {
+        Self {
+            color: self.color.select_anim(idx)
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self{
+            color: self.color.merge(other.color)
+        }
+    }
+
+    fn build(start: Self::Value, end: Self::Value) -> Self {
+        MarkPropsInterp{
+            color: start.color.tween(end.color)
+        }
+    }
+}
+
+#[derive(Debug, Data, Clone)]
+pub struct Mark {
+    id: MarkId,
+    shape: MarkShape,
+    original: MarkProps,
+    hover: Option<MarkOverrides>,
+    current: MarkProps
 }
 
 impl HasInterp for Mark {
@@ -864,38 +1002,38 @@ impl Interp for MarkInterp {
 
     fn interp(&self, frac: &AnimationCtx, val: &mut Mark) -> InterpResult {
         self.shape.interp(frac, &mut val.shape)?;
-        self.color.interp(frac, &mut val.color)?;
+        self.current.interp(frac, &mut val.current)?;
         OK
     }
 
     fn is_noop(&self) -> bool {
-        self.shape.is_noop() && self.color.is_noop()
+        self.shape.is_noop() && self.current.is_noop()
     }
 
     fn select_animation_segment(self, idx: usize) -> Self {
-        let MarkInterp { shape, color } = self;
+        let MarkInterp { shape, current } = self;
         MarkInterp {
             shape: shape.select_anim(idx),
-            color: color.select_anim(idx),
+            current: current.select_anim(idx),
         }
     }
 
     fn merge(self, other: Self) -> Self {
-        let MarkInterp { shape, color } = self;
+        let MarkInterp { shape, current } = self;
         let MarkInterp {
             shape: s1,
-            color: c1,
+            current: c1,
         } = other;
         MarkInterp {
             shape: shape.merge(s1),
-            color: color.merge(c1),
+            current: current.merge(c1),
         }
     }
 
     fn build(old: Mark, new: Mark) -> Self {
         MarkInterp {
-            shape: MarkShapeInterp::build(old.shape, new.shape).pod(),
-            color: ColorInterp::build(old.color, new.color).pod(),
+            shape: old.shape.tween(new.shape),
+            current: old.current.tween(new.current),
         }
     }
 }
@@ -905,17 +1043,21 @@ impl EnterExit for Mark {
         let shape = match &self.shape {
             MarkShape::Rect(r) => MarkShape::Rect(Rect::from_center_size(r.center(), Size::ZERO)),
             MarkShape::Line(l) => {
-                let arr = [AnimationSegmentState::new(0.0, 0.5)];
+                let arr = [AnimationSegmentState::new(0.0, 0.5, true)];
                 let mut mid = l.p0;
                 l.p0.tween(l.p1).interp(&AnimationCtx::new(0, &arr), &mut mid);
                 MarkShape::Line(Line::new(mid, mid))
             }
             s => s.clone(),
         };
-        Mark::new(
+        let mut enter_props = self.original.clone();
+        enter_props.color = enter_props.color.with_alpha(0.);
+
+        Mark::new_with_current(
             self.id,
             shape,
-            self.color.clone().with_alpha(0.),
+            enter_props,
+        self.original.clone(),
             self.hover.clone(),
         )
     }
@@ -926,13 +1068,32 @@ impl EnterExit for Mark {
 }
 
 impl Mark {
-    pub fn new(id: MarkId, shape: MarkShape, color: Color, hover: Option<Color>) -> Self {
+    pub fn hover_props(&self)->MarkProps {
+        let mut props = self.current.clone();
+        if let Some(hv) = &self.hover {
+            hv.apply(&mut props);
+        }
+        props
+    }
+
+    pub fn new(id: MarkId, shape: MarkShape, original: MarkProps, hover: impl Into<Option<MarkOverrides>>) -> Self {
+        let current = original.clone();
         Mark {
             id,
             shape,
-            color: color.clone(),
-            original: color,
-            hover,
+            original,
+            current,
+            hover: hover.into()
+        }
+    }
+
+    pub fn new_with_current(id: MarkId, shape: MarkShape, current: MarkProps, original: MarkProps, hover: impl Into<Option<MarkOverrides>> ) -> Self {
+        Mark {
+            id,
+            shape,
+            current,
+            original,
+            hover: hover.into()
         }
     }
 
@@ -947,14 +1108,8 @@ impl Mark {
         }
     }
 
-    pub fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
-        // This should be done as some interpolation of the mark before paint? Maybe
-        // let color = if Some(self.id) == *focus {
-        //     self.hover.as_ref().unwrap_or(&self.color)
-        // } else {
-        //     &self.color
-        // };
-        let color = &self.color;
+    pub fn paint(&self, ctx: &mut PaintCtx) {
+        let color = &self.current.color;
         match &self.shape {
             MarkShape::Rect(r) => {
                 ctx.stroke(r, &Color::BLACK, 1.0);
@@ -1121,7 +1276,7 @@ pub trait Visualization {
 }
 
 #[derive(Clone, Debug, Default)]
-struct VisMarks {
+pub struct VisMarks {
     // TODO: slotmap?
     marks: HashMap<MarkId, Mark>,
 }
@@ -1133,7 +1288,7 @@ impl VisMarks {
 
     fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
         for (_, mark) in self.marks.iter().sorted_by_key(|(k, v)| k.clone()) {
-            mark.paint(ctx, focus);
+            mark.paint(ctx);
         }
     }
 
@@ -1156,8 +1311,8 @@ impl VisMarks {
 }
 
 #[derive(Debug, Default)]
-struct VisMarksInterp {
-    marks: Animation<HashMap<MarkId, Mark>>,
+pub struct VisMarksInterp {
+    pub marks: Animation<HashMap<MarkId, Mark>>,
 }
 
 impl VisMarksInterp {
@@ -1199,7 +1354,7 @@ impl Interp for VisMarksInterp {
 
     fn build(old: VisMarks, new: VisMarks) -> Self {
         Self {
-            marks: MapInterp::build(old.marks, new.marks).pod(),
+            marks: MapInterp::build(old.marks, new.marks).animation(),
         }
     }
 }
@@ -1212,7 +1367,7 @@ enum AnimationSegmentStatus{
     Done
 }
 
-enum CustomAnimationCurve {
+pub enum CustomAnimationCurve {
     Function(fn(f64) -> f64),
     Boxed(Box<dyn Fn(f64) -> f64>)
 }
@@ -1241,7 +1396,7 @@ impl Debug for CustomAnimationCurve{
 }
 
 #[derive(Debug)]
-enum AnimationCurve {
+pub enum AnimationCurve {
     Linear,
     EaseIn,
     EaseOut,
@@ -1325,18 +1480,18 @@ impl AnimationSegment {
 type AnimationSegmentId = usize;
 
 #[derive(Eq, PartialEq, Hash, Debug)]
-enum AnimationEvent{
+pub enum AnimationEvent{
     Named(&'static str),
     SegmentEnded(AnimationSegmentId)
 }
 
-#[derive(Default)]
-struct Animator<T : HasInterp> {
+#[derive(Default, Debug)]
+pub struct Animator<T : HasInterp> {
     cur_nanos: f64,
     pending_starts: HashMap<AnimationEvent, Vec<AnimationSegmentId>>,
     // slot map?
     segments: Vec<AnimationSegment>,
-    pod: Animation<T>,
+    pub animation: Animation<T>,
 }
 
 impl <T: HasInterp> Animator<T> {
@@ -1359,7 +1514,7 @@ impl <T: HasInterp> Animator<T> {
                         *stat = AnimationSegmentStatus::Done;
                         AnimationSegmentState::END
                     } else {
-                        AnimationSegmentState::new(frac, segment.curve.translate(frac).max(0.).min(1.))
+                        AnimationSegmentState::new(frac, segment.curve.translate(frac).max(0.).min(1.), true)
                     }
                 },
                 AnimationSegmentStatus::Done => AnimationSegmentState::END
@@ -1367,11 +1522,11 @@ impl <T: HasInterp> Animator<T> {
         }).collect();
 
         let frac = AnimationCtx::new(0, &fracs[..]);
-        let res = self.pod.interp(&frac, current);
+        let res = self.animation.interp(&frac, current);
         let done = self.segments.iter().all(|a| a.status == AnimationSegmentStatus::Done);
         if done {
             self.segments.clear();
-            self.pod = Animation::Noop;
+            self.animation = Default::default();
         }
         res
     }
@@ -1383,7 +1538,7 @@ impl <T: HasInterp> Animator<T> {
                 if let Some(seg) = self.segments.get_mut(id){
                     seg.status = AnimationSegmentStatus::Waiting;
                     seg.start_nanos = self.cur_nanos;
-                    log::info!("Starting pending anim {} {:?}\n {:#?}", id, seg, self.pod);
+                    log::info!("Starting pending anim {} {:?}\n {:#?}", id, seg, self.animation);
                 }
             }
         }
@@ -1417,9 +1572,8 @@ impl <T: HasInterp> Animator<T> {
         let mut interp = interp;
         interp.prime(current).and_then(|()| {
             let anim_idx = self.add_animation_segment(from_now_nanos, dur_nanos, curve, after);
-            let mut temp = Animation::Noop;
-            std::mem::swap(&mut temp, &mut self.pod);
-            self.pod = temp.merge(interp.select_anim(anim_idx));
+            let taken = std::mem::take( &mut self.animation);
+            self.animation = taken.merge(interp.select_anim(anim_idx));
             OK
         })
     }
@@ -1431,7 +1585,7 @@ struct VisInner<VP: Visualization> {
     animator: Animator<VisMarks>,
     current: VisMarks,
     transform: Affine,
-    focus: Option<MarkId>,
+    hovered: Option<MarkId>,
     phantom_vp: PhantomData<VP>,
 }
 
@@ -1443,7 +1597,7 @@ impl<VP: Visualization> VisInner<VP> {
             animator,
             current,
             transform,
-            focus: None,
+            hovered: None,
             phantom_vp: Default::default(),
         }
     }
@@ -1470,7 +1624,7 @@ impl<V: Visualization> Vis<V> {
             let state: V::State = Default::default();
 
             let layout = self.visual.layout(data, size);
-            let state_marks = self.visual.state_marks(data, &layout, &state);
+            let state_marks =  Default::default(); //self.visual.state_marks(data, &layout, &state);
             let data_marks = self.visual.data_marks(data, &layout);
             let layout_marks = self.visual.layout_marks(&layout);
 
@@ -1488,17 +1642,17 @@ impl<V: Visualization> Vis<V> {
         self.inner.as_mut().unwrap()
     }
 
-    fn start_transition(&mut self, size: Size, data: &V::Input) {
+    fn regenerate(&mut self, size: Size, data: &V::Input) {
         if let Some(inner) = &mut self.inner {
             inner.layout = self.visual.layout(data, size);
 
             let destination = VisMarks::build(
                 self.visual.layout_marks(&inner.layout),
-                self.visual.state_marks(data, &inner.layout, &inner.state),
+                 Default::default(), //self.visual.state_marks(data, &inner.layout, &inner.state),
                 self.visual.data_marks(data, &inner.layout),
             );
 
-            let interp = VisMarksInterp::build(inner.current.clone(), destination).pod();
+            let interp = inner.current.clone().tween(destination);
             inner.animator.add_animation(interp, 0, 250 * 1_000_000, AnimationCurve::EaseInOut, None, &mut inner.current);
         };
     }
@@ -1518,29 +1672,31 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         match event {
             Event::MouseMove(me) => {
                 if let Some(mark) = current.find_mark(inner.transform.inverse() * me.pos) {
-                    if inner.focus != Some(mark.id) {
+                    if inner.hovered != Some(mark.id) {
                         self.visual.event(
                             data,
                             &inner.layout,
                             &mut inner.state,
                             &VisEvent::MouseEnter(mark.id),
                         );
-                        inner.focus = Some(mark.id);
+                        inner.hovered = Some(mark.id);
 
-
-                        if let Some(hover) = &mark.hover {
-                            let hover_idx = animator.add_animation_segment(0, 250 * 1_000_000, AnimationCurve::EaseIn, None);
-                            let color_change = mark.color.clone().tween(hover.clone()).select_anim(hover_idx);
+                        if mark.hover.is_some() {
+                            let hover_idx = animator.add_animation_segment(0, 1250 * 1_000_000, AnimationCurve::Linear, None);
+                            let hover_props = mark.hover_props();
+                            let color_change = mark.current.clone().tween(hover_props.clone()).select_anim(hover_idx);
 
                             let unhover_idx = animator.add_animation_segment( 0, 2500 * 1_000_000, AnimationCurve::EaseOut,  Some(Self::UNHOVER));
-                            let change_back = hover.clone().tween(mark.original.clone()).select_anim(unhover_idx);
+                            let change_back = hover_props.tween(mark.original.clone()).select_anim(unhover_idx);
 
-                            animator.pod.first().marks.first().for_key(&mark.id).first().color = color_change.merge(change_back);
+                            let animation = color_change.merge(change_back);
+                            log::info!("Anim {:#?} {:#?}", animation, animator);
 
+                            animator.animation.first().marks.first().for_key(&mark.id).first().current = animation;
                         }
                     }
                 } else {
-                    match &mut inner.focus {
+                    match &mut inner.hovered {
                         Some(focus) => {
                             self.visual.event(
                                 data,
@@ -1552,8 +1708,8 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         }
                         None => {}
                     }
-                    if inner.focus.is_some() {
-                        inner.focus = None;
+                    if inner.hovered.is_some() {
+                        inner.hovered = None;
                     }
                 }
 
@@ -1561,14 +1717,21 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
             _ => {}
         }
 
+        if !old_state.same(&inner.state){
+            self.visual.state_marks(data, &inner.layout, &inner.state)
+                .into_iter()
+                .for_each(|x|{
+                    let anim_idx = animator.add_animation_segment(0, 3000 * 1_000_000, AnimationCurve::OutElastic, None);
+                    let id = x.id;
+                    let start = current.marks.entry(id).or_insert( x.enter() );
+                    *animator.animation.first().marks.first().for_key( &id ) = start.clone().tween(x).select_anim(anim_idx);
+                })
+        }
+
         if inner.animator.running(){
             ctx.request_anim_frame()
         }
 
-       // if !old_state.same(&inner.state) {
-         //   self.start_transition(ctx.size(), data);
-        //    ctx.request_anim_frame();
-        //}
     }
 
     fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &V::Input, env: &Env) {
@@ -1589,7 +1752,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, env: &Env) {
         if !data.same(old_data) {
-            self.start_transition(ctx.size(), data);
+            self.regenerate(ctx.size(), data);
             ctx.request_anim_frame();
         }
     }
@@ -1611,7 +1774,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         let state = self.ensure_inner(data, size);
         ctx.with_save(|ctx| {
             ctx.transform(state.transform);
-            state.current.paint(ctx, &state.focus);
+            state.current.paint(ctx, &state.hovered);
         });
     }
 }
@@ -1728,7 +1891,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
         marks.push(Mark::new(
             MarkId::AxisDomain(self.name),
             MarkShape::Line(Line::new((self.range.0, line_y), (self.range.1, line_y))),
-            Color::WHITE,
+            MarkProps::new(Color::WHITE),
             None,
         ));
         for (v, p_id) in self.bands.iter() {
@@ -1737,7 +1900,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
             marks.push(Mark::new(
                 MarkId::Tick(self.name, tick_loc),
                 MarkShape::Line(Line::new((b_mid, tick_extent), (b_mid, line_y))),
-                Color::WHITE,
+                MarkProps::new(Color::WHITE),
                 None,
             ));
             marks.push(Mark::new(
@@ -1748,7 +1911,7 @@ impl<T: Clone + Ord + Hash + Display> BandScale<T> {
                     12.0,
                     Point::new(b_mid, label_top),
                 )),
-                Color::WHITE,
+                MarkProps::new(Color::WHITE),
                 None,
             ));
         }
@@ -1906,7 +2069,7 @@ impl<T: LinearValue> LinearScale<T> {
         marks.push(Mark::new(
             MarkId::AxisDomain(self.name),
             MarkShape::Line(Line::new((line_x, self.range.0), (line_x, self.range.1))),
-            Color::WHITE,
+            MarkProps::new( Color::WHITE),
             None,
         ));
 
@@ -1918,7 +2081,7 @@ impl<T: LinearValue> LinearScale<T> {
             marks.push(Mark::new(
                 MarkId::Tick(self.name, TickLocator::U64Bits(d_v.to_bits())),
                 MarkShape::Line(Line::new((tick_extent, r_v), (line_x, r_v))),
-                Color::WHITE,
+                MarkProps::new(Color::WHITE),
                 None,
             ));
             marks.push(Mark::new(
@@ -1929,7 +2092,7 @@ impl<T: LinearValue> LinearScale<T> {
                     12.0,
                     Point::new(label_x - 5.0, r_v + 8.0),
                 )),
-                Color::WHITE,
+                MarkProps::new(Color::WHITE),
                 None,
             ));
         }
