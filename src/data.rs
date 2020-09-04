@@ -218,7 +218,7 @@ impl RemapSpec {
                 .map(LogIdx)
                 .collect();
             let mut s_placements: Vec<_> = self.placements.iter().collect();
-            s_placements.sort_by_key(|(l, (v, o))| Reverse(*o));
+            s_placements.sort_by_key(|(_, (_, o))| Reverse(*o));
             let mut placed_by_vis: HashMap<VisIdx, LogIdx> = HashMap::new();
 
             for (log, (vis, _)) in s_placements {

@@ -90,9 +90,9 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn stop_editing<TableData: IndexedItems<Item = RowData>>(&mut self, data: &mut TableData) {
+    fn stop_editing<TableData: IndexedItems<Item = RowData>>(&mut self, _data: &mut TableData) {
         match self {
-            Editing::Cell { single_cell, child } => {
+            Editing::Cell { .. } => {
                 // Work out what to do with the previous pod if there is one.
                 // We could have lazy editors (that don't write back to data immediately) and send them a special command saying 'you are being shut down'.
                 // Would need to give them data for their row
@@ -343,7 +343,7 @@ where
                         new_selection = data.selection.move_extent(cell.into());
                     }
                 }
-                Event::MouseUp(me) if self.dragging_selection => {
+                Event::MouseUp(_) if self.dragging_selection => {
                     self.dragging_selection = false;
                     ctx.set_active(false);
                 }

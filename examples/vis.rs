@@ -1,9 +1,13 @@
 use druid::kurbo::{Point, Rect, Size};
 use druid::widget::{Button, Flex};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
-use druid_table::{AxisName, MarkOverrides, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark, MarkId, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis, VisEvent, Visualization, MarkProps, Animator, VisMarks};
+use druid_table::{
+    AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx,
+    Mark, MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, StateName, TextMark,
+    Vis, VisEvent, Visualization,
+};
 use im::Vector;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 #[macro_use]
 extern crate im;
@@ -159,7 +163,7 @@ impl Visualization for MyBarChart {
         &self,
         _data: &Self::Input,
         (x, y): &Self::Layout,
-        tooltip_item: &Option<CatCount>
+        tooltip_item: &Option<CatCount>,
     ) -> Vec<Mark> {
         let mut marks = Vec::new();
         if let Some(tt) = tooltip_item {

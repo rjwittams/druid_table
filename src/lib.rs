@@ -1,6 +1,7 @@
 #[macro_use]
 mod macros;
 
+mod animation;
 mod axis_measure;
 mod builder;
 mod cells;
@@ -28,10 +29,12 @@ pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};
 pub use vis::{
-    Animator, AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, Mark,
-    MarkId, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis, VisEvent, Visualization,
-    MarkProps, MarkOverrides, VisMarks, VisMarksInterp
+    AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, Mark,
+    MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis,
+    VisEvent, VisMarks, VisMarksInterp, Visualization,
 };
+
+pub use animation::Animator;
 
 #[macro_use]
 extern crate druid;
