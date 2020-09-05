@@ -6,7 +6,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::num::NonZeroU32;
-use std::ops::{Add, Deref, Index, IndexMut};
+use std::ops::{Add};
 use std::time::Duration;
 use InterpError::*;
 use itertools::Itertools;
@@ -113,7 +113,7 @@ impl Add for InterpCoverage {
     }
 }
 
-pub trait Interp: Default + Sized + Debug {
+pub trait Interp: Default + Debug {
     type Value: HasInterp<Interp = Self>;
 
     fn prime(&mut self, val: &mut Self::Value) -> InterpResult;
@@ -159,59 +159,54 @@ pub trait HasInterp: Clone + Debug {
 }
 
 #[derive(Debug)]
-pub enum SelectAnim<Value: HasInterp> {
-    Single(AnimationSegmentId, Value::Interp),
-    Many(Vec<(AnimationSegmentId, Value::Interp)>),
+pub struct SelectAnim<Value: HasInterp> {
+    by_id: Vec<(AnimationSegmentId, Value::Interp)>
 }
 
 impl<Value: HasInterp> SelectAnim<Value> {
-    fn prime(&mut self, val: &mut Value) -> InterpResult {
-        match self {
-            SelectAnim::Single(_, interp) => interp.prime(val),
-            SelectAnim::Many(sels) => sels
-                .iter_mut()
-                .fold(OK, |r, (_, interp)| r.and_then(|_| interp.prime(val))), // TODO do this based on status
+    #[cfg(test)]
+    fn by_id(&self)->&Vec<(AnimationSegmentId, Value::Interp)>{
+        &self.by_id
+    }
+
+    fn one(id: AnimationSegmentId, interp: Value::Interp)->SelectAnim<Value>{
+        SelectAnim{
+            by_id: vec![(id, interp)]
         }
+    }
+
+    fn with(mut self, id: AnimationSegmentId, interp: Value::Interp)->SelectAnim<Value>{
+        self.by_id.push( (id, interp) );
+        self
+    }
+
+    fn prime(&mut self, val: &mut Value) -> InterpResult {
+         self.by_id.iter_mut().fold(OK, |r, (_, interp)| r.and_then(|_| interp.prime(val)))
+        // TODO do this based on status
     }
 
     fn interp(&self, ctx: &AnimationCtx, val: &mut Value) -> InterpResult {
         let name = std::any::type_name::<Value>();
-        match self {
-            SelectAnim::Single(cur_idx, interp) => ctx
-                .with_segment(*cur_idx, |ctx| interp.interp(ctx, val), name)
-                .unwrap_or(OK),
-            SelectAnim::Many(selects) => {
-                for (idx, interp) in selects {
-                    ctx.with_segment(*idx, |ctx| interp.interp(ctx, val), name)
-                        .unwrap_or(OK)?; // TODO combine errors
-                }
-                OK
-            }
+        for (idx, interp) in &self.by_id {
+            ctx.with_segment(*idx, |ctx| interp.interp(ctx, val), name)
+                .unwrap_or(OK)?; // TODO combine errors
         }
+        OK
     }
 
     fn append(self, other: Self) -> Self {
-        let mut vec = self.vec();
-        vec.append(&mut other.vec());
-        SelectAnim::Many(vec)
-    }
-
-    fn vec(self) -> Vec<(AnimationSegmentId, Value::Interp)> {
-        match self {
-            SelectAnim::Single(ai, interp) => vec![(ai, interp)],
-            SelectAnim::Many(vec) => vec,
+        let mut by_id = self.by_id;
+        let mut other_ids = other.by_id;
+        by_id.append(&mut other_ids);
+        SelectAnim{
+            by_id
         }
     }
 
     fn select_internal(self) -> (Option<AnimationSegmentId>, Value::Interp) {
-        match self {
-            SelectAnim::Single(ai, interp) => (Some(ai), interp.select_animation_segment(ai)),
-            SelectAnim::Many(vec) => vec
-                .into_iter()
-                .fold((None, Value::Interp::default()), |(_, cur), (ai, item)| {
-                    (Some(ai), cur.select_animation_segment(ai).merge(item))
-                }),
-        }
+        self.by_id.into_iter().fold((None, Value::Interp::default()), |(_, cur), (ai, item)| {
+            (Some(ai), cur.merge(item.select_animation_segment(ai)))
+        })
     }
 }
 
@@ -234,19 +229,16 @@ impl<T: HasInterp, F: Fn(f64) -> T> From<F> for BasicInterp<T, F> {
     }
 }
 
+#[derive(Debug)]
 pub enum FocusedAnim<Value: HasInterp> {
     Noop,
     Interp(Value::Interp),
     Custom(Box<dyn CustomInterp<Value>>),
 }
 
-impl<Value: HasInterp> Debug for FocusedAnim<Value> {
+impl <Value: HasInterp> Debug for Box<dyn CustomInterp<Value>>{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            FocusedAnim::Noop => f.debug_struct("Noop").finish(),
-            FocusedAnim::Interp(i) => f.debug_tuple("Interp").field(i).finish(),
-            FocusedAnim::Custom(_) => f.debug_struct("Custom").finish(),
-        }
+        f.write_str("custom interp")
     }
 }
 
@@ -367,30 +359,32 @@ impl<Value: HasInterp> Animation<Value> {
     pub fn select_anim(self, id: AnimationSegmentId) -> Self {
         match self {
             Animation::Focused(FocusedAnim::Interp(interp)) => {
-                Animation::Select(SelectAnim::Single(id, interp), Default::default())
+                Animation::Select(SelectAnim::one(id, interp), Default::default())
             }
-            Animation::Select(sa, FocusedAnim::Interp(interp)) => Animation::Select(
-                sa.append(SelectAnim::Single(id, interp)),
+            Animation::Select(sa, FocusedAnim::Interp(interp)) => {
+                Animation::Select(
+                    sa.with(id, interp),
                 Default::default(),
-            ),
-            s => s,
+            )},
+            s => s
         }
     }
 
     // TODO: fallible merge
     pub fn merge(self, other: Animation<Value>) -> Self {
+        let mut start = format!("merging\n\t A:{:?}\n\t B:{:?}\n\t", self, other);
         fn wrap_anim<V: HasInterp>(
             f: FocusedAnim<V>,
             idx: Option<AnimationSegmentId>,
         ) -> Animation<V> {
             match (f, idx) {
                 (FocusedAnim::Interp(interp), Some(id)) if V::Interp::is_leaf() => {
-                    Animation::Select(SelectAnim::Single(id, interp), FocusedAnim::Noop)
+                    Animation::Select(SelectAnim::one(id, interp), FocusedAnim::Noop)
                 }
                 (f, _) => Animation::Focused(f),
             }
         }
-        match (self, other) {
+        let ret = match (self, other) {
             (Animation::Focused(FocusedAnim::Noop), other) => other,
             (other, Animation::Focused(FocusedAnim::Noop)) => other,
             (
@@ -406,7 +400,8 @@ impl<Value: HasInterp> Animation<Value> {
                 Animation::Select(sa1.append(sa2), f1.merge(f2))
             }
             (Animation::Select(sa, f1), Animation::Focused(f2)) => {
-                let (a1, si1) = sa.select_internal() ;
+                let (a1, si1) = sa.select_internal();
+                start += &format!(" SA: {:?}\n\t", si1);
                 wrap_anim(FocusedAnim::Interp(si1).merge(f1.merge(f2)), a1)
             }
             (Animation::Focused(f1), Animation::Select(sa, f2)) => {
@@ -414,7 +409,9 @@ impl<Value: HasInterp> Animation<Value> {
                 wrap_anim(f1.merge(f2).merge(FocusedAnim::Interp(si2)), a2)
             }
             (_, other) => other,
-        }
+        };
+        log::info!("{} R:{:?}", start, ret);
+        ret
     }
 }
 
@@ -454,7 +451,7 @@ impl<Value: HasInterp, Key: Hash + Eq> MapInterp<Value, Key> {
     }
 }
 
-impl<Value: HasInterp + EnterExit, Key: Eq + Hash + Clone + Debug> HasInterp
+impl<Value: HasInterp + EnterExit + Debug, Key: Eq + Hash + Clone + Debug> HasInterp
     for HashMap<Key, Value>
 {
     type Interp = MapInterp<Value, Key>;
@@ -465,7 +462,7 @@ pub trait EnterExit {
     fn exit(&self) -> Self;
 }
 
-impl<Value: HasInterp + EnterExit, Key: Debug + Hash + Eq + Clone> Interp
+impl<Value: HasInterp + EnterExit + Debug, Key: Debug + Hash + Eq + Clone> Interp
     for MapInterp<Value, Key>
 {
     type Value = HashMap<Key, Value>;
@@ -1643,7 +1640,6 @@ mod test {
     use crate::animation::Animation::*;
     use crate::animation::AnimationEvent::*;
     use crate::animation::FocusedAnim::*;
-    use crate::animation::SelectAnim::*;
     use std::mem::size_of;
     use crate::VisMarks;
 
@@ -1731,6 +1727,8 @@ mod test {
 
     #[test]
     fn test_merge_selected_disjoint() {
+
+
         let mut animator: Animator<Line> = Default::default();
         let mut root_0: Animation<Line> = Default::default();
 
@@ -1751,17 +1749,19 @@ mod test {
             Focused(Interp(LineInterp {
                 p0:
                     Focused(Interp(PointInterp {
-                        x: Select(Single(ai_0_ex, _), _),
-                        y: Select(Single(ai_1_ex, _), _),
+                        x: Select(sel_x, _),
+                        y: Select(sel_y, _),
                     })),
                 p1: Focused(Noop),
-            })) if ai_0_ex == ai_0 && ai_1_ex == ai_1 => {}
+            })) if sel_x.by_id()[0].0  == ai_0 && sel_y.by_id()[0].0 == ai_1 => {}
             ex => panic!("{:?}", ex),
         }
     }
 
     #[test]
     fn test_merge_selected_overlap() {
+        simple_logger::init();
+        log::info!("test log");
         let mut animator: Animator<Line> = Default::default();
 
         let ai_0 = animator.segment().duration(Duration::from_nanos(100)).id;
@@ -1780,21 +1780,26 @@ mod test {
         root_1.get().p0.get().x = 100.0.tween(200.0).select_anim(ai_1);
 
         let merged = root_0.merge(root_1);
+        let str = format!("{:#?}", merged);
 
-        match merged {
+        if !(match merged {
             Focused(Interp(LineInterp {
                 p0:
                     Focused(Interp(PointInterp {
-                        x: Select(Many(vec), Noop),
+                        x: Select(sa, Noop),
                         y: Focused(Noop),
                     })),
                 p1: Focused(Noop),
-            })) => match &*vec {
-                [(ai_0_ex, _), (ai_1_ex, _)] if *ai_0_ex == ai_0 && *ai_1_ex == ai_1 => (),
-                ex => panic!("{:#?}", ex),
+            })) => match sa.by_id()[..] {
+                [(ai_0_ex, _), (ai_1_ex, _)] if ai_0_ex == ai_0 && ai_1_ex == ai_1 => true,
+                _ => false,
             },
-            ex => panic!("{:#?}", ex),
+            ex =>false
+        }){
+            panic!("{}", str)
         }
+
+
     }
 
     //#[test]
@@ -1817,7 +1822,7 @@ mod test {
             Focused(Interp(LineInterp {
                                p0:
                                Focused(Interp(PointInterp {
-                                                  x: Select(Many(vec), Noop),
+                                                  x: Select(sa, Noop),
                                                   y: Focused(Noop),
                                               })),
                                p1: Focused(Noop),
@@ -1835,7 +1840,7 @@ mod test {
             Focused(Interp(LineInterp {
                                p0:
                                Focused(Interp(PointInterp {
-                                                  x: Select(Many(vec), Noop),
+                                                  x: Select(sa, Noop),
                                                   y: Focused(Noop),
                                               })),
                                p1: Focused(Noop),
@@ -1843,6 +1848,28 @@ mod test {
             ex => panic!("{:#?}", ex),
         }
 
+    }
+
+    #[test]
+    fn test_select_internal(){
+        let mut p1: Animation<Point> = Default::default();
+        p1.get().x = 1.0.tween(6.7);
+        let id = AnimationSegmentId::new(900, NonZeroU32::new(6534).unwrap());
+        let p_sel = p1.select_anim(id) ;
+        let (s, res) = match p_sel{
+            Select(sa, _) => sa.select_internal(),
+            _=>panic!()
+        };
+
+        let matched = match res {
+            PointInterp{x: Select( ids, Noop ), y: Focused(Noop)} => {
+                match &ids.by_id[..]{
+                    [(found_id, F64Interp{start: 1.0, end: 6.7})] => true,
+                    _=>false
+                }
+            },
+            _=>false
+        };
     }
 
     // Curves
