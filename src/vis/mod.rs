@@ -14,6 +14,7 @@ use std::f64::NAN;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct TextMarkInterp {
@@ -718,7 +719,11 @@ impl<V: Visualization> Vis<V> {
         self.inner.as_mut().unwrap()
     }
 
-    fn regenerate(&mut self, size: Size, data: &V::Input) -> InterpResult {
+    fn regenerate(
+        &mut self,
+        size: Size,
+        data: &V::Input,
+    ) -> Result<AnimationSegmentId, InterpError> {
         if let Some(inner) = &mut self.inner {
             inner.layout = self.visual.layout(data, size);
 
@@ -729,16 +734,17 @@ impl<V: Visualization> Vis<V> {
             );
 
             let interp = inner.current.clone().tween(destination);
-            inner.animator.add_animation(
-                interp,
-                0,
-                250 * 1_000_000,
-                AnimationCurve::Linear,
-                None,
-                &mut inner.current,
-            )
+            let id = inner.animator
+                .segment()
+                .duration(Duration::from_millis(1000) )
+                .curve(AnimationCurve::EaseIn)
+                .id();
+
+            let selected = interp.select_anim(id);
+
+            inner.animator.merge_animation(selected, &mut inner.current).map(|_|id)
         } else {
-            OK
+            Err(InterpError::NotRunning)
         }
     }
 }
@@ -789,39 +795,33 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         *hovered = Some(mark.id);
 
                         if mark.hover.is_some() {
-                            let hover_idx = animator.add_animation_segment(
-                                0,
-                                1250 * 1_000_000,
-                                AnimationCurve::Linear,
-                                None,
-                            );
+                            let hover_idx = animator
+                                .segment()
+                                .duration(Duration::from_millis(1250))
+                                .id();
                             let hover_props = mark.hover_props();
-                            let color_change = mark
-                                .current
-                                .clone()
-                                .tween(hover_props.clone())
-                                .select_anim(hover_idx);
+                            let color_change =
+                                mark.current.tween_ref(&hover_props).select_anim(hover_idx);
 
-                            let unhover_idx = animator.add_animation_segment(
-                                0,
-                                2500 * 1_000_000,
-                                AnimationCurve::EaseOut,
-                                Some(Self::UNHOVER),
-                            );
+                            let unhover_idx = animator
+                                .segment()
+                                .duration(Duration::from_millis(2500))
+                                .curve(AnimationCurve::EaseOut)
+                                .after(Self::UNHOVER)
+                                .id();
+
                             let change_back = hover_props
-                                .tween(mark.original.clone())
+                                .tween_ref(&mark.original)
                                 .select_anim(unhover_idx);
 
-                            let animation = color_change.merge(change_back);
+                            let mut top_level = Animation::<VisMarks>::default();
+                            top_level.get().marks.get().get(&mark.id).get().current =
+                                color_change.merge(change_back);
 
-                            animator
-                                .animation
-                                .get()
-                                .marks
-                                .get()
-                                .get(&mark.id)
-                                .get()
-                                .current = animation;
+
+
+                            animator.merge_animation(top_level, current);
+                            //log::info!( "Animator after hover {:#?}", animator);
                         }
                     }
                 } else {
@@ -835,17 +835,16 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
             visual
                 .state_marks(data, &inner.layout, &inner.state)
                 .into_iter()
-                .for_each(|x| {
-                    let anim_idx = animator.add_animation_segment(
-                        0,
-                        3000 * 1_000_000,
-                        AnimationCurve::OutElastic,
-                        None,
-                    );
-                    let id = x.id;
-                    let start = current.marks.entry(id).or_insert(x.enter());
+                .for_each(|mark| {
+                    let anim_idx = animator
+                        .segment()
+                        .duration(Duration::from_secs(3))
+                        .curve(AnimationCurve::OutElastic)
+                        .id();
+                    let id = mark.id;
+                    let start = current.marks.entry(id).or_insert(mark.enter());
                     *animator.animation.get().marks.get().get(&id) =
-                        start.clone().tween(x).select_anim(anim_idx);
+                         start.clone().tween(mark).select_anim(anim_idx);
                 })
         }
 

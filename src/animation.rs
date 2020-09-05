@@ -1,5 +1,3 @@
-use crate::animation::Animation::Focused;
-use crate::animation::AnimationSegmentStatus::Ready;
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::piet::Color;
 use std::cell::Cell;
@@ -9,23 +7,17 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::num::NonZeroU32;
 use std::ops::{Add, Deref, Index, IndexMut};
+use std::time::Duration;
 use InterpError::*;
+use itertools::Itertools;
+use crate::animation::Animation::Focused;
+use druid::im::Vector;
+
 
 pub struct AnimationCtxInner<'a> {
     focus: Option<AnimationSegmentId>,
     segments: &'a AnimationSegments,
-}
-
-impl<'a> AnimationCtxInner<'a> {
-    fn new(focus: Option<AnimationSegmentId>, segments: &AnimationSegments) -> AnimationCtxInner {
-        match focus {
-            Some(current_segment) if !segments.contains(current_segment) => panic!(
-                "animation segment out of range {:?} {:?}",
-                current_segment, segments
-            ),
-            _ => AnimationCtxInner { focus, segments },
-        }
-    }
+    names: Vector<&'static str>
 }
 
 pub enum AnimationCtx<'a> {
@@ -34,13 +26,19 @@ pub enum AnimationCtx<'a> {
 }
 
 impl AnimationCtx<'_> {
-    fn full(focus: Option<AnimationSegmentId>, segments: &AnimationSegments) -> AnimationCtx {
-        AnimationCtx::Full(AnimationCtxInner::new(focus, segments))
+    fn new<'a>(focus: Option<AnimationSegmentId>, segments: &'a AnimationSegments, names: Vector<&'static str>) -> AnimationCtx<'a> {
+        match focus {
+            Some(current_segment) if !segments.contains(current_segment) => panic!(
+                "animation segment out of range {:?} {:?}",
+                current_segment, segments
+            ),
+            _ => AnimationCtx::Full(AnimationCtxInner { focus, segments, names })
+        }
     }
 
     fn on_focused_segment(&self) -> f64 {
         match self {
-            AnimationCtx::Full(AnimationCtxInner { focus, segments }) => focus
+            AnimationCtx::Full(AnimationCtxInner { focus, segments, .. }) => focus
                 .and_then(|focus| segments.get(focus))
                 .map_or(0., |seg| seg.translated),
             AnimationCtx::Immediate(eased) => *eased,
@@ -48,12 +46,18 @@ impl AnimationCtx<'_> {
     }
 
     pub fn current(&self) -> f64 {
-        match self {
-            AnimationCtx::Full(AnimationCtxInner { focus, segments }) => focus
-                .and_then(|focus| segments.get(focus))
-                .map_or(0., |seg| seg.translated),
+        let cur = match self {
+            AnimationCtx::Full(AnimationCtxInner { focus, segments, names }) => {
+
+                let cur = focus
+                    .and_then(|focus| segments.get(focus))
+                    .map_or(0., |seg| seg.translated);
+                //log::info!("[{}] Current accessed: {:?}", names.iter().join(" / "), (focus, focus.and_then(|focus| segments.get(focus))));
+                cur
+            }
             AnimationCtx::Immediate(eased) => *eased,
-        }
+        };
+        cur
     }
 
     pub fn clamped(&self) -> f64 {
@@ -64,12 +68,15 @@ impl AnimationCtx<'_> {
         &self,
         idx: AnimationSegmentId,
         mut f: impl FnMut(&AnimationCtx) -> V,
+        name: &'static str
     ) -> Option<V> {
         match self {
-            AnimationCtx::Full(AnimationCtxInner { segments, .. })
+            AnimationCtx::Full(AnimationCtxInner { segments, names, .. })
                 if segments.get(idx).map_or(false, |s| s.status.is_active()) =>
             {
-                Some(f(&Self::full(Some(idx), segments)))
+                let mut new_names = names.clone();
+                new_names.push_back(name);
+                Some(f(&Self::new(Some(idx), segments, new_names)))
             }
             _ => None,
         }
@@ -135,6 +142,11 @@ pub trait Interp: Default + Sized + Debug {
 
 pub trait HasInterp: Clone + Debug {
     type Interp: Interp<Value = Self>;
+
+    fn tween_ref(&self, other: &Self) -> Animation<Self> {
+        self.clone().tween(other.clone())
+    }
+
     fn tween(self, other: Self) -> Animation<Self> {
         Self::Interp::build(self, other).animation()
     }
@@ -163,13 +175,14 @@ impl<Value: HasInterp> SelectAnim<Value> {
     }
 
     fn interp(&self, ctx: &AnimationCtx, val: &mut Value) -> InterpResult {
+        let name = std::any::type_name::<Value>();
         match self {
             SelectAnim::Single(cur_idx, interp) => ctx
-                .with_segment(*cur_idx, |ctx| interp.interp(ctx, val))
+                .with_segment(*cur_idx, |ctx| interp.interp(ctx, val), name)
                 .unwrap_or(OK),
             SelectAnim::Many(selects) => {
                 for (idx, interp) in selects {
-                    ctx.with_segment(*idx, |ctx| interp.interp(ctx, val))
+                    ctx.with_segment(*idx, |ctx| interp.interp(ctx, val), name)
                         .unwrap_or(OK)?; // TODO combine errors
                 }
                 OK
@@ -196,7 +209,7 @@ impl<Value: HasInterp> SelectAnim<Value> {
             SelectAnim::Many(vec) => vec
                 .into_iter()
                 .fold((None, Value::Interp::default()), |(_, cur), (ai, item)| {
-                    (Some(ai), cur.merge(item))
+                    (Some(ai), cur.select_animation_segment(ai).merge(item))
                 }),
         }
     }
@@ -290,6 +303,8 @@ impl<Value: HasInterp> FocusedAnim<Value> {
     }
 }
 
+
+
 #[derive(Debug)]
 pub enum Animation<Value: HasInterp> {
     Focused(FocusedAnim<Value>),
@@ -349,13 +364,13 @@ impl<Value: HasInterp> Animation<Value> {
         }
     }
 
-    pub fn select_anim(self, idx: AnimationSegmentId) -> Self {
+    pub fn select_anim(self, id: AnimationSegmentId) -> Self {
         match self {
             Animation::Focused(FocusedAnim::Interp(interp)) => {
-                Animation::Select(SelectAnim::Single(idx, interp), Default::default())
+                Animation::Select(SelectAnim::Single(id, interp), Default::default())
             }
             Animation::Select(sa, FocusedAnim::Interp(interp)) => Animation::Select(
-                sa.append(SelectAnim::Single(idx, interp)),
+                sa.append(SelectAnim::Single(id, interp)),
                 Default::default(),
             ),
             s => s,
@@ -378,6 +393,10 @@ impl<Value: HasInterp> Animation<Value> {
         match (self, other) {
             (Animation::Focused(FocusedAnim::Noop), other) => other,
             (other, Animation::Focused(FocusedAnim::Noop)) => other,
+            (
+                Animation::Focused(FocusedAnim::Interp(i1)),
+                Animation::Focused(FocusedAnim::Interp(i2)),
+            ) => Animation::Focused(FocusedAnim::Interp(i1.merge(i2))),
             (Animation::Select(sa1, f1), Animation::Select(sa2, f2)) => {
                 //let (_, si1) = sa1.select_internal();
                 //let (a2, si2) = sa2.select_internal();
@@ -387,7 +406,7 @@ impl<Value: HasInterp> Animation<Value> {
                 Animation::Select(sa1.append(sa2), f1.merge(f2))
             }
             (Animation::Select(sa, f1), Animation::Focused(f2)) => {
-                let (a1, si1) = sa.select_internal();
+                let (a1, si1) = sa.select_internal() ;
                 wrap_anim(FocusedAnim::Interp(si1).merge(f1.merge(f2)), a1)
             }
             (Animation::Focused(f1), Animation::Select(sa, f2)) => {
@@ -1105,6 +1124,35 @@ impl AnimationSegmentStatus {
             _ => false,
         }
     }
+
+    fn add_delay(&self, cur_nanos: f64, delay_nanos: f64) -> Self {
+        match self {
+            AnimationSegmentStatus::Pending(delay) => {
+                AnimationSegmentStatus::Pending(delay + delay_nanos)
+            }
+            AnimationSegmentStatus::Ready(start, _) => {
+                let start = start + delay_nanos;
+                AnimationSegmentStatus::Ready(
+                    start,
+                    if start > cur_nanos {
+                        ReadyStatus::Running
+                    } else {
+                        ReadyStatus::Waiting
+                    },
+                )
+            }
+            AnimationSegmentStatus::Completing => AnimationSegmentStatus::Completing,
+        }
+    }
+
+    fn pending(&self, cur_nanos: f64) -> Self {
+        match self {
+            AnimationSegmentStatus::Ready(start, ..) => {
+                AnimationSegmentStatus::Pending((cur_nanos - start).min(0.))
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 pub enum CustomAnimationCurve {
@@ -1157,6 +1205,12 @@ pub enum AnimationCurve {
     //    CubicBezier(CubicBezierAnimationCurve),
     //    Spring(SpringAnimationCurve),
     Custom(CustomAnimationCurve),
+}
+
+impl Default for AnimationCurve {
+    fn default() -> Self {
+        AnimationCurve::Linear
+    }
 }
 
 impl AnimationCurve {
@@ -1228,6 +1282,44 @@ impl AnimationSegment {
             translated: 0.,
         }
     }
+
+    fn run(&mut self){
+        self.fraction = self.since_start / self.dur_nanos;
+        if self.fraction <= 1.0 {
+            self.translated = self.curve.translate(self.fraction);
+
+        } else {
+            // This segment will go through one more cycle to give interps
+            // a chance to recover from any discontinuous curves
+            self.fraction = 1.0;
+            self.translated = 1.0;
+            self.status = AnimationSegmentStatus::Completing;
+        }
+    }
+
+    fn advance(&mut self, cur_nanos: f64) ->bool{
+        match self.status.clone() {
+            AnimationSegmentStatus::Ready(start, ReadyStatus::Waiting) => {
+                self.since_start = cur_nanos - start;
+                if self.since_start > 0.  {
+                    self.status = AnimationSegmentStatus::Ready(start, ReadyStatus::Running);
+                    // TODO priming state for first run
+                    self.run();
+                }
+                false
+            },
+            AnimationSegmentStatus::Ready(start, ReadyStatus::Running) => {
+                self.since_start = cur_nanos - start;
+                self.run();
+                false
+            }
+            AnimationSegmentStatus::Completing => {
+                // TODO call the opposite of priming
+                true
+            },
+            AnimationSegmentStatus::Pending(_) => false,
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Hash, Debug)]
@@ -1274,11 +1366,10 @@ impl AnimationSegments {
         })
     }
 
-    fn segment_loop(
+    fn remove_if(
         &mut self,
         mut f: impl FnMut(AnimationSegmentId, &mut AnimationSegment) -> bool,
     ) {
-        let mut removals = false;
         for (offset, entry) in self.contents.iter_mut().enumerate() {
             let offset = offset as ASOffset;
             let (version, remove) = match entry {
@@ -1290,23 +1381,13 @@ impl AnimationSegments {
             };
 
             if remove {
-                removals = true;
                 *entry = self
                     .first_free
                     .map(|next_free| ASEntry::Free(version, next_free))
                     .unwrap_or_else(|| ASEntry::LastFree(version));
                 self.first_free = Some(offset);
                 self.size -= 1;
-                log::info!("Removed {:?} {:?}", offset, entry);
             }
-        }
-        if removals {
-            log::info!(
-                "size {} capacity {} und_capacity {}",
-                self.size,
-                self.contents.len(),
-                self.contents.capacity()
-            );
         }
     }
 
@@ -1365,7 +1446,7 @@ impl AnimationSegments {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Animator<T: HasInterp> {
     cur_nanos: f64,
     pending_events: VecDeque<AnimationEvent>,
@@ -1374,61 +1455,88 @@ pub struct Animator<T: HasInterp> {
     pub animation: Animation<T>,
 }
 
-impl<T: HasInterp> Animator<T> {
-    pub fn advance(&mut self, nanos: f64, current: &mut T) -> InterpResult {
+impl<T: HasInterp> Default for Animator<T> {
+    fn default() -> Self {
+        Animator {
+            cur_nanos: Default::default(),
+            pending_events: Default::default(),
+            pending_starts: Default::default(),
+            segments: Default::default(),
+            animation: Default::default(),
+        }
+    }
+}
+
+pub struct AnimationSegmentHandle<'a, Value: HasInterp> {
+    id: AnimationSegmentId,
+    animator: &'a mut Animator<Value>,
+}
+
+impl<T: HasInterp> AnimationSegmentHandle<'_, T> {
+    fn change_segment(self, f: impl FnOnce(&mut AnimationSegment)) -> Self {
+        self.animator
+            .segments
+            .get_mut(self.id)
+            .map(f)
+            .unwrap_or_else(|| log::warn!("Attempt to modify retired segment {:?}", self.id));
+        self
+    }
+
+    pub fn delay(self, delay: impl Into<Duration>) -> Self {
+        let cur_nanos = self.animator.cur_nanos;
+        let delay = delay.into().as_nanos() as f64;
+        self.change_segment(|seg| {
+            seg.status = seg.status.add_delay(cur_nanos, delay);
+        })
+    }
+
+    pub fn duration(self, dur: impl Into<Duration>) -> Self {
+        self.change_segment(|seg| seg.dur_nanos = dur.into().as_nanos() as f64)
+    }
+
+    pub fn curve(self, curve: impl Into<AnimationCurve>) -> Self {
+        let curve = curve.into();
+        self.change_segment(|seg| seg.curve = curve)
+    }
+
+    pub fn after(self, event: impl Into<AnimationEvent>) -> Self {
+        self.animator.register_pending(event.into(), self.id);
+        let cur_nanos = self.animator.cur_nanos;
+
+        self.change_segment(|seg| seg.status = seg.status.pending(cur_nanos))
+    }
+
+    pub fn id(&self) -> AnimationSegmentId {
+        self.id
+    }
+}
+
+impl<Value: HasInterp> Animator<Value> {
+    pub fn advance(&mut self, nanos: f64, current: &mut Value) -> InterpResult {
         if self.segments.is_empty() {
             return InterpResult::Err(InterpError::NotRunning);
         }
         self.cur_nanos += nanos;
+
         let cur_nanos = self.cur_nanos;
-
-        let segments = &mut self.segments;
-
         let pending_events = &mut self.pending_events;
-        segments.segment_loop(|id, segment| {
-            match segment.status.clone() {
-                AnimationSegmentStatus::Ready(start, ready) => {
-                    segment.since_start = cur_nanos - start;
-
-                    let is_running = match ready {
-                        ReadyStatus::Waiting if segment.since_start > 0. => {
-                            segment.status =
-                                AnimationSegmentStatus::Ready(start, ReadyStatus::Running);
-                            true
-                        }
-                        ReadyStatus::Running => true,
-                        _ => false,
-                    };
-
-                    if is_running {
-                        let fraction = segment.since_start / segment.dur_nanos;
-                        if fraction <= 1.0 {
-                            segment.fraction = fraction;
-                            segment.translated = segment.curve.translate(fraction);
-                        } else {
-                            // This segment will go through one more cycle to give interps
-                            // a chance to recover from any discontinuous curves
-                            segment.fraction = 1.0;
-                            segment.translated = 1.0;
-                            segment.status = AnimationSegmentStatus::Completing;
-                            pending_events.push_back(AnimationEvent::SegmentEnded(id));
-                        }
-                    }
-                    false
-                }
-                AnimationSegmentStatus::Completing => true,
-                AnimationSegmentStatus::Pending(_) => false,
+        self.segments.remove_if(|id, segment| {
+            let remove = segment.advance(cur_nanos);
+            if remove{
+                pending_events.push_back(AnimationEvent::SegmentEnded(id))
             }
+            remove
         });
 
-        let ctx = AnimationCtx::full(None, &segments);
+        let ctx = AnimationCtx::new(None, &self.segments, vector![std::any::type_name::<Value>()]  );
         let res = self.animation.interp(&ctx, current);
 
-        for event in pending_events.drain(..) {
-            Self::event_impl(cur_nanos, &mut self.pending_starts, segments, event)
+        for event in self.pending_events.drain(..) {
+            Self::event_impl(self.cur_nanos, &mut self.pending_starts, &mut self.segments, event)
         }
 
         if self.segments.is_empty() {
+            self.cur_nanos = 0.;
             self.animation = Default::default();
         }
         res
@@ -1472,7 +1580,24 @@ impl<T: HasInterp> Animator<T> {
             .all(|s| matches!(s.status, AnimationSegmentStatus::Pending(_)))
     }
 
-    pub fn add_animation_segment(
+    pub fn segment(&mut self) -> AnimationSegmentHandle<'_, Value> {
+        let id = self.segments.insert(AnimationSegment::new(
+            1 as f64,
+            AnimationCurve::default(),
+            AnimationSegmentStatus::Ready(self.cur_nanos, ReadyStatus::Running),
+        ));
+        AnimationSegmentHandle { id, animator: self }
+    }
+
+    fn register_pending(&mut self, event: AnimationEvent, id: AnimationSegmentId) {
+        // TODO: check if the event can never happen (segment end of already ended segment)
+        self.pending_starts
+            .entry(event)
+            .or_insert_with(|| vec![])
+            .push(id);
+    }
+
+    pub fn segment_internal(
         &mut self,
         delay_nanos: u64,
         dur_nanos: u64,
@@ -1494,29 +1619,234 @@ impl<T: HasInterp> Animator<T> {
             status,
         ));
         if let Some(after) = after {
-            self.pending_starts
-                .entry(after)
-                .or_insert_with(|| vec![])
-                .push(anim_id);
+            self.register_pending(after, anim_id);
         }
         return anim_id;
     }
 
-    pub fn add_animation(
+    pub fn merge_animation(
         &mut self,
-        interp: Animation<T>,
-        from_now_nanos: u64,
-        dur_nanos: u64,
-        curve: impl Into<AnimationCurve>,
-        after: Option<AnimationEvent>,
-        current: &mut T,
+        mut interp: Animation<Value>,
+        current: &mut Value,
     ) -> Result<(), InterpError> {
-        let mut interp = interp;
         interp.prime(current).and_then(|()| {
-            let anim_idx = self.add_animation_segment(from_now_nanos, dur_nanos, curve, after);
             let taken = std::mem::take(&mut self.animation);
-            self.animation = taken.merge(interp.select_anim(anim_idx));
+            self.animation = taken.merge(interp);
             OK
         })
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::animation::Animation::*;
+    use crate::animation::AnimationEvent::*;
+    use crate::animation::FocusedAnim::*;
+    use crate::animation::SelectAnim::*;
+    use std::mem::size_of;
+    use crate::VisMarks;
+
+    #[test]
+    fn test_merge() {
+        let mut subject = Rect::from_origin_size(Point::ZERO, (100., 100.));
+        let rect_1 = RectInterp::Coords {
+            x0: 0.0.tween(10.0),
+            y0: Default::default(),
+            x1: Default::default(),
+            y1: Default::default(),
+        }
+        .animation();
+        rect_1
+            .interp(&AnimationCtx::Immediate(0.5), &mut subject)
+            .expect("ok");
+        assert_eq!(Rect::new(5., 0., 100., 100.), subject);
+
+        let rect_2 = RectInterp::Coords {
+            x0: Default::default(),
+            y0: 1000.0.tween(2000.0),
+            x1: Default::default(),
+            y1: Default::default(),
+        }
+        .animation();
+        subject = Rect::from_origin_size(Point::ZERO, (100., 100.));
+        rect_2
+            .interp(&AnimationCtx::Immediate(0.5), &mut subject)
+            .expect("ok");
+        assert_eq!(Rect::new(0., 1500., 100., 100.), subject);
+        let merged = rect_1.merge(rect_2);
+
+        subject = Rect::from_origin_size(Point::ZERO, (100., 100.));
+        merged
+            .interp(&AnimationCtx::Immediate(0.5), &mut subject)
+            .expect("ok");
+
+        assert_eq!(Rect::new(5., 1500., 100., 100.), subject);
+    }
+
+    #[test]
+    fn test_animator() {
+        let mut animator: Animator<Line> = Default::default();
+        let mut root: Animation<Line> = Default::default();
+        let mut p_0 = &mut root.get().p0.get();
+
+        let ai_0 = animator.segment().duration(Duration::from_nanos(100)).id;
+        p_0.x = 0.0.tween(20.0).select_anim(ai_0);
+
+        let ai_1 = animator
+            .segment()
+            .duration(Duration::from_nanos(100))
+            .after(SegmentEnded(ai_0))
+            .id;
+        p_0.y = 100.0.tween(200.0).select_anim(ai_1);
+        assert_eq!(
+            AnimationSegmentStatus::Pending(0.),
+            animator.segments.get(ai_1).unwrap().status
+        );
+
+        let mut my_line = Line::new((0.0, 0.0), (100.0, 100.0));
+        animator.merge_animation(root, &mut my_line);
+
+        animator.advance(50.0, &mut my_line);
+        assert_eq!(Line::new((10.0, 0.0), (100.0, 100.0)), my_line);
+        assert_eq!(
+            AnimationSegmentStatus::Pending(0.),
+            animator.segments.get(ai_1).unwrap().status
+        );
+
+        animator.advance(50.1, &mut my_line);
+        assert_eq!(Line::new((20.0, 0.0), (100.0, 100.0)), my_line);
+        assert_eq!(
+            AnimationSegmentStatus::Completing,
+            animator.segments.get(ai_0).unwrap().status
+        );
+        assert_eq!(
+            AnimationSegmentStatus::Ready(100.1, ReadyStatus::Waiting),
+            animator.segments.get(ai_1).unwrap().status
+        );
+
+        animator.advance(10., &mut my_line);
+        assert_eq!(Line::new((20.0, 110.0), (100.0, 100.0)), my_line);
+    }
+
+    #[test]
+    fn test_merge_selected_disjoint() {
+        let mut animator: Animator<Line> = Default::default();
+        let mut root_0: Animation<Line> = Default::default();
+
+        let ai_0 = animator.segment().duration(Duration::from_nanos(100)).id;
+        root_0.get().p0.get().x = 0.0.tween(20.0).select_anim(ai_0);
+        let mut root_1: Animation<Line> = Default::default();
+
+        let ai_1 = animator
+            .segment()
+            .duration(Duration::from_nanos(100))
+            .after(SegmentEnded(ai_0))
+            .id;
+        root_1.get().p0.get().y = 100.0.tween(200.0).select_anim(ai_1);
+
+        let merged = root_0.merge(root_1);
+
+        match merged {
+            Focused(Interp(LineInterp {
+                p0:
+                    Focused(Interp(PointInterp {
+                        x: Select(Single(ai_0_ex, _), _),
+                        y: Select(Single(ai_1_ex, _), _),
+                    })),
+                p1: Focused(Noop),
+            })) if ai_0_ex == ai_0 && ai_1_ex == ai_1 => {}
+            ex => panic!("{:?}", ex),
+        }
+    }
+
+    #[test]
+    fn test_merge_selected_overlap() {
+        let mut animator: Animator<Line> = Default::default();
+
+        let ai_0 = animator.segment().duration(Duration::from_nanos(100)).id;
+        let mut root_0: Animation<Line> = Default::default();
+        root_0.get().p0.get().x = 0.0.tween(20.0);
+        root_0 = root_0.select_anim(ai_0);
+        // The merge should not care where the select is if its logically the same effect
+
+        let mut root_1: Animation<Line> = Default::default();
+
+        let ai_1 = animator
+            .segment()
+            .duration(Duration::from_nanos(100))
+            .after(SegmentEnded(ai_0))
+            .id;
+        root_1.get().p0.get().x = 100.0.tween(200.0).select_anim(ai_1);
+
+        let merged = root_0.merge(root_1);
+
+        match merged {
+            Focused(Interp(LineInterp {
+                p0:
+                    Focused(Interp(PointInterp {
+                        x: Select(Many(vec), Noop),
+                        y: Focused(Noop),
+                    })),
+                p1: Focused(Noop),
+            })) => match &*vec {
+                [(ai_0_ex, _), (ai_1_ex, _)] if *ai_0_ex == ai_0 && *ai_1_ex == ai_1 => (),
+                ex => panic!("{:#?}", ex),
+            },
+            ex => panic!("{:#?}", ex),
+        }
+    }
+
+    //#[test]
+    fn test_merge_descend() {
+        let mut animator: Animator<VisMarks> = Default::default();
+
+        let mut line_tw = |v: f64| {
+            Line::new((v, v), (v + 5.0, v +5.0) ).tween(Line::new( (v + 2.0, v + 2.0), (v + 10.0, v + 10.0))).select_anim(
+                animator.segment().id
+            )
+        };
+
+        // These ones have the exact same structure, so should be in a select many
+        let mut root_0: Animation<Line> = line_tw(1.);
+        let mut root_1: Animation<Line> = line_tw(2.);
+
+        let merged = root_0.merge(root_1);
+
+        match merged {
+            Focused(Interp(LineInterp {
+                               p0:
+                               Focused(Interp(PointInterp {
+                                                  x: Select(Many(vec), Noop),
+                                                  y: Focused(Noop),
+                                              })),
+                               p1: Focused(Noop),
+                           })) => (),
+            ex => panic!("{:#?}", ex),
+        }
+
+        // These ones are slightly
+        let mut root_0: Animation<Line> = line_tw(1.);
+        root_0.get().p0.get().x = Focused(Noop);
+        let mut root_1: Animation<Line> = line_tw(2.);
+        let merged = root_0.merge(root_1);
+
+        match merged {
+            Focused(Interp(LineInterp {
+                               p0:
+                               Focused(Interp(PointInterp {
+                                                  x: Select(Many(vec), Noop),
+                                                  y: Focused(Noop),
+                                              })),
+                               p1: Focused(Noop),
+                           })) => (),
+            ex => panic!("{:#?}", ex),
+        }
+
+    }
+
+    // Curves
+    // Events
+    // Loops
+    // Segment removal
 }
