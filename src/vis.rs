@@ -1,4 +1,4 @@
-use crate::animation::*;
+
 use crate::LogIdx;
 use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2};
 use druid::piet::{FontFamily, Text, TextLayout, TextLayoutBuilder};
@@ -16,11 +16,14 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::Duration;
 
+use crate::animation::{Animator, AnimationCtx, AnimationId, AnimationEvent, AnimationCurve};
+use crate::interp::{InterpNode, HasInterp, Interp, InterpCoverage, InterpResult, InterpError, OK, EnterExit};
+
 #[derive(Debug, Default)]
 pub struct TextMarkInterp {
-    txt: Animation<String>,
-    size: Animation<f64>,
-    point: Animation<Point>,
+    txt: InterpNode<String>,
+    size: InterpNode<f64>,
+    point: InterpNode<Point>,
 }
 
 impl HasInterp for TextMark {
@@ -30,13 +33,7 @@ impl HasInterp for TextMark {
 impl Interp for TextMarkInterp {
     type Value = TextMark;
 
-    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
-        self.txt.prime(&mut val.txt)?;
-        self.size.prime(&mut val.size)?;
-        self.point.prime(&mut val.point)
-    }
-
-    fn interp(&self, frac: &AnimationCtx, val: &mut TextMark) -> InterpResult {
+    fn interp(&mut self, frac: &AnimationCtx, val: &mut TextMark) -> InterpResult {
         self.txt.interp(frac, &mut val.txt)?;
         self.size.interp(frac, &mut val.size)?;
         self.point.interp(frac, &mut val.point)
@@ -46,26 +43,20 @@ impl Interp for TextMarkInterp {
         self.point.coverage() + self.size.coverage() + self.txt.coverage()
     }
 
-    fn select_animation_segment(self, idx: AnimationSegmentId) -> Self {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
         let TextMarkInterp { txt, size, point } = self;
-        TextMarkInterp {
+        Ok(TextMarkInterp {
             txt: txt.select_anim(idx),
             size: size.select_anim(idx),
             point: point.select_anim(idx),
-        }
+        })
     }
 
     fn merge(self, other: Self) -> Self {
-        let TextMarkInterp { txt, size, point } = self;
-        let TextMarkInterp {
-            txt: txt2,
-            size: size2,
-            point: point2,
-        } = other;
         TextMarkInterp {
-            txt: txt.merge(txt2),
-            size: size.merge(size2),
-            point: point.merge(point2),
+            txt: self.txt.merge(other.txt),
+            size: self.size.merge(other.size),
+            point: self.point.merge(other.point),
         }
     }
 
@@ -80,9 +71,9 @@ impl Interp for TextMarkInterp {
 
 #[derive(Debug)]
 pub enum MarkShapeInterp {
-    Rect(Animation<Rect>),
-    Line(Animation<Point>, Animation<Point>),
-    Text(Animation<TextMark>),
+    Rect(InterpNode<Rect>),
+    Line(InterpNode<Point>, InterpNode<Point>),
+    Text(InterpNode<TextMark>),
     Noop,
 }
 
@@ -99,19 +90,7 @@ impl HasInterp for MarkShape {
 impl Interp for MarkShapeInterp {
     type Value = MarkShape;
 
-    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
-        match (self, val) {
-            (MarkShapeInterp::Rect(r_int), MarkShape::Rect(rect)) => r_int.prime(rect),
-            (MarkShapeInterp::Line(o, other), MarkShape::Line(l)) => {
-                o.prime(&mut l.p0)?;
-                other.prime(&mut l.p1)
-            }
-            (MarkShapeInterp::Text(t_interp), MarkShape::Text(t)) => t_interp.prime(t),
-            _ => Err(InterpError::ValueMismatch),
-        }
-    }
-
-    fn interp(&self, frac: &AnimationCtx, val: &mut MarkShape) -> InterpResult {
+    fn interp(&mut self, frac: &AnimationCtx, val: &mut MarkShape) -> InterpResult {
         match (self, val) {
             (MarkShapeInterp::Rect(r_int), MarkShape::Rect(r)) => {
                 // TODO: Do coords not points
@@ -135,15 +114,15 @@ impl Interp for MarkShapeInterp {
         }
     }
 
-    fn select_animation_segment(self, idx: AnimationSegmentId) -> Self {
-        match self {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
+        Ok(match self {
             MarkShapeInterp::Rect(rect) => MarkShapeInterp::Rect(rect.select_anim(idx)),
             MarkShapeInterp::Line(start, end) => {
                 MarkShapeInterp::Line(start.select_anim(idx), end.select_anim(idx))
             }
             MarkShapeInterp::Text(text) => MarkShapeInterp::Text(text.select_anim(idx)),
             other => other,
-        }
+        })
     }
 
     fn merge(self, other: Self) -> Self {
@@ -176,8 +155,8 @@ impl Interp for MarkShapeInterp {
 
 #[derive(Debug, Default)]
 pub struct MarkInterp {
-    shape: Animation<MarkShape>,
-    current: Animation<MarkProps>,
+    shape: InterpNode<MarkShape>,
+    current: InterpNode<MarkProps>,
 }
 
 #[derive(Debug, Data, Clone)]
@@ -226,17 +205,13 @@ impl HasInterp for MarkProps {
 
 #[derive(Debug, Default)]
 pub struct MarkPropsInterp {
-    color: Animation<Color>,
+    color: InterpNode<Color>,
 }
 
 impl Interp for MarkPropsInterp {
     type Value = MarkProps;
 
-    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
-        OK
-    }
-
-    fn interp(&self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult {
+    fn interp(&mut self, frac: &AnimationCtx, val: &mut Self::Value) -> InterpResult {
         self.color.interp(frac, &mut val.color)
     }
 
@@ -244,10 +219,10 @@ impl Interp for MarkPropsInterp {
         self.color.coverage()
     }
 
-    fn select_animation_segment(self, idx: AnimationSegmentId) -> Self {
-        Self {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
+        Ok(Self {
             color: self.color.select_anim(idx),
-        }
+        })
     }
 
     fn merge(self, other: Self) -> Self {
@@ -279,11 +254,8 @@ impl HasInterp for Mark {
 impl Interp for MarkInterp {
     type Value = Mark;
 
-    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
-        OK
-    }
 
-    fn interp(&self, frac: &AnimationCtx, val: &mut Mark) -> InterpResult {
+    fn interp(&mut self, frac: &AnimationCtx, val: &mut Mark) -> InterpResult {
         self.shape.interp(frac, &mut val.shape)?;
         self.current.interp(frac, &mut val.current)?;
         OK
@@ -293,12 +265,12 @@ impl Interp for MarkInterp {
         self.shape.coverage() + self.current.coverage()
     }
 
-    fn select_animation_segment(self, idx: AnimationSegmentId) -> Self {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
         let MarkInterp { shape, current } = self;
-        MarkInterp {
+        Ok(MarkInterp {
             shape: shape.select_anim(idx),
             current: current.select_anim(idx),
-        }
+        })
     }
 
     fn merge(self, other: Self) -> Self {
@@ -604,11 +576,11 @@ impl VisMarks {
 
 #[derive(Debug, Default)]
 pub struct VisMarksInterp {
-    pub marks: Animation<HashMap<MarkId, Mark>>,
+    pub marks: InterpNode<HashMap<MarkId, Mark>>,
 }
 
 impl VisMarksInterp {
-    pub fn new(marks: Animation<HashMap<MarkId, Mark>>) -> Self {
+    pub fn new(marks: InterpNode<HashMap<MarkId, Mark>>) -> Self {
         VisMarksInterp { marks }
     }
 }
@@ -620,11 +592,7 @@ impl HasInterp for VisMarks {
 impl Interp for VisMarksInterp {
     type Value = VisMarks;
 
-    fn prime(&mut self, val: &mut Self::Value) -> InterpResult {
-        self.marks.prime(&mut val.marks)
-    }
-
-    fn interp(&self, frac: &AnimationCtx, val: &mut VisMarks) -> InterpResult {
+    fn interp(&mut self, frac: &AnimationCtx, val: &mut VisMarks) -> InterpResult {
         self.marks.interp(frac, &mut val.marks)
     }
 
@@ -632,10 +600,10 @@ impl Interp for VisMarksInterp {
         self.marks.coverage()
     }
 
-    fn select_animation_segment(self, idx: AnimationSegmentId) -> Self {
-        VisMarksInterp {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
+        Ok(VisMarksInterp {
             marks: self.marks.select_anim(idx),
-        }
+        })
     }
 
     fn merge(self, other: Self) -> Self {
@@ -646,7 +614,7 @@ impl Interp for VisMarksInterp {
 
     fn build(old: VisMarks, new: VisMarks) -> Self {
         Self {
-            marks: MapInterp::build(old.marks, new.marks).animation(),
+            marks: old.marks.tween(new.marks),
         }
     }
 }
@@ -654,18 +622,20 @@ impl Interp for VisMarksInterp {
 struct VisInner<VP: Visualization> {
     layout: VP::Layout,
     state: VP::State,
-    animator: Animator<VisMarks>,
+    animator: Animator,
+    interp: InterpNode<VisMarks>,
     current: VisMarks,
     transform: Affine,
     hovered: Option<MarkId>,
     phantom_vp: PhantomData<VP>,
 }
 
-impl<VP: Visualization> VisInner<VP> {
+impl<V: Visualization> VisInner<V> {
     pub fn new(
-        layout: VP::Layout,
-        state: VP::State,
-        animator: Animator<VisMarks>,
+        layout: V::Layout,
+        state: V::State,
+        animator: Animator,
+        interp: InterpNode<VisMarks>,
         current: VisMarks,
         transform: Affine,
     ) -> Self {
@@ -673,11 +643,35 @@ impl<VP: Visualization> VisInner<VP> {
             layout,
             state,
             animator,
+            interp,
             current,
             transform,
             hovered: None,
             phantom_vp: Default::default(),
         }
+    }
+
+    fn merge_animation(
+        &mut self,
+        mut interp: InterpNode<VisMarks>
+    ) -> Result<(), InterpError> {
+        if interp.coverage() != InterpCoverage::Noop {
+            let taken = std::mem::take(&mut self.interp);
+            self.interp = taken.merge(interp);
+        }
+        OK
+    }
+
+    fn unhover(
+        &mut self,
+        visual: &mut V,
+        data: &mut V::Input,
+    ) {
+        if let Some(focus) = self.hovered {
+            visual.event(data, &self.layout, &mut self.state, &VisEvent::MouseOut(focus));
+            self.animator.event(Vis::<V>::UNHOVER);
+        }
+        self.hovered = None;
     }
 }
 
@@ -707,11 +701,13 @@ impl<V: Visualization> Vis<V> {
 
             let current = VisMarks::build(layout_marks, state_marks, data_marks);
             let animator = Default::default();
+            let animation = Default::default();
 
             self.inner = Some(VisInner::new(
                 layout,
                 state,
                 animator,
+                animation,
                 current,
                 Affine::FLIP_Y * Affine::translate(Vec2::new(0., -size.height)),
             ));
@@ -723,7 +719,7 @@ impl<V: Visualization> Vis<V> {
         &mut self,
         size: Size,
         data: &V::Input,
-    ) -> Result<AnimationSegmentId, InterpError> {
+    ) -> Result<AnimationId, InterpError> {
         if let Some(inner) = &mut self.inner {
             inner.layout = self.visual.layout(data, size);
 
@@ -735,14 +731,14 @@ impl<V: Visualization> Vis<V> {
 
             let interp = inner.current.clone().tween(destination);
             let id = inner.animator
-                .segment()
+                .new()
                 .duration(Duration::from_millis(1000) )
-                .curve(AnimationCurve::EaseIn)
+                .curve(AnimationCurve::Linear)
                 .id();
 
             let selected = interp.select_anim(id);
 
-            inner.animator.merge_animation(selected, &mut inner.current).map(|_|id)
+            inner.merge_animation(selected).map(|_|id)
         } else {
             Err(InterpError::NotRunning)
         }
@@ -755,56 +751,38 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         let inner = self.inner.as_mut().unwrap();
 
         let visual = &mut self.visual;
-        let VisInner {
-            animator,
-            current,
-            hovered,
-            layout,
-            state,
-            transform,
-            ..
-        } = inner;
-        let old_state: V::State = state.clone();
+        let old_state: V::State = inner.state.clone();
 
-        fn unhover<V: Visualization>(
-            animator: &mut Animator<VisMarks>,
-            hovered: &mut Option<MarkId>,
-            visual: &mut V,
-            data: &mut V::Input,
-            layout: &V::Layout,
-            state: &mut V::State,
-        ) {
-            if let Some(focus) = hovered {
-                visual.event(data, layout, state, &VisEvent::MouseOut(*focus));
-                animator.event(Vis::<V>::UNHOVER);
-            }
-            *hovered = None;
-        }
+        let mut top_level = InterpNode::<VisMarks>::default();
+        let mut unhover = false;
 
         match event {
             Event::MouseMove(me) => {
-                if let Some(mark) = current.find_mark(transform.inverse() * me.pos) {
-                    if *hovered != Some(mark.id) {
-                        unhover(animator, hovered, visual, data, layout, state);
+                let current = &inner.current;
+                if let Some(mark) = current.find_mark(inner.transform.inverse() * me.pos) {
+                    if inner.hovered != Some(mark.id) {
+                        unhover = true;
                         visual.event(
                             data,
                             &inner.layout,
                             &mut inner.state,
                             &VisEvent::MouseEnter(mark.id),
                         );
-                        *hovered = Some(mark.id);
+                        inner.hovered = Some(mark.id);
 
                         if mark.hover.is_some() {
-                            let hover_idx = animator
-                                .segment()
+                            let hover_idx = inner
+                                .animator
+                                .new()
                                 .duration(Duration::from_millis(1250))
                                 .id();
                             let hover_props = mark.hover_props();
                             let color_change =
                                 mark.current.tween_ref(&hover_props).select_anim(hover_idx);
 
-                            let unhover_idx = animator
-                                .segment()
+                            let unhover_idx = inner
+                                .animator
+                                .new()
                                 .duration(Duration::from_millis(2500))
                                 .curve(AnimationCurve::EaseOut)
                                 .after(Self::UNHOVER)
@@ -814,41 +792,45 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                                 .tween_ref(&mark.original)
                                 .select_anim(unhover_idx);
 
-                            let mut top_level = Animation::<VisMarks>::default();
                             top_level.get().marks.get().get(&mark.id).get().current =
                                 color_change.merge(change_back);
 
-
-
-                            animator.merge_animation(top_level, current);
-                            //log::info!( "Animator after hover {:#?}", animator);
+                            //log::info!( "Animator after hover {:#?} {:#?}", inner.animator, inner.animation);
                         }
+
                     }
                 } else {
-                    unhover(animator, hovered, visual, data, layout, state);
+                    unhover = true;
                 }
             }
             _ => {}
         }
+
+        if unhover {
+            inner.unhover(visual, data);
+        }
+
+        inner.merge_animation(top_level);
 
         if !old_state.same(&inner.state) {
             visual
                 .state_marks(data, &inner.layout, &inner.state)
                 .into_iter()
                 .for_each(|mark| {
-                    let anim_idx = animator
-                        .segment()
+                    let anim_idx = inner
+                        .animator
+                        .new()
                         .duration(Duration::from_secs(3))
                         .curve(AnimationCurve::OutElastic)
                         .id();
                     let id = mark.id;
-                    let start = current.marks.entry(id).or_insert(mark.enter());
-                    *animator.animation.get().marks.get().get(&id) =
+                    let start = inner.current.marks.entry(id).or_insert(mark.enter());
+                    *inner.interp.get().marks.get().get(&id) =
                          start.clone().tween(mark).select_anim(anim_idx);
                 })
         }
 
-        if animator.running() {
+        if inner.animator.running() {
             ctx.request_anim_frame()
         }
     }
@@ -857,18 +839,26 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         if let (
             LifeCycle::AnimFrame(nanos),
             Some(VisInner {
-                animator, current, ..
+                animator, current, interp: animation, ..
             }),
         ) = (event, &mut self.inner)
         {
-            let res = animator.advance((*nanos) as f64, current);
-            if let Result::Err(e) = res {
-                log::warn!("InterpError running animator {:?}", e);
+            let res = animator.advance_by((*nanos) as f64, |ctx|{
+                animation.interp(ctx, current)
+            });
+            if let Some(Err(e)) = res {
+                log::warn!("Interp error running animator {:?}", e);
             }
 
             if animator.running() {
                 ctx.request_anim_frame();
             }
+
+            if animator.is_empty() {
+                log::info!("Clearing anim");
+                *animation = Default::default();
+            }
+
             ctx.request_paint()
         }
     }

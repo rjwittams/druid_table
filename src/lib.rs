@@ -2,6 +2,7 @@
 mod macros;
 
 mod animation;
+mod interp;
 mod axis_measure;
 mod builder;
 mod cells;
