@@ -18,12 +18,14 @@ type Animations = AnimationStorage<AnimationState>;
 #[derive(Debug)]
 pub struct AnimationCtxInner<'a> {
     focus: Option<AnimationId>,
-    animations: &'a Animations
+    animations: &'a Animations,
 }
 
-impl AnimationCtxInner<'_>{
-    fn with_focused<V>(&self, f: impl Fn(&AnimationState)->V) ->Option<V>{
-        self.focus.and_then(|focus| self.animations.get(focus)).map(f)
+impl AnimationCtxInner<'_> {
+    fn with_focused<V>(&self, f: impl Fn(&AnimationState) -> V) -> Option<V> {
+        self.focus
+            .and_then(|focus| self.animations.get(focus))
+            .map(f)
     }
 }
 
@@ -38,32 +40,28 @@ pub enum AnimationStatus {
     NotRunning,
     Enlisting,
     Running,
-    Retiring
+    Repeating,
+    Retiring,
 }
 
 impl AnimationCtx<'_> {
-    pub fn running(frac: f64) -> AnimationCtx<'static>{
+    pub fn running(frac: f64) -> AnimationCtx<'static> {
         AnimationCtx::Immediate(frac, AnimationStatus::Running)
     }
 
-    fn new(
-        focus: Option<AnimationId>,
-        animations: &Animations
-    ) -> AnimationCtx {
+    fn new(focus: Option<AnimationId>, animations: &Animations) -> AnimationCtx {
         match focus {
             Some(current_segment) if !animations.contains(current_segment) => panic!(
                 "animation segment out of range {:?} {:?}",
                 current_segment, animations
             ),
-            _ => AnimationCtx::Full(AnimationCtxInner { focus, animations: animations }),
+            _ => AnimationCtx::Full(AnimationCtxInner { focus, animations }),
         }
     }
 
     pub fn progress(&self) -> f64 {
-         match self {
-            AnimationCtx::Full(inner) => {
-                inner.with_focused(|seg| seg.progress).unwrap_or(0.)
-            }
+        match self {
+            AnimationCtx::Full(inner) => inner.with_focused(|seg| seg.progress).unwrap_or(0.),
             AnimationCtx::Immediate(progress, ..) => *progress,
         }
     }
@@ -74,31 +72,31 @@ impl AnimationCtx<'_> {
 
     pub fn status(&self) -> AnimationStatus {
         match self {
-            AnimationCtx::Full(inner) => {
-                inner.with_focused(|seg| seg.status()).unwrap_or(AnimationStatus::NotRunning)
-            }
+            AnimationCtx::Full(inner) => inner
+                .with_focused(|seg| seg.status())
+                .unwrap_or(AnimationStatus::NotRunning),
             AnimationCtx::Immediate(_, status) => *status,
         }
     }
 
     pub fn with_animation<V>(
         &self,
-        idx: AnimationId,
-        mut f: impl FnMut(&AnimationCtx) -> V
+        id: impl Into<Option<AnimationId>>,
+        mut f: impl FnMut(&AnimationCtx) -> V,
     ) -> Option<V> {
+        let id_opt = id.into();
         match self {
             AnimationCtx::Full(AnimationCtxInner { animations, .. })
-            if animations.get(idx).map_or(false, |s| s.status.is_active()) => {
-                Some(f(&Self::new(Some(idx), animations)))
+                if id_opt
+                    .and_then(|ai| animations.get(ai).map(|s| s.status.is_active()))
+                    .unwrap_or(false) =>
+            {
+                Some(f(&Self::new(id_opt, animations)))
             }
             _ => None,
         }
     }
 }
-
-
-
-
 
 #[derive(Clone, Debug, PartialEq)]
 enum AnimationStatusInternal {
@@ -106,6 +104,7 @@ enum AnimationStatusInternal {
     Waiting(StartNanos),
     Enlisting(StartNanos),
     Running(StartNanos),
+    Repeating(StartNanos), // Start of current repetition
     Retiring,
 }
 
@@ -135,6 +134,7 @@ impl AnimationStatusInternal {
                 }
             }
             AnimationStatusInternal::Enlisting(start)
+            | AnimationStatusInternal::Repeating(start)
             | AnimationStatusInternal::Running(start) => {
                 let start = start + delay_nanos;
 
@@ -153,7 +153,9 @@ impl AnimationStatusInternal {
 
     fn pending(&self, cur_nanos: f64) -> Self {
         match self {
-            AnimationStatusInternal::Waiting(start) | AnimationStatusInternal::Enlisting(start) | AnimationStatusInternal::Running(start) => {
+            AnimationStatusInternal::Waiting(start)
+            | AnimationStatusInternal::Enlisting(start)
+            | AnimationStatusInternal::Running(start) => {
                 AnimationStatusInternal::PendingEvent((cur_nanos - start).min(0.))
             }
             other => other.clone(),
@@ -161,16 +163,16 @@ impl AnimationStatusInternal {
     }
 }
 
-pub enum CustomAnimationCurve {
+pub enum CustomCurve {
     Function(fn(f64) -> f64),
     Boxed(Box<dyn FnMut(f64) -> f64>),
 }
 
-impl CustomAnimationCurve {
+impl CustomCurve {
     fn translate(&mut self, t: f64) -> f64 {
         match self {
-            CustomAnimationCurve::Function(f) => f(t),
-            CustomAnimationCurve::Boxed(f) => f(t),
+            CustomCurve::Function(f) => f(t),
+            CustomCurve::Boxed(f) => f(t),
         }
     }
 }
@@ -180,14 +182,14 @@ fn clamp_fraction(f: f64) -> f64 {
     f.max(0.).min(1.)
 }
 
-impl Debug for CustomAnimationCurve {
+impl Debug for CustomCurve {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            CustomAnimationCurve::Function(f) => formatter
+            CustomCurve::Function(f) => formatter
                 .debug_struct("CustomAnimationCurve::Function")
                 .field("f", f)
                 .finish(),
-            CustomAnimationCurve::Boxed(_) => formatter
+            CustomCurve::Boxed(_) => formatter
                 .debug_struct("CustomAnimationCurve::Closure")
                 .finish(),
         }
@@ -196,12 +198,18 @@ impl Debug for CustomAnimationCurve {
 
 impl From<fn(f64) -> f64> for AnimationCurve {
     fn from(f: fn(f64) -> f64) -> Self {
-        AnimationCurve::Custom(CustomAnimationCurve::Function(f))
+        AnimationCurve::Custom(CustomCurve::Function(f))
     }
 }
 
-#[derive(Debug)]
-pub enum AnimationCurve {
+impl From<SimpleCurve> for AnimationCurve {
+    fn from(s: SimpleCurve) -> Self {
+        AnimationCurve::Simple(s)
+    }
+}
+
+#[derive(Data, Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SimpleCurve {
     Linear,
     EaseIn,
     EaseOut,
@@ -209,25 +217,16 @@ pub enum AnimationCurve {
     OutElastic,
     OutBounce,
     OutSine,
-    //    CubicBezier(CubicBezierAnimationCurve),
-    //    Spring(SpringAnimationCurve),
-    Custom(CustomAnimationCurve),
 }
 
-impl Default for AnimationCurve {
-    fn default() -> Self {
-        AnimationCurve::Linear
-    }
-}
-
-impl AnimationCurve {
+impl SimpleCurve {
     fn translate(&mut self, t: f64) -> f64 {
         use std::f64::consts::PI;
         match self {
-            AnimationCurve::Linear => t,
-            AnimationCurve::EaseIn => t * t,
-            AnimationCurve::EaseOut => t * (2.0 - t),
-            AnimationCurve::EaseInOut => {
+            Self::Linear => t,
+            Self::EaseIn => t * t,
+            Self::EaseOut => t * (2.0 - t),
+            Self::EaseInOut => {
                 let t = t * 2.0;
                 if t < 1. {
                     0.5 * t * t
@@ -236,7 +235,7 @@ impl AnimationCurve {
                     -0.5 * (t * (t - 2.) - 1.)
                 }
             }
-            AnimationCurve::OutElastic => {
+            Self::OutElastic => {
                 let p = 0.3;
                 let s = p / 4.0;
 
@@ -248,8 +247,8 @@ impl AnimationCurve {
                     2.0f64.powf(-10.0 * t) * ((t - s) * (2.0 * PI) / p).sin() + 1.0
                 }
             }
-            AnimationCurve::OutSine => (t * PI * 0.5).sin(),
-            AnimationCurve::OutBounce => {
+            Self::OutSine => (t * PI * 0.5).sin(),
+            Self::OutBounce => {
                 if t < (1. / 2.75) {
                     7.5625 * t * t
                 } else if t < (2. / 2.75) {
@@ -263,7 +262,87 @@ impl AnimationCurve {
                     7.5625 * t * t + 0.984375
                 }
             }
-            AnimationCurve::Custom(c) => c.translate(t),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum AnimationCurve {
+    Simple(SimpleCurve),
+    //    CubicBezier(CubicBezierAnimationCurve),
+    //    Spring(SpringAnimationCurve),
+    Custom(CustomCurve),
+}
+
+impl Default for AnimationCurve {
+    fn default() -> Self {
+        AnimationCurve::Simple(SimpleCurve::Linear)
+    }
+}
+
+impl AnimationCurve {
+    fn translate(&mut self, t: f64) -> f64 {
+        match self {
+            Self::Simple(s) => s.translate(t),
+            Self::Custom(c) => c.translate(t),
+        }
+    }
+}
+
+#[derive(Debug, Data, Copy, Clone, PartialOrd, PartialEq)]
+pub enum AnimationDirection {
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+impl Default for AnimationDirection {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl AnimationDirection {
+    fn translate(&self, frac: f64, even_repeat: bool) -> f64 {
+        match self {
+            Self::Normal => frac,
+            Self::Reverse => 1.0 - frac,
+            Self::Alternate => {
+                if even_repeat {
+                    frac
+                } else {
+                    1.0 - frac
+                }
+            }
+            Self::AlternateReverse => {
+                if !even_repeat {
+                    frac
+                } else {
+                    1.0 - frac
+                }
+            }
+        }
+    }
+
+    fn end_fraction(&self, even_repeat: bool) -> f64 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Reverse => 0.0,
+            Self::Alternate => {
+                if even_repeat {
+                    1.
+                } else {
+                    0.
+                }
+            }
+            Self::AlternateReverse => {
+                if !even_repeat {
+                    1.
+                } else {
+                    0.
+                }
+            }
         }
     }
 }
@@ -272,73 +351,94 @@ impl AnimationCurve {
 struct AnimationState {
     dur_nanos: f64,
     curve: AnimationCurve,
+    direction: AnimationDirection,
+    repeat_limit: Option<usize>,
     status: AnimationStatusInternal,
     since_start: f64,
     fraction: f64,
     progress: f64,
+    repeat_count: usize,
 }
 
 impl AnimationState {
-    pub fn new(dur_nanos: f64, curve: AnimationCurve, status: AnimationStatusInternal) -> Self {
+    pub fn new(status: AnimationStatusInternal) -> Self {
         AnimationState {
-            dur_nanos,
-            curve,
+            dur_nanos: 1.,
+            curve: Default::default(),
+            direction: Default::default(),
+            repeat_limit: Some(1),
             status,
             since_start: 0.,
             fraction: 0.,
             progress: 0.,
+            repeat_count: 0,
         }
     }
 
-    fn calc(&mut self) {
-        self.fraction = self.since_start / self.dur_nanos;
-        if self.fraction <= 1.0 {
+    fn calc(&mut self, cur_nanos: Nanos) {
+        let before_end = self.since_start < self.dur_nanos; // Ask curve (e.g non duration based)
+
+        let even_repeat = self.repeat_count % 2 == 0;
+
+        if before_end {
+            self.fraction = self
+                .direction
+                .translate(self.since_start / self.dur_nanos, even_repeat);
             self.progress = self.curve.translate(self.fraction);
         } else {
             // This animation will go through one more cycle to give interps
             // a chance to recover from any discontinuous curves - i.e set things to the end state.
-            self.fraction = 1.0;
-            self.progress = 1.0;
-            self.status = AnimationStatusInternal::Retiring;
+
+            self.repeat_count += 1;
+            let allow_repeat = self
+                .repeat_limit
+                .map_or(true, |limit| self.repeat_count < limit);
+            if allow_repeat {
+                self.status = AnimationStatusInternal::Repeating(cur_nanos);
+            } else {
+                let end_fraction = self.direction.end_fraction(even_repeat);
+                self.fraction = end_fraction;
+                self.progress = end_fraction;
+                self.status = AnimationStatusInternal::Retiring;
+            }
         }
     }
 
     fn advance(&mut self, cur_nanos: f64) -> bool {
+        use AnimationStatusInternal::*;
         match self.status.clone() {
-            AnimationStatusInternal::Waiting(start) => {
+            Waiting(start) => {
                 self.since_start = cur_nanos - start;
                 if self.since_start > 0. {
                     self.status = AnimationStatusInternal::Enlisting(start);
                     // TODO priming state for first run
-                    self.calc();
+                    self.calc(cur_nanos);
                 }
                 false
             }
-            AnimationStatusInternal::Enlisting(start) => {
+            Enlisting(start) | Repeating(start) => {
                 self.since_start = cur_nanos - start;
                 self.status = AnimationStatusInternal::Running(start);
-                self.calc();
+                self.calc(cur_nanos);
                 false
             }
-            AnimationStatusInternal::Running(start) => {
+            Running(start) => {
                 self.since_start = cur_nanos - start;
-                self.calc();
+                self.calc(cur_nanos);
                 false
             }
-            AnimationStatusInternal::Retiring => {
-                true
-            }
-            AnimationStatusInternal::PendingEvent(_) => false,
-
+            Retiring => true,
+            PendingEvent(_) => false,
         }
     }
 
     // Might be able to merge these
     fn status(&self) -> AnimationStatus {
-        match self.status{
+        match self.status {
             AnimationStatusInternal::PendingEvent(_) => AnimationStatus::NotRunning,
             AnimationStatusInternal::Waiting(_) => AnimationStatus::NotRunning,
             AnimationStatusInternal::Enlisting(_) => AnimationStatus::Enlisting,
+            AnimationStatusInternal::Repeating(_) => AnimationStatus::Repeating,
             AnimationStatusInternal::Running(_) => AnimationStatus::Running,
             AnimationStatusInternal::Retiring => AnimationStatus::Retiring,
         }
@@ -369,7 +469,7 @@ impl AnimationId {
 #[derive(Debug)]
 enum ASEntry<Value> {
     Busy(ASVersion, Value),
-    Free(ASVersion, ASOffset), // next free
+    Free(ASVersion, ASOffset), // next free. Free entries form a linked list.
     LastFree(ASVersion),
 }
 
@@ -381,17 +481,17 @@ struct AnimationStorage<Value> {
 }
 
 //Derive creates an incorrect constraint
-impl <Value> Default for AnimationStorage<Value>{
+impl<Value> Default for AnimationStorage<Value> {
     fn default() -> Self {
-        AnimationStorage{
+        AnimationStorage {
             contents: Default::default(),
             size: Default::default(),
-            first_free: Default::default()
+            first_free: Default::default(),
         }
     }
 }
 
-impl <Value> AnimationStorage<Value> {
+impl<Value> AnimationStorage<Value> {
     fn iter(&self) -> impl Iterator<Item = &Value> {
         self.contents.iter().flat_map(|content| match content {
             ASEntry::Busy(_, seg) => Some(seg),
@@ -399,6 +499,7 @@ impl <Value> AnimationStorage<Value> {
         })
     }
 
+    // O(n)
     fn remove_if(&mut self, mut f: impl FnMut(AnimationId, &mut Value) -> bool) {
         for (offset, entry) in self.contents.iter_mut().enumerate() {
             let offset = offset as ASOffset;
@@ -425,6 +526,7 @@ impl <Value> AnimationStorage<Value> {
         self.size == 0
     }
 
+    // O(1)
     fn insert(&mut self, value: Value) -> AnimationId {
         self.size += 1;
         if let Some(offset) = self.first_free.take() {
@@ -435,7 +537,7 @@ impl <Value> AnimationStorage<Value> {
                 ASEntry::Busy(..) => panic!("Free list pointing to busy entry"),
             };
             self.first_free = first_free;
-            let version = NonZeroU32::new(version.get().wrapping_add(1).max(1) ).unwrap();
+            let version = NonZeroU32::new(version.get().wrapping_add(1).max(1)).unwrap();
             *entry = ASEntry::Busy(version, value);
             AnimationId::new(offset, version)
         } else {
@@ -446,11 +548,13 @@ impl <Value> AnimationStorage<Value> {
         }
     }
 
+    // O(1)
     fn contains(&self, id: AnimationId) -> bool {
         id.offset < self.contents.len() as u32
             && matches!(self.contents[id.offset as usize], ASEntry::Busy(version, _) if version == id.version)
     }
 
+    // O(1)
     fn get(&self, id: AnimationId) -> Option<&Value> {
         self.contents
             .get(id.offset as usize)
@@ -476,8 +580,6 @@ impl <Value> AnimationStorage<Value> {
     }
 }
 
-
-
 pub struct AnimationHandle<'a> {
     id: AnimationId,
     animator: &'a mut Animator,
@@ -501,8 +603,18 @@ impl AnimationHandle<'_> {
         })
     }
 
-    pub fn duration(self, dur: impl Into<Duration>) -> Self {
-        self.change_animation_state(|seg| seg.dur_nanos = dur.into().as_nanos() as f64)
+    pub fn duration(self, duration: impl Into<Duration>) -> Self {
+        self.change_animation_state(|seg| seg.dur_nanos = duration.into().as_nanos() as f64)
+    }
+
+    pub fn direction(self, direction: impl Into<AnimationDirection>) -> Self {
+        let dir = direction.into();
+        self.change_animation_state(|state| state.direction = dir)
+    }
+
+    pub fn repeat_limit(self, limit: impl Into<Option<usize>>) -> Self {
+        let limit = limit.into();
+        self.change_animation_state(|state| state.repeat_limit = limit)
     }
 
     pub fn curve(self, curve: impl Into<AnimationCurve>) -> Self {
@@ -526,25 +638,30 @@ impl AnimationHandle<'_> {
     }
 
     pub fn status(&self) -> AnimationStatus {
-        self.animator.storage.get(self.id).map_or(AnimationStatus::NotRunning, |state|state.status())
+        self.animator
+            .storage
+            .get(self.id)
+            .map_or(AnimationStatus::NotRunning, |state| state.status())
     }
 }
 
 #[derive(Default, Debug)]
 pub struct Animator {
     cur_nanos: Nanos,
-
-    pending_count: usize,
+    pending_count: u32,
     pending_starts: HashMap<AnimationEvent, Vec<AnimationId>>,
     storage: AnimationStorage<AnimationState>,
 }
 
 impl Animator {
-
-    pub fn advance_by<V>(&mut self, nanos: Nanos, mut interpolate: impl FnMut(&AnimationCtx)->V) -> Option<V> {
+    pub fn advance_by<V>(
+        &mut self,
+        nanos: Nanos,
+        mut interpolate: impl FnMut(&AnimationCtx) -> V,
+    ) -> Option<V> {
         if self.storage.is_empty() {
-             None
-        }else {
+            None
+        } else {
             self.cur_nanos += nanos;
 
             let mut pending_events = VecDeque::new();
@@ -560,10 +677,7 @@ impl Animator {
                     remove
                 });
 
-                let ctx = AnimationCtx::new(
-                    None,
-                    &self.storage
-                );
+                let ctx = AnimationCtx::new(None, &self.storage);
                 interpolate(&ctx)
             };
 
@@ -601,31 +715,33 @@ impl Animator {
 
     pub fn running(&self) -> bool {
         // TODO: If we had waiting ones we could return a minimum time until one had to start
-        // then use a timer to get it
-        // TODO: Maintain a count of pending and a max wait time
-        !self
-            .storage
-            .iter()
-            .all(|s| matches!(s.status, AnimationStatusInternal::PendingEvent(_)))
+        // Could maintain a max wait time
+        (self.storage.size - self.pending_count) > 0
     }
 
-    pub fn is_empty(&self) -> bool{
+    pub fn is_empty(&self) -> bool {
         self.storage.is_empty()
     }
 
     pub fn new(&mut self) -> AnimationHandle {
-        let id = self.storage.insert(AnimationState::new(
-            1 as f64,
-            AnimationCurve::default(),
-            AnimationStatusInternal::Waiting(self.cur_nanos),
-        ));
+        let id = self
+            .storage
+            .insert(AnimationState::new(AnimationStatusInternal::Waiting(
+                self.cur_nanos,
+            )));
         AnimationHandle { id, animator: self }
     }
 
-    pub fn get(&mut self, id: AnimationId) -> AnimationHandle {
-        AnimationHandle {id, animator: self}
+    pub fn new_configured(&mut self, f: impl Fn(AnimationHandle)) -> AnimationHandle {
+        let mut handle = self.new();
+        let id = handle.id();
+        f(handle);
+        self.get(id)
     }
 
+    pub fn get(&mut self, id: AnimationId) -> AnimationHandle {
+        AnimationHandle { id, animator: self }
+    }
 }
 
 #[cfg(test)]
@@ -633,10 +749,10 @@ mod test {
     use super::*;
     use crate::animation::AnimationEvent::Ended;
     use crate::interp::InterpHolder::*;
-    use crate::{VisMarks, Mark};
-    use std::mem::size_of;
+    use crate::interp::{HasInterp, InterpNode, InterpResult};
     use crate::vis::{MarkInterp, MarkShapeInterp, TextMarkInterp};
-    use crate::interp::{InterpNode, HasInterp, InterpResult};
+    use crate::{Mark, VisMarks};
+    use std::mem::size_of;
 
     #[test]
     fn test_animator() {
@@ -655,26 +771,27 @@ mod test {
             animator.storage.get(ai_1).unwrap().status
         );
 
-        let mut advance =|animator: &mut Animator,  nanos: f64|->(Option<f64>,  Option<f64>){
-            let res = animator.advance_by(nanos, |ctx|{
-                (ctx.with_animation(ai_0, |ctx|ctx.progress()),
-                 ctx.with_animation( ai_1, |ctx|ctx.progress()))
+        let mut advance = |animator: &mut Animator, nanos: f64| -> (Option<f64>, Option<f64>) {
+            let res = animator.advance_by(nanos, |ctx| {
+                (
+                    ctx.with_animation(ai_0, |ctx| ctx.progress()),
+                    ctx.with_animation(ai_1, |ctx| ctx.progress()),
+                )
             });
             res.unwrap()
         };
 
         assert_eq!((Some(0.5), None), advance(&mut animator, 50.0));
 
-
         assert_eq!(
-             AnimationStatusInternal::PendingEvent(0.),
-             animator.storage.get(ai_1).unwrap().status
+            AnimationStatusInternal::PendingEvent(0.),
+            animator.storage.get(ai_1).unwrap().status
         );
 
         // Advance just beyond the first animations end.
         // It will be retiring (and forced to 1.0)
         // The second will still be waiting
-        assert_eq!((Some(1.0), None),  advance(&mut animator, 50.1));
+        assert_eq!((Some(1.0), None), advance(&mut animator, 50.1));
 
         assert_eq!(
             AnimationStatusInternal::Retiring,
@@ -716,8 +833,8 @@ mod test {
         );
 
         let mut my_line = Line::new((0.0, 0.0), (100.0, 100.0));
-        let mut advance =|animator: &mut Animator, line: &mut Line, nanos: f64|{
-            let res = animator.advance_by(nanos, |ctx|root.interp(ctx, line));
+        let mut advance = |animator: &mut Animator, line: &mut Line, nanos: f64| {
+            let res = animator.advance_by(nanos, |ctx| root.interp(ctx, line));
             res
         };
 
@@ -729,7 +846,7 @@ mod test {
         );
 
         advance(&mut animator, &mut my_line, 50.1);
-        assert_eq!(Line::new((20.0, 0.0), (100.0, 100.0)),  my_line);
+        assert_eq!(Line::new((20.0, 0.0), (100.0, 100.0)), my_line);
         assert_eq!(
             AnimationStatusInternal::Retiring,
             animator.storage.get(ai_0).unwrap().status
@@ -747,7 +864,6 @@ mod test {
         advance(&mut animator, &mut my_line, 10.);
         assert_eq!(Line::new((20.0, 110.0), (100.0, 100.0)), my_line);
     }
-
 
     // Curves
     // Events

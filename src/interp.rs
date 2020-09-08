@@ -1,3 +1,4 @@
+use crate::animation::{AnimationCtx, AnimationId, AnimationStatus};
 use druid::im::Vector;
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::piet::Color;
@@ -10,7 +11,6 @@ use std::num::NonZeroU32;
 use std::ops::Add;
 use std::time::Duration;
 use InterpError::*;
-use crate::animation::{AnimationCtx, AnimationId, AnimationStatus};
 
 #[derive(Eq, PartialEq, Debug)]
 pub enum InterpError {
@@ -53,7 +53,7 @@ pub trait Interp: Default + Debug {
                 InterpCoverage::Noop => None,
                 _ => Some(InterpHolder::Interp(self)),
             }),
-            selected: Default::default()
+            selected: Default::default(),
         }
     }
 
@@ -83,13 +83,13 @@ pub trait HasInterp: Clone + Debug {
 
     fn tween_now(self, other: Self, frac: f64) -> Result<Self, InterpError> {
         let mut res = self.clone();
-        Self::Interp::build(self, other).interp(&AnimationCtx::Immediate(frac, AnimationStatus::Running), &mut res)?;
+        Self::Interp::build(self, other).interp(
+            &AnimationCtx::Immediate(frac, AnimationStatus::Running),
+            &mut res,
+        )?;
         Ok(res)
     }
 }
-
-
-
 
 pub trait CustomInterp<T> {
     fn interp(&self, ctx: &AnimationCtx, val: &mut T) -> InterpResult;
@@ -147,17 +147,21 @@ impl<Value: HasInterp> InterpHolder<Value> {
     //TODO: Fallible merge
     fn merge(self, other: InterpHolder<Value>) -> InterpHolder<Value> {
         match (self, other) {
-            (InterpHolder::Interp(i1), InterpHolder::Interp(i2)) => InterpHolder::Interp(i1.merge(i2)),
+            (InterpHolder::Interp(i1), InterpHolder::Interp(i2)) => {
+                InterpHolder::Interp(i1.merge(i2))
+            }
             (c @ InterpHolder::Custom(_), other) => other,
             (_, c @ InterpHolder::Custom(_)) => c,
         }
     }
 
-    fn push_down_anim(self, id: AnimationId) ->Result<Self, Self>{
-        match self{
-            InterpHolder::Interp(interp) => interp.select_animation_segment(id)
-                .map(InterpHolder::Interp).map_err(InterpHolder::Interp),
-            InterpHolder::Custom(c)=>Err(InterpHolder::Custom(c))// TOD
+    fn push_down_anim(self, id: AnimationId) -> Result<Self, Self> {
+        match self {
+            InterpHolder::Interp(interp) => interp
+                .select_animation_segment(id)
+                .map(InterpHolder::Interp)
+                .map_err(InterpHolder::Interp),
+            InterpHolder::Custom(c) => Err(InterpHolder::Custom(c)), // TOD
         }
     }
 }
@@ -168,17 +172,17 @@ pub struct InterpNode<Value: HasInterp> {
     focused: Option<InterpHolder<Value>>,
 }
 
-impl <Value: HasInterp> Default for InterpNode<Value>{
+impl<Value: HasInterp> Default for InterpNode<Value> {
     fn default() -> Self {
-        Self{
+        Self {
             selected: Default::default(),
-            focused: Default::default()
+            focused: Default::default(),
         }
     }
 }
 
 fn select_internal<Value: HasInterp>(
-    by_id: Vec<(AnimationId, InterpHolder<Value>)>
+    by_id: Vec<(AnimationId, InterpHolder<Value>)>,
 ) -> (
     Option<InterpHolder<Value>>,
     Vec<(AnimationId, InterpHolder<Value>)>,
@@ -195,7 +199,9 @@ fn select_internal<Value: HasInterp>(
                     Some(to_merge)
                 }
             }
-            Err(leave_as_is) => {remaining.push((ai, leave_as_is));}
+            Err(leave_as_is) => {
+                remaining.push((ai, leave_as_is));
+            }
         }
     }
     (merged, remaining)
@@ -204,9 +210,11 @@ fn select_internal<Value: HasInterp>(
 impl<Value: HasInterp> InterpNode<Value> {
     pub fn coverage(&self) -> InterpCoverage {
         if self.selected.is_empty() {
-            self.focused.as_ref().map_or(InterpCoverage::Noop, |f| f.coverage())
+            self.focused
+                .as_ref()
+                .map_or(InterpCoverage::Noop, |f| f.coverage())
         } else {
-            InterpCoverage::Partial  // Always partial as some animations may not be running
+            InterpCoverage::Partial // Always partial as some animations may not be running
         }
     }
 
@@ -231,20 +239,20 @@ impl<Value: HasInterp> InterpNode<Value> {
     }
 
     pub fn interp(&mut self, ctx: &AnimationCtx, val: &mut Value) -> InterpResult {
-
         for (idx, interp) in &mut self.selected {
-            ctx.with_animation(*idx, |ctx|
+            ctx.with_animation(*idx, |ctx| {
                 if ctx.status() != AnimationStatus::NotRunning {
                     interp.interp(ctx, val)
-                }else{
+                } else {
                     OK
-                })
-                .unwrap_or(OK); // TODO combine errors
+                }
+            })
+            .unwrap_or(OK); // TODO combine errors
         }
 
-        if let Some(f) = &mut self.focused{
+        if let Some(f) = &mut self.focused {
             f.interp(ctx, val)
-        }else{
+        } else {
             OK
         }
     }
@@ -259,7 +267,8 @@ impl<Value: HasInterp> InterpNode<Value> {
                 InterpNode {
                     selected,
                     focused: Default::default(),
-                }},
+                }
+            }
             s => s, // TODO custom
         }
     }
@@ -273,28 +282,25 @@ impl<Value: HasInterp> InterpNode<Value> {
         } else if other.coverage() == InterpCoverage::Noop {
             self
         } else {
-
             let (si1, r1) = select_internal(self.selected);
             let (si2, r2) = select_internal(other.selected);
-            let selected =  r1.into_iter().chain(r2.into_iter()).collect();
+            let selected = r1.into_iter().chain(r2.into_iter()).collect();
 
-            let all = si1.into_iter()
+            let all = si1
+                .into_iter()
                 .chain(self.focused.into_iter())
                 .chain(si2.into_iter())
                 .chain(other.focused.into_iter());
 
-            let focused : Option<InterpHolder<Value>> = all.fold(None, |res, to_add|{
-                if res.is_none(){
+            let focused: Option<InterpHolder<Value>> = all.fold(None, |res, to_add| {
+                if res.is_none() {
                     Some(to_add)
-                }else {
-                    res.map(|r: InterpHolder<Value>|r.merge(to_add))
+                } else {
+                    res.map(|r: InterpHolder<Value>| r.merge(to_add))
                 }
             });
 
-            let ret = InterpNode {
-                selected,
-                focused
-            };
+            let ret = InterpNode { selected, focused };
 
             ret
         }
@@ -339,20 +345,18 @@ impl<Value: HasInterp, Key: Hash + Eq> Default for MapInterp<Value, Key> {
 }
 
 impl<Value: HasInterp + EnterExit + Debug, Key: Eq + Hash + Clone + Debug> HasInterp
-for HashMap<Key, Value>
+    for HashMap<Key, Value>
 {
     type Interp = MapInterp<Value, Key>;
 }
 
-
-
 impl<Value: HasInterp + EnterExit + Debug, Key: Debug + Hash + Eq + Clone> Interp
-for MapInterp<Value, Key>
+    for MapInterp<Value, Key>
 {
     type Value = HashMap<Key, Value>;
 
     fn interp(&mut self, ctx: &AnimationCtx, val: &mut HashMap<Key, Value>) -> InterpResult {
-        if !self.to_enlist.is_empty(){
+        if !self.to_enlist.is_empty() {
             for (k, v) in self.to_enlist.drain(..) {
                 val.insert(k, v);
             }
@@ -407,8 +411,16 @@ for MapInterp<Value, Key>
         }
 
         MapInterp {
-            to_enlist: self.to_enlist.into_iter().chain(other.to_enlist.into_iter()).collect(),
-            to_retire: self.to_retire.into_iter().chain( other.to_retire.into_iter()).collect(),
+            to_enlist: self
+                .to_enlist
+                .into_iter()
+                .chain(other.to_enlist.into_iter())
+                .collect(),
+            to_retire: self
+                .to_retire
+                .into_iter()
+                .chain(other.to_retire.into_iter())
+                .collect(),
             interps: interps.into_iter().collect(),
         }
     }
@@ -439,18 +451,21 @@ for MapInterp<Value, Key>
                     let e = n.enter();
                     interps.push((k.clone(), e.clone().tween(n)));
                     to_enlist.push((k, e));
-
                 }
                 (Some(o), None) => {
                     let e = o.exit();
                     interps.push((k.clone(), o.clone().tween(e)));
-                    to_retire.push( k);
+                    to_retire.push(k);
                 }
                 _ => (),
             }
         }
 
-        MapInterp { to_enlist, to_retire, interps }
+        MapInterp {
+            to_enlist,
+            to_retire,
+            interps,
+        }
     }
 }
 
@@ -618,7 +633,7 @@ impl Interp for LineInterp {
         self.p0.coverage() + self.p1.coverage()
     }
 
-    fn select_animation_segment(self, idx: AnimationId) -> Result<Self,Self> {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
         Ok(Self {
             p0: self.p0.select_anim(idx),
             p1: self.p1.select_anim(idx),
@@ -842,7 +857,7 @@ impl Interp for StringInterp {
         true
     }
 
-    fn select_animation_segment(self, idx: AnimationId) -> Result<Self,Self> {
+    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
         Err(self)
     }
 
@@ -930,25 +945,19 @@ impl Interp for ColorInterp {
         let (r, g, b, a) = old.as_rgba();
         let (r2, g2, b2, a2) = new.as_rgba();
 
-        ColorInterp::Rgba(
-            r.tween(r2),
-            g.tween(g2),
-            b.tween(b2),
-            a.tween(a2)
-        )
+        ColorInterp::Rgba(r.tween(r2), g.tween(g2), b.tween(b2), a.tween(a2))
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::animation::{AnimationId, AnimationEvent};
     use crate::animation::AnimationEvent::Ended;
+    use crate::animation::{AnimationEvent, AnimationId};
     use crate::interp::InterpHolder::*;
-    use crate::{VisMarks, Mark, Animator};
-    use std::mem::size_of;
     use crate::vis::{MarkInterp, MarkShapeInterp, TextMarkInterp};
-
+    use crate::{Animator, Mark, VisMarks};
+    use std::mem::size_of;
 
     #[test]
     fn test_merge() {
@@ -959,7 +968,7 @@ mod test {
             x1: Default::default(),
             y1: Default::default(),
         }
-            .animation();
+        .animation();
         rect_1
             .interp(&AnimationCtx::running(0.5), &mut subject)
             .expect("ok");
@@ -971,7 +980,7 @@ mod test {
             x1: Default::default(),
             y1: Default::default(),
         }
-            .animation();
+        .animation();
         subject = Rect::from_origin_size(Point::ZERO, (100., 100.));
         rect_2
             .interp(&AnimationCtx::running(0.5), &mut subject)
@@ -998,7 +1007,11 @@ mod test {
         root_0.get().p0.get().x = 0.0.tween(20.0).select_anim(ai_0);
         let mut root_1: InterpNode<Line> = Default::default();
 
-        let ai_1 = animator.new().duration(Duration::from_nanos(100)).after(Ended(ai_0)).id();
+        let ai_1 = animator
+            .new()
+            .duration(Duration::from_nanos(100))
+            .after(Ended(ai_0))
+            .id();
         root_1.get().p0.get().y = 100.0.tween(200.0).select_anim(ai_1);
 
         //let p = std::mem::take(&mut root_0.get().p0).merge(std::mem::take( &mut root_1.get().p0) );
@@ -1010,23 +1023,23 @@ mod test {
 
         match merged.focused {
             Some(Interp(LineInterp {
-                            p0:
-                            InterpNode {
-                                focused:
-                                Some(Interp(PointInterp {
-                                                x:
-                                                InterpNode {
-                                                    selected: sel_x, ..
-                                                },
-                                                y:
-                                                InterpNode {
-                                                    selected: sel_y, ..
-                                                },
-                                            })),
-                                ..
-                            },
-                            p1: InterpNode { focused: None, .. },
-                        })) if sel_x[0].0 == ai_0 && sel_y[0].0 == ai_1 => {}
+                p0:
+                    InterpNode {
+                        focused:
+                            Some(Interp(PointInterp {
+                                x:
+                                    InterpNode {
+                                        selected: sel_x, ..
+                                    },
+                                y:
+                                    InterpNode {
+                                        selected: sel_y, ..
+                                    },
+                            })),
+                        ..
+                    },
+                p1: InterpNode { focused: None, .. },
+            })) if sel_x[0].0 == ai_0 && sel_y[0].0 == ai_1 => {}
             ex => panic!("{:#?}", ex),
         }
     }
@@ -1057,22 +1070,22 @@ mod test {
         if !(match merged {
             InterpNode {
                 focused:
-                Some(Interp(LineInterp {
-                                p0:
-                                InterpNode {
-                                    focused:
+                    Some(Interp(LineInterp {
+                        p0:
+                            InterpNode {
+                                focused:
                                     Some(Interp(PointInterp {
-                                                    x:
-                                                    InterpNode {
-                                                        selected: sa,
-                                                        focused: Noop,
-                                                    },
-                                                    y: InterpNode { focused: None, .. },
-                                                })),
-                                    ..
-                                },
-                                p1: InterpNode { focused: None, .. },
-                            })),
+                                        x:
+                                            InterpNode {
+                                                selected: sa,
+                                                focused: Noop,
+                                            },
+                                        y: InterpNode { focused: None, .. },
+                                    })),
+                                ..
+                            },
+                        p1: InterpNode { focused: None, .. },
+                    })),
                 ..
             } => match sa[..] {
                 [(ai_0_ex, _), (ai_1_ex, _)] if ai_0_ex == ai_0 && ai_1_ex == ai_1 => true,
@@ -1101,17 +1114,28 @@ mod test {
         let merged = root_0.merge(root_1);
 
         match merged {
-            InterpNode { focused: Some(Interp(LineInterp {
-                                                  p0:
-                                                  InterpNode {focused: Some(Interp(PointInterp {
-                                                                                       x: InterpNode {selected: sa, focused: Noop},
-                                                                                       y: InterpNode {focused:  None, ..},
-                                                                                   })), ..},
-                                                  p1: InterpNode {focused: None, ..},
-                                              })), ..} => (),
+            InterpNode {
+                focused:
+                    Some(Interp(LineInterp {
+                        p0:
+                            InterpNode {
+                                focused:
+                                    Some(Interp(PointInterp {
+                                        x:
+                                            InterpNode {
+                                                selected: sa,
+                                                focused: Noop,
+                                            },
+                                        y: InterpNode { focused: None, .. },
+                                    })),
+                                ..
+                            },
+                        p1: InterpNode { focused: None, .. },
+                    })),
+                ..
+            } => (),
             ex => panic!("{:#?}", ex),
         }
-
 
         let mut root_0: InterpNode<Line> = line_tw(1.);
         root_0.get().p0.get().x = Default::default();
@@ -1119,14 +1143,26 @@ mod test {
         let merged = root_0.merge(root_1);
 
         match merged {
-            InterpNode {focused:Some(Interp(LineInterp {
-                                                p0:
-                                                InterpNode {focused: Some(Interp(PointInterp {
-                                                                                     x: InterpNode {selected: sa, focused: None},
-                                                                                     y: InterpNode {focused: None, ..},
-                                                                                 })), ..},
-                                                p1: InterpNode {focused: None, ..},
-                                            })), ..} => (),
+            InterpNode {
+                focused:
+                    Some(Interp(LineInterp {
+                        p0:
+                            InterpNode {
+                                focused:
+                                    Some(Interp(PointInterp {
+                                        x:
+                                            InterpNode {
+                                                selected: sa,
+                                                focused: None,
+                                            },
+                                        y: InterpNode { focused: None, .. },
+                                    })),
+                                ..
+                            },
+                        p1: InterpNode { focused: None, .. },
+                    })),
+                ..
+            } => (),
             ex => panic!("{:#?}", ex),
         }
     }
@@ -1141,15 +1177,19 @@ mod test {
 
         let matched = match res {
             Some(Interp(PointInterp {
-                            x: InterpNode {selected: ids, focused: None},
-                            y: InterpNode {focused: None, ..},
-                        })) => match &ids[..] {
+                x:
+                    InterpNode {
+                        selected: ids,
+                        focused: None,
+                    },
+                y: InterpNode { focused: None, .. },
+            })) => match &ids[..] {
                 [(
                     found_id,
                     Interp(F64Interp {
-                               start: 1.0,
-                               end: 6.7,
-                           }),
+                        start: 1.0,
+                        end: 6.7,
+                    }),
                 )] => true,
                 _ => false,
             },

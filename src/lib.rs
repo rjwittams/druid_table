@@ -2,7 +2,6 @@
 mod macros;
 
 mod animation;
-mod interp;
 mod axis_measure;
 mod builder;
 mod cells;
@@ -10,6 +9,7 @@ mod columns;
 mod config;
 mod data;
 mod headings;
+mod interp;
 pub mod numbers_table;
 mod render_ext;
 mod selection;
@@ -35,7 +35,10 @@ pub use vis::{
     VisEvent, VisMarks, VisMarksInterp, Visualization,
 };
 
-pub use animation::Animator;
+pub use animation::{
+    AnimationCtx, AnimationCurve, AnimationDirection, AnimationEvent, AnimationId, Animator,
+    SimpleCurve,
+};
 
 #[macro_use]
 extern crate druid;

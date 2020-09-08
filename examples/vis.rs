@@ -1,5 +1,5 @@
 use druid::kurbo::{Point, Rect, Size};
-use druid::widget::{Button, Flex};
+use druid::widget::{Button, Flex, Tabs};
 use druid::{AppLauncher, Color, Data, Lens, Widget, WindowDesc};
 use druid_table::{
     AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx,
@@ -18,40 +18,15 @@ use rand::Rng;
 // https://vega.github.io/vega/examples/bar-chart/
 
 fn main_widget() -> impl Widget<TopLevel> {
-    Flex::column()
+    let bar_chart = Flex::column()
         .with_child(
-            Button::new("Change data").on_click(|_, tl: &mut TopLevel, _| {
-                let mut rng = rand::thread_rng();
-                for (_, am) in tl.records.iter_mut().skip(1) {
-                    if rng.gen_bool(0.3) {
-                        *am = (*am as i32 + (rng.gen_range(-0.15, 0.16) * *am as f64) as i32).max(0)
-                            as u32;
-                    }
-                }
-
-                let move_rand =
-                    |rng: &mut ThreadRng, a: &mut Vector<CatCount>, b: &mut Vector<CatCount>| {
-                        if !a.is_empty() {
-                            let idx = if a.len() == 1 {
-                                0
-                            } else {
-                                rng.gen_range(0, a.len() - 1)
-                            };
-                            let rem = a.remove(idx);
-                            b.push_back(rem)
-                        }
-                    };
-
-                if rng.gen_bool(0.1) {
-                    move_rand(&mut rng, &mut tl.records, &mut tl.others);
-                }
-
-                if rng.gen_bool(0.1) {
-                    move_rand(&mut rng, &mut tl.others, &mut tl.records);
-                }
-            }),
+            Button::new("Change data").on_click(|_, tl: &mut TopLevel, _| tl.change_records()),
         )
-        .with_flex_child(Vis::new(MyBarChart::new()), 1.)
+        .with_flex_child(Vis::new(MyBarChart::new()), 1.);
+
+    Tabs::new()
+        .with_tab("Bar chart", bar_chart)
+        .with_tab("Reversing", Vis::new(Reversing))
 }
 
 fn main() {
@@ -92,6 +67,38 @@ type CatCount = (String, u32);
 struct TopLevel {
     records: Vector<CatCount>,
     others: Vector<CatCount>,
+}
+
+impl TopLevel {
+    fn change_records(&mut self) {
+        let mut rng = rand::thread_rng();
+        for (_, am) in self.records.iter_mut().skip(1) {
+            if rng.gen_bool(0.3) {
+                *am = (*am as i32 + (rng.gen_range(-0.15, 0.16) * *am as f64) as i32).max(0) as u32;
+            }
+        }
+
+        let move_rand =
+            |rng: &mut ThreadRng, a: &mut Vector<CatCount>, b: &mut Vector<CatCount>| {
+                if !a.is_empty() {
+                    let idx = if a.len() <= 1 {
+                        0
+                    } else {
+                        rng.gen_range(0, a.len() - 1)
+                    };
+                    let rem = a.remove(idx);
+                    b.push_back(rem)
+                }
+            };
+
+        if rng.gen_bool(0.1) {
+            move_rand(&mut rng, &mut self.records, &mut self.others);
+        }
+
+        if rng.gen_bool(0.1) {
+            move_rand(&mut rng, &mut self.others, &mut self.records);
+        }
+    }
 }
 
 struct MyBarChart {
@@ -148,10 +155,14 @@ impl Visualization for MyBarChart {
                 *tooltip_item = self
                     .rec_to_idx
                     .get(idx)
-                    .and_then(|idx| data.records.get(*idx).cloned())
+                    .and_then(|idx| data.records.get(*idx).cloned());
+                log::info!("mouse enter {:?}", tooltip_item)
             }
-            VisEvent::MouseOut(_) => *tooltip_item = None,
-            e => log::info!("Did not match event {:?}", e),
+            VisEvent::MouseOut(_) => {
+                *tooltip_item = None;
+                log::info!("mouse out {:?}", tooltip_item)
+            }
+            _ => {}
         };
     }
 
@@ -179,6 +190,7 @@ impl Visualization for MyBarChart {
                 None,
             ))
         }
+        dbg!(&marks);
         marks
     }
 
@@ -201,5 +213,56 @@ impl Visualization for MyBarChart {
                 )
             })
             .collect()
+    }
+}
+
+struct Reversing;
+
+impl Visualization for Reversing {
+    type Input = TopLevel;
+    type State = Point;
+    type Layout = Size;
+
+    fn layout(&mut self, data: &Self::Input, size: Size) -> Self::Layout {
+        size
+    }
+
+    fn event(
+        &self,
+        data: &mut Self::Input,
+        layout: &Self::Layout,
+        state: &mut Self::State,
+        event: &VisEvent,
+    ) {
+        match event {
+            VisEvent::MouseMove(_, point) => *state = *point,
+            _ => {}
+        }
+    }
+
+    fn layout_marks(&self, layout: &Self::Layout) -> Vec<DrawableAxis> {
+        vec![]
+    }
+
+    fn state_marks(
+        &self,
+        data: &Self::Input,
+        layout: &Self::Layout,
+        state: &Self::State,
+    ) -> Vec<Mark> {
+        let s = vec![Mark::new(
+            MarkId::StateMark(StateName("thing"), 0),
+            MarkShape::Rect(Rect::from_center_size(
+                *state,
+                Size::new(layout.width / 5., layout.width / 5.),
+            )),
+            MarkProps::new(Color::rgb(0xff, 0, 0)),
+            Some(MarkOverrides::new(Color::rgb(0x99, 0, 0xcc))),
+        )];
+        s
+    }
+
+    fn data_marks(&mut self, data: &Self::Input, layout: &Self::Layout) -> Vec<Mark> {
+        vec![]
     }
 }

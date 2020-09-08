@@ -1,5 +1,4 @@
-
-use crate::LogIdx;
+use crate::{LogIdx, SimpleCurve};
 use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2};
 use druid::piet::{FontFamily, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::RenderContext;
@@ -8,7 +7,7 @@ use druid::{
     PaintCtx, UpdateCtx, Widget,
 };
 use itertools::Itertools;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::f64::consts::LN_10;
 use std::f64::NAN;
 use std::fmt::{Debug, Display};
@@ -16,8 +15,10 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use crate::animation::{Animator, AnimationCtx, AnimationId, AnimationEvent, AnimationCurve};
-use crate::interp::{InterpNode, HasInterp, Interp, InterpCoverage, InterpResult, InterpError, OK, EnterExit};
+use crate::animation::{AnimationCtx, AnimationCurve, AnimationEvent, AnimationId, Animator};
+use crate::interp::{
+    EnterExit, HasInterp, Interp, InterpCoverage, InterpError, InterpNode, InterpResult, OK,
+};
 
 #[derive(Debug, Default)]
 pub struct TextMarkInterp {
@@ -253,7 +254,6 @@ impl HasInterp for Mark {
 
 impl Interp for MarkInterp {
     type Value = Mark;
-
 
     fn interp(&mut self, frac: &AnimationCtx, val: &mut Mark) -> InterpResult {
         self.shape.interp(frac, &mut val.shape)?;
@@ -513,6 +513,7 @@ impl DrawableAxis {
 pub enum VisEvent {
     MouseEnter(MarkId),
     MouseOut(MarkId),
+    MouseMove(Option<MarkId>, Point),
 }
 
 pub trait Visualization {
@@ -651,27 +652,12 @@ impl<V: Visualization> VisInner<V> {
         }
     }
 
-    fn merge_animation(
-        &mut self,
-        mut interp: InterpNode<VisMarks>
-    ) -> Result<(), InterpError> {
+    fn merge_animation(&mut self, mut interp: InterpNode<VisMarks>) -> Result<(), InterpError> {
         if interp.coverage() != InterpCoverage::Noop {
             let taken = std::mem::take(&mut self.interp);
             self.interp = taken.merge(interp);
         }
         OK
-    }
-
-    fn unhover(
-        &mut self,
-        visual: &mut V,
-        data: &mut V::Input,
-    ) {
-        if let Some(focus) = self.hovered {
-            visual.event(data, &self.layout, &mut self.state, &VisEvent::MouseOut(focus));
-            self.animator.event(Vis::<V>::UNHOVER);
-        }
-        self.hovered = None;
     }
 }
 
@@ -695,7 +681,7 @@ impl<V: Visualization> Vis<V> {
             let state: V::State = Default::default();
 
             let layout = self.visual.layout(data, size);
-            let state_marks = Default::default(); //self.visual.state_marks(data, &layout, &state);
+            let state_marks = self.visual.state_marks(data, &layout, &state);
             let data_marks = self.visual.data_marks(data, &layout);
             let layout_marks = self.visual.layout_marks(&layout);
 
@@ -715,30 +701,27 @@ impl<V: Visualization> Vis<V> {
         self.inner.as_mut().unwrap()
     }
 
-    fn regenerate(
-        &mut self,
-        size: Size,
-        data: &V::Input,
-    ) -> Result<AnimationId, InterpError> {
+    fn regenerate(&mut self, size: Size, data: &V::Input) -> Result<AnimationId, InterpError> {
         if let Some(inner) = &mut self.inner {
             inner.layout = self.visual.layout(data, size);
 
             let destination = VisMarks::build(
                 self.visual.layout_marks(&inner.layout),
-                Default::default(), //self.visual.state_marks(data, &inner.layout, &inner.state),
+                self.visual.state_marks(data, &inner.layout, &inner.state),
                 self.visual.data_marks(data, &inner.layout),
             );
 
             let interp = inner.current.clone().tween(destination);
-            let id = inner.animator
+            let id = inner
+                .animator
                 .new()
-                .duration(Duration::from_millis(1000) )
-                .curve(AnimationCurve::Linear)
+                .duration(Duration::from_millis(1000))
+                .curve(SimpleCurve::Linear)
                 .id();
 
             let selected = interp.select_anim(id);
 
-            inner.merge_animation(selected).map(|_|id)
+            inner.merge_animation(selected).map(|_| id)
         } else {
             Err(InterpError::NotRunning)
         }
@@ -756,19 +739,21 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         let mut top_level = InterpNode::<VisMarks>::default();
         let mut unhover = false;
 
+        let mut vis_events = VecDeque::new();
+
         match event {
             Event::MouseMove(me) => {
                 let current = &inner.current;
                 if let Some(mark) = current.find_mark(inner.transform.inverse() * me.pos) {
-                    if inner.hovered != Some(mark.id) {
-                        unhover = true;
-                        visual.event(
-                            data,
-                            &inner.layout,
-                            &mut inner.state,
-                            &VisEvent::MouseEnter(mark.id),
-                        );
-                        inner.hovered = Some(mark.id);
+                    let new_hovered = Some(mark.id);
+                    if inner.hovered != new_hovered {
+                        if let Some(focus) = inner.hovered {
+                            vis_events.push_back(VisEvent::MouseOut(focus));
+                            inner.animator.event(Vis::<V>::UNHOVER);
+                        }
+
+                        vis_events.push_back(VisEvent::MouseEnter(mark.id));
+                        inner.hovered = new_hovered;
 
                         if mark.hover.is_some() {
                             let hover_idx = inner
@@ -784,7 +769,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                                 .animator
                                 .new()
                                 .duration(Duration::from_millis(2500))
-                                .curve(AnimationCurve::EaseOut)
+                                .curve(SimpleCurve::EaseOut)
                                 .after(Self::UNHOVER)
                                 .id();
 
@@ -794,25 +779,28 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
                             top_level.get().marks.get().get(&mark.id).get().current =
                                 color_change.merge(change_back);
-
-                            //log::info!( "Animator after hover {:#?} {:#?}", inner.animator, inner.animation);
                         }
-
                     }
                 } else {
                     unhover = true;
                 }
+
+                vis_events.push_back(VisEvent::MouseMove(
+                    inner.hovered,
+                    inner.transform.inverse() * me.pos,
+                ))
             }
             _ => {}
         }
 
-        if unhover {
-            inner.unhover(visual, data);
+        for event in vis_events.into_iter() {
+            visual.event(data, &inner.layout, &mut inner.state, &event)
         }
 
         inner.merge_animation(top_level);
 
         if !old_state.same(&inner.state) {
+            log::info!("Regen state marks");
             visual
                 .state_marks(data, &inner.layout, &inner.state)
                 .into_iter()
@@ -821,12 +809,12 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         .animator
                         .new()
                         .duration(Duration::from_secs(3))
-                        .curve(AnimationCurve::OutElastic)
+                        .curve(SimpleCurve::OutElastic)
                         .id();
                     let id = mark.id;
                     let start = inner.current.marks.entry(id).or_insert(mark.enter());
                     *inner.interp.get().marks.get().get(&id) =
-                         start.clone().tween(mark).select_anim(anim_idx);
+                        start.clone().tween(mark).select_anim(anim_idx);
                 })
         }
 
@@ -839,13 +827,14 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         if let (
             LifeCycle::AnimFrame(nanos),
             Some(VisInner {
-                animator, current, interp: animation, ..
+                animator,
+                current,
+                interp: animation,
+                ..
             }),
         ) = (event, &mut self.inner)
         {
-            let res = animator.advance_by((*nanos) as f64, |ctx|{
-                animation.interp(ctx, current)
-            });
+            let res = animator.advance_by((*nanos) as f64, |ctx| animation.interp(ctx, current));
             if let Some(Err(e)) = res {
                 log::warn!("Interp error running animator {:?}", e);
             }
