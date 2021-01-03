@@ -1,18 +1,13 @@
 use druid::kurbo::{Circle, Point, Rect, Size};
 use druid::widget::{
-    Button, CrossAxisAlignment, Flex, Label, LabelText, Parse, RadioGroup, Stepper, Tabs, TextBox,
+    Button, CrossAxisAlignment, Flex, Label, LabelText, Parse, RadioGroup, TextBox,
     WidgetExt,
 };
 use druid::{
     theme, AppLauncher, BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, Lens,
     LifeCycle, LifeCycleCtx, PaintCtx, UpdateCtx, Widget, WindowDesc,
 };
-use druid_table::{
-    AnimationCurve, AnimationDirection, AnimationId, Animator, AxisName, BandScale,
-    BandScaleFactory, CellRenderExt, DatumId, DrawableAxis, F64Range, LinearScale, LogIdx, Mark,
-    MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, SimpleCurve, StateName,
-    TextMark, Vis, VisEvent, Visualization,
-};
+use druid_table::{AnimationDirection, AnimationId, Animator, CellRenderExt, SimpleCurve};
 use im::Vector;
 use std::collections::HashMap;
 
@@ -63,7 +58,7 @@ fn main_widget() -> impl Widget<AnimState> {
             group(
                 "Direction",
                 RadioGroup::new(vec![
-                    ("Normal", AnimationDirection::Normal),
+                    ("Forward", AnimationDirection::Forward),
                     ("Reverse", AnimationDirection::Reverse),
                     ("Alternate", AnimationDirection::Alternate),
                     ("AlternateReverse", AnimationDirection::AlternateReverse),
@@ -77,9 +72,17 @@ fn main_widget() -> impl Widget<AnimState> {
                 .lens(AnimState::repeat_limit),
         )
         .with_child(
-            Button::new("Animate size").on_click(|_, state: &mut AnimState, _| {
-                state.toggle_size = !state.toggle_size;
-            }),
+            Flex::row()
+                .with_child(
+                    Button::new("Animate size").on_click(|_, state: &mut AnimState, _| {
+                        state.toggle_size = !state.toggle_size;
+                    }),
+                )
+                .with_child(Button::new("Animate alpha").on_click(
+                    |_, state: &mut AnimState, _| {
+                        state.toggle_alpha = !state.toggle_alpha;
+                    },
+                )),
         )
         .with_flex_spacer(1.)
         .fix_width(200.0);
@@ -98,8 +101,9 @@ fn main() {
     let initial_state = AnimState {
         curve: SimpleCurve::Linear,
         duration: Some(1000),
-        direction: AnimationDirection::Normal,
+        direction: AnimationDirection::Forward,
         toggle_size: false,
+        toggle_alpha: false,
         repeat_limit: Some(1),
     };
 
@@ -115,8 +119,9 @@ struct AnimState {
     curve: SimpleCurve,
     duration: Option<usize>,
     direction: AnimationDirection,
-    toggle_size: bool,
     repeat_limit: Option<usize>,
+    toggle_size: bool,
+    toggle_alpha: bool,
 }
 
 struct DrawState {
@@ -143,33 +148,30 @@ struct AnimatedWidget {
 }
 
 impl AnimatedWidget {
-    fn animate_size(&mut self, data: &AnimState) {
-        self.ids.0 = Some(
+    fn register_animation(&mut self, data: &AnimState) -> Option<AnimationId> {
+        Some(
             self.animator
                 .new()
                 .curve(data.curve)
                 .repeat_limit(data.repeat_limit)
                 .direction(data.direction)
-                .duration(Duration::from_millis(1000))
+                .duration(Duration::from_millis(data.duration.unwrap_or(1000) as u64))
                 .id(),
-        );
+        )
+    }
+
+    fn animate_size(&mut self, data: &AnimState) {
+        self.ids.0 = self.register_animation(data);
+    }
+
+    fn animate_alpha(&mut self, data: &AnimState) {
+        self.ids.1 = self.register_animation(data);
     }
 }
 
 impl Widget<AnimState> for AnimatedWidget {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut AnimState, env: &Env) {}
-
-    fn lifecycle(
-        &mut self,
-        ctx: &mut LifeCycleCtx,
-        event: &LifeCycle,
-        data: &AnimState,
-        env: &Env,
-    ) {
-        if let LifeCycle::WidgetAdded = event {
-            self.animate_size(data);
-            ctx.request_anim_frame()
-        } else if let LifeCycle::AnimFrame(nanos) = event {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut AnimState, _env: &Env) {
+        if let Event::AnimFrame(nanos) = event {
             // State split
             let (rad, alpha) = self.ids;
             let draw = &mut self.draw;
@@ -192,19 +194,36 @@ impl Widget<AnimState> for AnimatedWidget {
         }
     }
 
+    fn lifecycle(
+        &mut self,
+        ctx: &mut LifeCycleCtx,
+        event: &LifeCycle,
+        data: &AnimState,
+        _env: &Env,
+    ) {
+        if let LifeCycle::WidgetAdded = event {
+            self.animate_size(data);
+            ctx.request_anim_frame()
+        }
+    }
+
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &AnimState, data: &AnimState, env: &Env) {
         if old_data.toggle_size != data.toggle_size {
             self.animate_size(data);
+            ctx.request_anim_frame();
+        }
+        if old_data.toggle_alpha != data.toggle_alpha {
+            self.animate_alpha(data);
             ctx.request_anim_frame();
         }
     }
 
     fn layout(
         &mut self,
-        ctx: &mut LayoutCtx,
+        _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        data: &AnimState,
-        env: &Env,
+        _data: &AnimState,
+        _env: &Env,
     ) -> Size {
         let size = bc.max();
         self.draw.circle.center = Point::new(size.width / 2., size.height / 2.);

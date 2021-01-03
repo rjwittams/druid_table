@@ -11,10 +11,11 @@ use druid::kurbo::{Line, PathEl};
 use druid::piet::{FontFamily, Text, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::widget::TextBox;
-use druid::{theme, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
+use druid::{theme, ArcStr, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 pub trait EditorFactory<RowData> {
     fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;
@@ -237,7 +238,7 @@ where
 #[derive(Clone)]
 pub struct TextCell {
     text_color: KeyOrValue<Color>,
-    font_name: KeyOrValue<&'static str>,
+    font_name: KeyOrValue<ArcStr>,
     font_size: KeyOrValue<f64>,
     cached_font: Option<FontFamily>,
 }
@@ -246,7 +247,7 @@ impl TextCell {
     pub fn new() -> Self {
         TextCell {
             text_color: Color::BLACK.into(),
-            font_name: theme::FONT_NAME.into(),
+            font_name: ArcStr::from("Gill Sans").into(),
             font_size: theme::TEXT_SIZE_NORMAL.into(),
             cached_font: None,
         }
@@ -257,7 +258,7 @@ impl TextCell {
         self
     }
 
-    pub fn font_name(mut self, font_name: impl Into<KeyOrValue<&'static str>>) -> TextCell {
+    pub fn font_name(mut self, font_name: impl Into<KeyOrValue<ArcStr>>) -> TextCell {
         self.font_name = font_name.into();
         self
     }
@@ -268,7 +269,10 @@ impl TextCell {
     }
 
     fn resolve_font(&self, ctx: &mut PaintCtx, env: &Env) -> FontFamily {
-        let font: FontFamily = ctx.text().font_family(self.font_name.resolve(env)).unwrap(); // TODO errors / fallback
+        let font: FontFamily = ctx
+            .text()
+            .font_family(&*self.font_name.resolve(env))
+            .unwrap(); // TODO errors / fallback
         font
     }
 
@@ -278,7 +282,7 @@ impl TextCell {
 
         if let Ok(layout) = ctx
             .text()
-            .new_text_layout(&data)
+            .new_text_layout(data.to_string())
             .font(font.clone(), self.font_size.resolve(env))
             .text_color(self.text_color.resolve(env))
             .build()
@@ -310,7 +314,7 @@ impl CellRender<String> for TextCell {
             let font = self.resolve_font(ctx, env);
             ctx.stroke(
                 Line::new((0., 0.), (100., 100.)),
-                &Color::rgb(0xff, 0, 0),
+                &Color::rgb8(0xff, 0, 0),
                 2.,
             );
             self.paint_impl(ctx, &data, env, &font);

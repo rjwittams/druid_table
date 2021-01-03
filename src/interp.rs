@@ -84,7 +84,7 @@ pub trait HasInterp: Clone + Debug {
     fn tween_now(self, other: Self, frac: f64) -> Result<Self, InterpError> {
         let mut res = self.clone();
         Self::Interp::build(self, other).interp(
-            &AnimationCtx::Immediate(frac, AnimationStatus::Running),
+            &AnimationCtx::Immediate(frac, AnimationStatus::Running, false),
             &mut res,
         )?;
         Ok(res)
@@ -239,9 +239,11 @@ impl<Value: HasInterp> InterpNode<Value> {
     }
 
     pub fn interp(&mut self, ctx: &AnimationCtx, val: &mut Value) -> InterpResult {
+        let mut first = true;
         for (idx, interp) in &mut self.selected {
-            ctx.with_animation(*idx, |ctx| {
+            ctx.with_animation_full(*idx, false, |ctx| {
                 if ctx.status() != AnimationStatus::NotRunning {
+                    first = false;
                     interp.interp(ctx, val)
                 } else {
                     OK
@@ -489,7 +491,13 @@ impl Interp for F64Interp {
     type Value = f64;
 
     fn interp(&mut self, ctx: &AnimationCtx, val: &mut f64) -> InterpResult {
-        *val = Self::interp_raw(self.start, self.end, ctx.progress());
+        let raw = Self::interp_raw(self.start, self.end, ctx.progress());
+        if ctx.additive() {
+            let diff = raw - self.start;
+            *val += diff;
+        } else {
+            *val = raw
+        }
         OK
     }
 

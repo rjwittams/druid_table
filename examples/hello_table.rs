@@ -88,7 +88,7 @@ impl CellRender<f64> for PieCell {
             0.,
             2. * PI * *data,
         );
-        ctx.fill(&circle, &Color::rgb(0x0, 0xFF, 0x0));
+        ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
 
         ctx.stroke(&circle, &Color::BLACK, 1.0);
     }
@@ -225,13 +225,13 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
         .with_column(
             "Greeting 2 with very long column name",
             TextCell::new()
-                .font_name(KeyOrValue::Concrete(Value::String("Courier New".into())))
+                .font_name(KeyOrValue::Concrete("Courier New".into()))
                 .lens(HelloRow::greeting),
         )
         .with_column(
             "Greeting 3",
             TextCell::new()
-                .text_color(Color::rgb(0xD0, 0, 0))
+                .text_color(Color::rgb8(0xD0, 0, 0))
                 .lens(HelloRow::greeting),
         )
         .with_column("Greeting 4", TextCell::new().lens(HelloRow::greeting))

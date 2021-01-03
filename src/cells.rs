@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetPod,
+    Affine, BoxConstraints, Command, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
+    LifeCycleCtx, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetPod,
 };
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
@@ -472,7 +472,7 @@ where
     ) {
         if let LifeCycle::WidgetAdded = event {
             self.resolved_config = Some(self.config.resolve(env));
-            ctx.submit_command(INIT_CELLS.with(()), ctx.widget_id());
+            ctx.submit_command(Command::new(INIT_CELLS, (), ctx.widget_id()));
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
@@ -497,11 +497,19 @@ where
         if !old_data.data.same(&data.data)
             || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows])
         {
-            ctx.submit_command(REMAP_CHANGED.with(TableAxis::Rows), ctx.widget_id());
+            ctx.submit_command(Command::new(
+                REMAP_CHANGED,
+                TableAxis::Rows,
+                ctx.widget_id(),
+            ));
         }
 
         if !old_data.remap_specs[TableAxis::Columns].same(&data.remap_specs[TableAxis::Columns]) {
-            ctx.submit_command(REMAP_CHANGED.with(TableAxis::Columns), ctx.widget_id());
+            ctx.submit_command(Command::new(
+                REMAP_CHANGED,
+                TableAxis::Columns,
+                ctx.widget_id(),
+            ));
         }
 
         if !old_data.selection.same(&data.selection) {

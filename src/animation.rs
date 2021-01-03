@@ -18,6 +18,7 @@ type Animations = AnimationStorage<AnimationState>;
 #[derive(Debug)]
 pub struct AnimationCtxInner<'a> {
     focus: Option<AnimationId>,
+    additive: bool,
     animations: &'a Animations,
 }
 
@@ -32,7 +33,7 @@ impl AnimationCtxInner<'_> {
 #[derive(Debug)]
 pub enum AnimationCtx<'a> {
     Full(AnimationCtxInner<'a>),
-    Immediate(f64, AnimationStatus),
+    Immediate(f64, AnimationStatus, bool),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -46,16 +47,20 @@ pub enum AnimationStatus {
 
 impl AnimationCtx<'_> {
     pub fn running(frac: f64) -> AnimationCtx<'static> {
-        AnimationCtx::Immediate(frac, AnimationStatus::Running)
+        AnimationCtx::Immediate(frac, AnimationStatus::Running, false)
     }
 
-    fn new(focus: Option<AnimationId>, animations: &Animations) -> AnimationCtx {
+    fn new(focus: Option<AnimationId>, animations: &Animations, additive: bool) -> AnimationCtx {
         match focus {
             Some(current_segment) if !animations.contains(current_segment) => panic!(
                 "animation segment out of range {:?} {:?}",
                 current_segment, animations
             ),
-            _ => AnimationCtx::Full(AnimationCtxInner { focus, animations }),
+            _ => AnimationCtx::Full(AnimationCtxInner {
+                focus,
+                animations,
+                additive,
+            }),
         }
     }
 
@@ -70,18 +75,34 @@ impl AnimationCtx<'_> {
         clamp_fraction(self.progress())
     }
 
+    pub fn additive(&self) -> bool {
+        match self {
+            AnimationCtx::Full(inner) => inner.additive,
+            AnimationCtx::Immediate(_, _, additive) => *additive,
+        }
+    }
+
     pub fn status(&self) -> AnimationStatus {
         match self {
             AnimationCtx::Full(inner) => inner
                 .with_focused(|seg| seg.status())
                 .unwrap_or(AnimationStatus::NotRunning),
-            AnimationCtx::Immediate(_, status) => *status,
+            AnimationCtx::Immediate(_, status, _) => *status,
         }
     }
 
     pub fn with_animation<V>(
         &self,
         id: impl Into<Option<AnimationId>>,
+        mut f: impl FnMut(&AnimationCtx) -> V,
+    ) -> Option<V> {
+        self.with_animation_full(id, false, f)
+    }
+
+    pub fn with_animation_full<V>(
+        &self,
+        id: impl Into<Option<AnimationId>>,
+        additive: bool,
         mut f: impl FnMut(&AnimationCtx) -> V,
     ) -> Option<V> {
         let id_opt = id.into();
@@ -91,7 +112,7 @@ impl AnimationCtx<'_> {
                     .and_then(|ai| animations.get(ai).map(|s| s.status.is_active()))
                     .unwrap_or(false) =>
             {
-                Some(f(&Self::new(id_opt, animations)))
+                Some(f(&Self::new(id_opt, animations, additive)))
             }
             _ => None,
         }
@@ -165,14 +186,14 @@ impl AnimationStatusInternal {
 
 pub enum CustomCurve {
     Function(fn(f64) -> f64),
-    Boxed(Box<dyn FnMut(f64) -> f64>),
+    Closure(Box<dyn FnMut(f64) -> f64>),
 }
 
 impl CustomCurve {
     fn translate(&mut self, t: f64) -> f64 {
         match self {
             CustomCurve::Function(f) => f(t),
-            CustomCurve::Boxed(f) => f(t),
+            CustomCurve::Closure(f) => f(t),
         }
     }
 }
@@ -189,7 +210,7 @@ impl Debug for CustomCurve {
                 .debug_struct("CustomAnimationCurve::Function")
                 .field("f", f)
                 .finish(),
-            CustomCurve::Boxed(_) => formatter
+            CustomCurve::Closure(_) => formatter
                 .debug_struct("CustomAnimationCurve::Closure")
                 .finish(),
         }
@@ -201,6 +222,12 @@ impl From<fn(f64) -> f64> for AnimationCurve {
         AnimationCurve::Custom(CustomCurve::Function(f))
     }
 }
+
+// impl <F: FnMut(f64) -> f64> From<F> for AnimationCurve{
+//     fn from(f: F) -> Self {
+//         AnimationCurve::Custom(CustomCurve::Closure(Box::new(f)))
+//     }
+// }
 
 impl From<SimpleCurve> for AnimationCurve {
     fn from(s: SimpleCurve) -> Self {
@@ -287,11 +314,15 @@ impl AnimationCurve {
             Self::Custom(c) => c.translate(t),
         }
     }
+
+    fn from_closure(f: impl FnMut(f64)->f64 + 'static) -> AnimationCurve{
+        AnimationCurve::Custom( CustomCurve::Closure(Box::new(f)))
+    }
 }
 
 #[derive(Debug, Data, Copy, Clone, PartialOrd, PartialEq)]
 pub enum AnimationDirection {
-    Normal,
+    Forward,
     Reverse,
     Alternate,
     AlternateReverse,
@@ -299,27 +330,27 @@ pub enum AnimationDirection {
 
 impl Default for AnimationDirection {
     fn default() -> Self {
-        Self::Normal
+        Self::Forward
     }
 }
 
 impl AnimationDirection {
     fn translate(&self, frac: f64, even_repeat: bool) -> f64 {
         match self {
-            Self::Normal => frac,
+            Self::Forward => frac,
             Self::Reverse => 1.0 - frac,
             Self::Alternate => {
                 if even_repeat {
                     frac
                 } else {
-                    1.0 - frac
+                    1. - frac
                 }
             }
             Self::AlternateReverse => {
                 if !even_repeat {
                     frac
                 } else {
-                    1.0 - frac
+                    1. - frac
                 }
             }
         }
@@ -327,8 +358,8 @@ impl AnimationDirection {
 
     fn end_fraction(&self, even_repeat: bool) -> f64 {
         match self {
-            Self::Normal => 1.0,
-            Self::Reverse => 0.0,
+            Self::Forward => 1.,
+            Self::Reverse => 0.,
             Self::Alternate => {
                 if even_repeat {
                     1.
@@ -386,7 +417,7 @@ impl AnimationState {
                 .translate(self.since_start / self.dur_nanos, even_repeat);
             self.progress = self.curve.translate(self.fraction);
         } else {
-            // This animation will go through one more cycle to give interps
+            // This animation will go through one more cycle to give users
             // a chance to recover from any discontinuous curves - i.e set things to the end state.
 
             self.repeat_count += 1;
@@ -427,12 +458,15 @@ impl AnimationState {
                 self.calc(cur_nanos);
                 false
             }
-            Retiring => true,
+            Retiring => {
+                log::info!("Retired anim {:?} ", self);
+                true
+            }
             PendingEvent(_) => false,
         }
     }
 
-    // Might be able to merge these
+    // May be able to merge these enums, but for now keeping a public/ private split
     fn status(&self) -> AnimationStatus {
         match self.status {
             AnimationStatusInternal::PendingEvent(_) => AnimationStatus::NotRunning,
@@ -483,6 +517,7 @@ struct AnimationStorage<Value> {
 //Derive creates an incorrect constraint
 impl<Value> Default for AnimationStorage<Value> {
     fn default() -> Self {
+        log::info!("Create");
         AnimationStorage {
             contents: Default::default(),
             size: Default::default(),
@@ -512,6 +547,7 @@ impl<Value> AnimationStorage<Value> {
             };
 
             if remove {
+                log::info!("Remove {:?}", (offset));
                 *entry = self
                     .first_free
                     .map(|next_free| ASEntry::Free(version, next_free))
@@ -657,9 +693,10 @@ impl Animator {
     pub fn advance_by<V>(
         &mut self,
         nanos: Nanos,
-        mut interpolate: impl FnMut(&AnimationCtx) -> V,
+        mut f: impl FnMut(&AnimationCtx) -> V,
     ) -> Option<V> {
         if self.storage.is_empty() {
+            log::info!("Empty animator");
             None
         } else {
             self.cur_nanos += nanos;
@@ -672,13 +709,13 @@ impl Animator {
                 self.storage.remove_if(|id, segment| {
                     let remove = segment.advance(cur_nanos);
                     if remove {
-                        pending_events.push_back(AnimationEvent::Ended(id))
+                        pending_events.push_back(AnimationEvent::Ended(id));
                     }
                     remove
                 });
 
-                let ctx = AnimationCtx::new(None, &self.storage);
-                interpolate(&ctx)
+                let ctx = AnimationCtx::new(None, &self.storage, false);
+                f(&ctx)
             };
 
             for event in pending_events.into_iter() {

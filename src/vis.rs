@@ -387,7 +387,7 @@ impl Mark {
 
                 if let Ok(tl) = ctx
                     .text()
-                    .new_text_layout(&t.txt)
+                    .new_text_layout(t.txt.to_string())
                     .font(t.font_fam.clone(), t.size)
                     .text_color(color.clone())
                     .build()
@@ -621,6 +621,7 @@ impl Interp for VisMarksInterp {
 }
 
 struct VisInner<VP: Visualization> {
+    size: Size,
     layout: VP::Layout,
     state: VP::State,
     animator: Animator,
@@ -633,6 +634,7 @@ struct VisInner<VP: Visualization> {
 
 impl<V: Visualization> VisInner<V> {
     pub fn new(
+        size: Size,
         layout: V::Layout,
         state: V::State,
         animator: Animator,
@@ -640,7 +642,9 @@ impl<V: Visualization> VisInner<V> {
         current: VisMarks,
         transform: Affine,
     ) -> Self {
+        log::info!("New vis inner");
         VisInner {
+            size,
             layout,
             state,
             animator,
@@ -690,6 +694,7 @@ impl<V: Visualization> Vis<V> {
             let animation = Default::default();
 
             self.inner = Some(VisInner::new(
+                size,
                 layout,
                 state,
                 animator,
@@ -720,8 +725,10 @@ impl<V: Visualization> Vis<V> {
                 .id();
 
             let selected = interp.select_anim(id);
-
-            inner.merge_animation(selected).map(|_| id)
+            //dbg!( &selected );
+            let res = inner.merge_animation(selected).map(|_| id);
+            //dbg!( (&inner.animator, &inner.interp));
+            res
         } else {
             Err(InterpError::NotRunning)
         }
@@ -730,6 +737,33 @@ impl<V: Visualization> Vis<V> {
 
 impl<V: Visualization> Widget<V::Input> for Vis<V> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut V::Input, env: &Env) {
+        if let (
+            Event::AnimFrame(nanos),
+            Some(VisInner {
+                animator,
+                current,
+                interp: animation,
+                ..
+            }),
+        ) = (event, &mut self.inner)
+        {
+            let res = animator.advance_by((*nanos) as f64, |ctx| animation.interp(ctx, current));
+            if let Some(Err(e)) = res {
+                log::warn!("Interp error running animator {:?}", e);
+            }
+
+            if animator.running() {
+                ctx.request_anim_frame();
+            }
+
+            if animator.is_empty() {
+                log::info!("Clearing anim");
+                *animation = Default::default();
+            }
+
+            ctx.request_paint()
+        }
+
         self.ensure_inner(data, ctx.size());
         let inner = self.inner.as_mut().unwrap();
 
@@ -737,7 +771,6 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         let old_state: V::State = inner.state.clone();
 
         let mut top_level = InterpNode::<VisMarks>::default();
-        let mut unhover = false;
 
         let mut vis_events = VecDeque::new();
 
@@ -782,7 +815,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         }
                     }
                 } else {
-                    unhover = true;
+                    inner.animator.event(Vis::<V>::UNHOVER);
                 }
 
                 vis_events.push_back(VisEvent::MouseMove(
@@ -824,32 +857,6 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
     }
 
     fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &V::Input, env: &Env) {
-        if let (
-            LifeCycle::AnimFrame(nanos),
-            Some(VisInner {
-                animator,
-                current,
-                interp: animation,
-                ..
-            }),
-        ) = (event, &mut self.inner)
-        {
-            let res = animator.advance_by((*nanos) as f64, |ctx| animation.interp(ctx, current));
-            if let Some(Err(e)) = res {
-                log::warn!("Interp error running animator {:?}", e);
-            }
-
-            if animator.running() {
-                ctx.request_anim_frame();
-            }
-
-            if animator.is_empty() {
-                log::info!("Clearing anim");
-                *animation = Default::default();
-            }
-
-            ctx.request_paint()
-        }
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, env: &Env) {
@@ -861,12 +868,17 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
     fn layout(
         &mut self,
-        _ctx: &mut LayoutCtx,
+        ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
         _data: &V::Input,
         _env: &Env,
     ) -> Size {
-        self.inner = None;
+        let new_size = bc.max();
+        if let Some(VisInner { size, .. }) = self.inner {
+            if new_size != size {
+                self.inner = None;
+            }
+        }
         bc.max()
     }
 

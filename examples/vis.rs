@@ -256,8 +256,8 @@ impl Visualization for Reversing {
                 *state,
                 Size::new(layout.width / 5., layout.width / 5.),
             )),
-            MarkProps::new(Color::rgb(0xff, 0, 0)),
-            Some(MarkOverrides::new(Color::rgb(0x99, 0, 0xcc))),
+            MarkProps::new(Color::rgb8(0xff, 0, 0)),
+            Some(MarkOverrides::new(Color::rgb8(0x99, 0, 0xcc))),
         )];
         s
     }
