@@ -15,7 +15,7 @@ use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
 use crate::IndicesSelection;
-use druid::widget::Bindable;
+use druid_bindings::Bindable;
 use std::collections::HashMap;
 
 pub trait HeadersFromData {

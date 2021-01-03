@@ -7,13 +7,14 @@ use crate::{
     TableSelection, VisIdx,
 };
 use druid::widget::{
-    Axis, BindingExt, Container, CrossAxisAlignment, DefaultScopePolicy, Flex, LensBindingExt,
-    Scope, Scroll, ScrollToProperty, WidgetBindingExt,
+    Axis, Container, CrossAxisAlignment, DefaultScopePolicy, Flex,
+    Scope, Scroll,
 };
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
 };
+use druid_bindings::*;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
