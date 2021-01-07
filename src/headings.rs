@@ -15,8 +15,8 @@ use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
 use crate::IndicesSelection;
-use druid_bindings::Bindable;
 use std::collections::HashMap;
+use druid_bindings::{BindableAccess, bindable_self_body};
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -259,7 +259,7 @@ where
                         ctx.set_cursor(self.axis.resize_cursor());
                     }
                     ctx.set_handled()
-                } else if let HeaderMovement::Moving(idx) = self.header_movement {
+                } else if let HeaderMovement::Moving(_idx) = self.header_movement {
                     // Show visual indicator
                     if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {}
                     ctx.set_handled()
@@ -395,9 +395,10 @@ where
     }
 }
 
-impl<HeadersSource, Render> Bindable for Headings<HeadersSource, Render>
+impl<HeadersSource, Render> BindableAccess for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
     Render: CellRender<HeadersSource::Header>,
 {
+    bindable_self_body!();
 }

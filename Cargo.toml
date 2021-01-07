@@ -10,6 +10,7 @@ edition = "2018"
 #druid = {version="0.6.0", features =["im"]}
 druid = {path = "../druid/druid/", features=["im"]}
 druid_bindings = {path = "../druid_bindings/"}
+druid-widget-nursery = {path = "../druid-widget-nursery"}
 #druid = {git = "https://github.com/rjwittams/druid", features=["im"] }
 #druid_bindings = { git = "https://github.com/rjwittams/druid_bindings"}
 im = { version = "15.0.0"}

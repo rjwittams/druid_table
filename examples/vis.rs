@@ -223,14 +223,14 @@ impl Visualization for Reversing {
     type State = Point;
     type Layout = Size;
 
-    fn layout(&mut self, data: &Self::Input, size: Size) -> Self::Layout {
+    fn layout(&mut self, _data: &Self::Input, size: Size) -> Self::Layout {
         size
     }
 
     fn event(
         &self,
-        data: &mut Self::Input,
-        layout: &Self::Layout,
+        _data: &mut Self::Input,
+        _layout: &Self::Layout,
         state: &mut Self::State,
         event: &VisEvent,
     ) {
@@ -240,13 +240,13 @@ impl Visualization for Reversing {
         }
     }
 
-    fn layout_marks(&self, layout: &Self::Layout) -> Vec<DrawableAxis> {
+    fn layout_marks(&self, _layout: &Self::Layout) -> Vec<DrawableAxis> {
         vec![]
     }
 
     fn state_marks(
         &self,
-        data: &Self::Input,
+        _data: &Self::Input,
         layout: &Self::Layout,
         state: &Self::State,
     ) -> Vec<Mark> {
@@ -262,7 +262,7 @@ impl Visualization for Reversing {
         s
     }
 
-    fn data_marks(&mut self, data: &Self::Input, layout: &Self::Layout) -> Vec<Mark> {
+    fn data_marks(&mut self, _data: &Self::Input, _layout: &Self::Layout) -> Vec<Mark> {
         vec![]
     }
 }

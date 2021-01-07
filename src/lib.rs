@@ -1,7 +1,6 @@
 #[macro_use]
 mod macros;
 
-mod animation;
 mod axis_measure;
 mod builder;
 mod cells;
@@ -35,16 +34,8 @@ pub use vis::{
     VisEvent, VisMarks, VisMarksInterp, Visualization,
 };
 
-pub use animation::{
-    AnimationCtx, AnimationCurve, AnimationDirection, AnimationEvent, AnimationId, Animator,
-    SimpleCurve,
-};
-
 #[macro_use]
 extern crate druid;
 
 #[macro_use]
 extern crate lazy_static;
-
-#[macro_use]
-extern crate im;

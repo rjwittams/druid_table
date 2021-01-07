@@ -15,7 +15,7 @@ use crate::render_ext::RenderContextExt;
 use crate::selection::{CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
 use crate::{EditorFactory, IndexedItems, Remap};
-use druid_bindings::Bindable;
+use druid_bindings::{BindableAccess, bindable_self_body};
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item>
@@ -581,10 +581,11 @@ where
     }
 }
 
-impl<TableData, CellsDel> Bindable for Cells<TableData, CellsDel>
+impl<TableData, CellsDel> BindableAccess for Cells<TableData, CellsDel>
 where
     TableData: IndexedData<Idx = LogIdx>,
     TableData::Item: Data,
     CellsDel: CellsDelegate<TableData>,
 {
+    bindable_self_body!();
 }

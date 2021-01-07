@@ -15,7 +15,6 @@ use druid::{theme, ArcStr, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, 
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 pub trait EditorFactory<RowData> {
     fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;

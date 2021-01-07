@@ -1,15 +1,11 @@
-use crate::animation::{AnimationCtx, AnimationId, AnimationStatus};
-use druid::im::Vector;
+use druid_widget_nursery::animation::{AnimationCtx, AnimationId, AnimationStatus};
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::piet::Color;
-use itertools::Itertools;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
-use std::num::NonZeroU32;
 use std::ops::Add;
-use std::time::Duration;
 use InterpError::*;
 
 #[derive(Eq, PartialEq, Debug)]
@@ -84,7 +80,7 @@ pub trait HasInterp: Clone + Debug {
     fn tween_now(self, other: Self, frac: f64) -> Result<Self, InterpError> {
         let mut res = self.clone();
         Self::Interp::build(self, other).interp(
-            &AnimationCtx::Immediate(frac, AnimationStatus::Running, false),
+            &AnimationCtx::running(frac),
             &mut res,
         )?;
         Ok(res)
@@ -150,7 +146,7 @@ impl<Value: HasInterp> InterpHolder<Value> {
             (InterpHolder::Interp(i1), InterpHolder::Interp(i2)) => {
                 InterpHolder::Interp(i1.merge(i2))
             }
-            (c @ InterpHolder::Custom(_), other) => other,
+            (_c @ InterpHolder::Custom(_), other) => other,
             (_, c @ InterpHolder::Custom(_)) => c,
         }
     }
@@ -326,7 +322,7 @@ impl<Value: HasInterp, Key: Hash + Eq + Clone> MapInterp<Value, Key> {
         let idx = self
             .interps
             .iter()
-            .position(|(k, v)| *k == *key)
+            .position(|(k, _)| *k == *key)
             .unwrap_or_else(|| {
                 let idx = self.interps.len();
                 self.interps.push((key.clone(), Default::default()));
@@ -960,12 +956,14 @@ impl Interp for ColorInterp {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::animation::AnimationEvent::Ended;
-    use crate::animation::{AnimationEvent, AnimationId};
+    use druid_widget_nursery::animation::AnimationEvent::Ended;
+    use druid_widget_nursery::animation::{Animator, AnimationEvent, AnimationId};
     use crate::interp::InterpHolder::*;
     use crate::vis::{MarkInterp, MarkShapeInterp, TextMarkInterp};
-    use crate::{Animator, Mark, VisMarks};
+    use crate::{Mark, VisMarks};
     use std::mem::size_of;
+    use std::time::Duration;
+    use std::num::NonZeroU32;
 
     #[test]
     fn test_merge() {
@@ -1011,12 +1009,12 @@ mod test {
         let mut animator: Animator = Default::default();
         let mut root_0: InterpNode<Line> = Default::default();
 
-        let ai_0 = animator.new().duration(Duration::from_nanos(100)).id();
+        let ai_0 = animator.new_animation().duration(Duration::from_nanos(100)).id();
         root_0.get().p0.get().x = 0.0.tween(20.0).select_anim(ai_0);
         let mut root_1: InterpNode<Line> = Default::default();
 
         let ai_1 = animator
-            .new()
+            .new_animation()
             .duration(Duration::from_nanos(100))
             .after(Ended(ai_0))
             .id();
@@ -1057,7 +1055,7 @@ mod test {
         simple_logger::init();
         let mut animator: Animator = Default::default();
 
-        let ai_0 = animator.new().duration(Duration::from_nanos(100)).id();
+        let ai_0 = animator.new_animation().duration(Duration::from_nanos(100)).id();
         let mut root_0: InterpNode<Line> = Default::default();
         root_0.get().p0.get().x = 0.0.tween(20.0);
         root_0 = root_0.select_anim(ai_0);
@@ -1066,7 +1064,7 @@ mod test {
         let mut root_1: InterpNode<Line> = Default::default();
 
         let ai_1 = animator
-            .new()
+            .new_animation()
             .duration(Duration::from_nanos(100))
             .after(Ended(ai_0))
             .id();
@@ -1112,7 +1110,7 @@ mod test {
         let mut line_tw = |v: f64| {
             Line::new((v, v), (v + 5.0, v + 5.0))
                 .tween(Line::new((v + 2.0, v + 2.0), (v + 10.0, v + 10.0)))
-                .select_anim(animator.new().id())
+                .select_anim(animator.new_animation().id())
         };
 
         // These ones have the exact same structure, so should be in a select many

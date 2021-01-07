@@ -1,4 +1,5 @@
-use crate::{LogIdx, SimpleCurve};
+use druid_widget_nursery::animation::{SimpleCurve, AnimationEventName};
+use crate::LogIdx;
 use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2};
 use druid::piet::{FontFamily, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::RenderContext;
@@ -15,10 +16,11 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use crate::animation::{AnimationCtx, AnimationCurve, AnimationEvent, AnimationId, Animator};
+use druid_widget_nursery::animation::{AnimationCtx, AnimationEvent, AnimationId, Animator};
 use crate::interp::{
     EnterExit, HasInterp, Interp, InterpCoverage, InterpError, InterpNode, InterpResult, OK,
 };
+use druid_widget_nursery::animation::AnimationEvent::Named;
 
 #[derive(Debug, Default)]
 pub struct TextMarkInterp {
@@ -656,7 +658,7 @@ impl<V: Visualization> VisInner<V> {
         }
     }
 
-    fn merge_animation(&mut self, mut interp: InterpNode<VisMarks>) -> Result<(), InterpError> {
+    fn merge_animation(&mut self, interp: InterpNode<VisMarks>) -> Result<(), InterpError> {
         if interp.coverage() != InterpCoverage::Noop {
             let taken = std::mem::take(&mut self.interp);
             self.interp = taken.merge(interp);
@@ -671,7 +673,7 @@ pub struct Vis<V: Visualization> {
 }
 
 impl<V: Visualization> Vis<V> {
-    const UNHOVER: AnimationEvent = AnimationEvent::Named("vis:unhover");
+    const UNHOVER: AnimationEventName = AnimationEventName("vis:unhover");
 
     pub fn new(visual: V) -> Self {
         Vis {
@@ -719,7 +721,7 @@ impl<V: Visualization> Vis<V> {
             let interp = inner.current.clone().tween(destination);
             let id = inner
                 .animator
-                .new()
+                .new_animation()
                 .duration(Duration::from_millis(1000))
                 .curve(SimpleCurve::Linear)
                 .id();
@@ -782,7 +784,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                     if inner.hovered != new_hovered {
                         if let Some(focus) = inner.hovered {
                             vis_events.push_back(VisEvent::MouseOut(focus));
-                            inner.animator.event(Vis::<V>::UNHOVER);
+                            inner.animator.process_named_event(Vis::<V>::UNHOVER);
                         }
 
                         vis_events.push_back(VisEvent::MouseEnter(mark.id));
@@ -791,7 +793,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         if mark.hover.is_some() {
                             let hover_idx = inner
                                 .animator
-                                .new()
+                                .new_animation()
                                 .duration(Duration::from_millis(1250))
                                 .id();
                             let hover_props = mark.hover_props();
@@ -800,7 +802,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
                             let unhover_idx = inner
                                 .animator
-                                .new()
+                                .new_animation()
                                 .duration(Duration::from_millis(2500))
                                 .curve(SimpleCurve::EaseOut)
                                 .after(Self::UNHOVER)
@@ -815,7 +817,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                         }
                     }
                 } else {
-                    inner.animator.event(Vis::<V>::UNHOVER);
+                    inner.animator.process_named_event(Vis::<V>::UNHOVER);
                 }
 
                 vis_events.push_back(VisEvent::MouseMove(
@@ -840,7 +842,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
                 .for_each(|mark| {
                     let anim_idx = inner
                         .animator
-                        .new()
+                        .new_animation()
                         .duration(Duration::from_secs(3))
                         .curve(SimpleCurve::OutElastic)
                         .id();
