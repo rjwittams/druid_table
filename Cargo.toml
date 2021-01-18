@@ -7,12 +7,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#druid = {version="0.6.0", features =["im"]}
-druid = {path = "../druid/druid/", features=["im"]}
-druid_bindings = {path = "../druid_bindings/"}
-druid-widget-nursery = {path = "../druid-widget-nursery"}
-#druid = {git = "https://github.com/rjwittams/druid", features=["im"] }
-#druid_bindings = { git = "https://github.com/rjwittams/druid_bindings"}
+druid = {git = "https://github.com/linebender/druid", features=["im"] }
+druid-widget-nursery = {git = "https://github.com/linebender/druid-widget-nursery"}
+druid_bindings = { git = "https://github.com/rjwittams/druid_bindings"}
 im = { version = "15.0.0"}
 log = "0.4.8"
 simple_logger = { version = "1.6.0", default-features = false }
