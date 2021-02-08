@@ -193,7 +193,7 @@ impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>
     for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
+    Render: CellRender<HeadersSource::Header>
 {
     fn event(
         &mut self,

@@ -193,7 +193,6 @@ where
 
     fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
         let inner = &self.0.inner;
-        dbg!(event);
         self.0.wrapper.with_mut(data, |inner_data| {
             inner.event(ctx, cell, event, inner_data, env);
         })
@@ -340,13 +339,13 @@ impl CellRender<String> for TextCell {
         if let Some(font) = &self.cached_font {
             self.paint_impl(ctx, &data, env, font);
         } else {
-            log::warn!("Font not cached, are you missing a call to init");
+            //log::warn!("Font not cached, are you missing a call to init");
             let font = self.resolve_font(ctx, env);
-            ctx.stroke(
+            /*ctx.stroke(
                 Line::new((0., 0.), (100., 100.)),
                 &Color::rgb8(0xff, 0, 0),
                 2.,
-            );
+            );*/
             self.paint_impl(ctx, &data, env, &font);
         }
     }

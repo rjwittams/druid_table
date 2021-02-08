@@ -72,7 +72,7 @@ impl <TableData: IndexedData>  EditorFactory<TableData::Item> for Arc<dyn CellsD
     where
         TableData::Item: Data {
     fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedItems>::Item>>> {
-        unimplemented!()
+        self.deref().make_editor(ctx)
     }
 }
 
@@ -348,7 +348,6 @@ where
         env: &Env,
     ) {
         let mut new_selection: Option<TableSelection> = None;
-        let mut remap_changed = AxisPair::new(false, false);
 
         match event {
             Event::MouseDown(me) => {
@@ -406,26 +405,7 @@ where
             Event::MouseUp(_) if self.dragging_selection => {
                 self.dragging_selection = false;
                 ctx.set_active(false);
-            }
-            Event::Command(cmd) => {
-                if let Some(_) = cmd.get(INIT_CELLS) {
-                    data.remap_specs[TableAxis::Rows] = data.cells_del.initial_spec();
-                    remap_changed[TableAxis::Rows] = true;
-                    remap_changed[TableAxis::Columns] = true;
-                } else if let Some(ax) = cmd.get(REMAP_CHANGED) {
-                    log::info!("Remap changed:{:?}", ax);
-                    remap_changed[*ax] = true;
-                } else {
-                    match &mut self.editing {
-                        Editing::Cell { single_cell, child } => {
-                            data.table_data.with_mut(single_cell.log.row, |row| {
-                                child.event(ctx, event, row, env)
-                            });
-                        }
-                        _ => (),
-                    }
-                }
-            }
+            },
             Event::KeyDown(ke) if !self.editing.is_active() => {
                 match &ke.key {
                     KbKey::ArrowDown => {
@@ -492,31 +472,6 @@ where
             }
         }
 
-        // TODO: move to update but need versioned pointers on measures
-        //
-
-        let cd = &data.cells_del;
-        if remap_changed[TableAxis::Rows] {
-            data.remaps[TableAxis::Rows] = cd.remap_items(&data.table_data, &data.remap_specs[TableAxis::Rows]);
-            data.measures[TableAxis::Rows].set_axis_properties(
-                data.resolved_config.cell_border_thickness,
-                data.table_data.idx_len(),
-                &data.remaps[TableAxis::Rows],
-            );
-            ctx.request_layout(); // Could avoid if we know we overflow scroll?
-        }
-        if remap_changed[TableAxis::Columns] {
-            data.remaps[TableAxis::Columns] = data.remap_specs[TableAxis::Columns]
-                .remap_placements(LogIdx(cd.number_of_columns_in_data(&data.table_data) - 1));
-            log::info!("Remap for cols {:?}", data.remaps[TableAxis::Columns]);
-            data.measures[TableAxis::Columns].set_axis_properties(
-                data.resolved_config.cell_border_thickness,
-                cd.number_of_columns_in_data(&data.table_data),
-                &data.remaps[TableAxis::Columns],
-            );
-            ctx.request_layout();
-        }
-        // Todo remap cols
     }
 
     fn lifecycle(
@@ -527,11 +482,10 @@ where
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
-            ctx.submit_command(Command::new(INIT_CELLS, (), ctx.widget_id()));
+
         } else {
             match &mut self.editing {
                 Editing::Cell { single_cell, child } => {
-                    log::info!("LC event {:?}", event);
                     data.table_data.with(single_cell.log.row, |row| {
                         child.lifecycle(ctx, event, row, env)
                     });
@@ -546,29 +500,29 @@ where
         ctx: &mut UpdateCtx,
         old_data: &TableState<TableData>,
         data: &TableState<TableData>,
-        _env: &Env,
+        env: &Env,
     ) {
-        // TODO move all sorting up to table level so we don't need commands
         if !old_data.table_data.same(&data.table_data)
             || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows])
         {
-            ctx.submit_command(Command::new(
-                REMAP_CHANGED,
-                TableAxis::Rows,
-                ctx.widget_id(),
-            ));
+            ctx.request_layout()
         }
 
         if !old_data.remap_specs[TableAxis::Columns].same(&data.remap_specs[TableAxis::Columns]) {
-            ctx.submit_command(Command::new(
-                REMAP_CHANGED,
-                TableAxis::Columns,
-                ctx.widget_id(),
-            ));
+            ctx.request_layout()
         }
 
         if !old_data.selection.same(&data.selection) {
             ctx.request_paint();
+        }
+
+        match &mut self.editing {
+            Editing::Cell { single_cell, child } => {
+                data.table_data.with(single_cell.log.row, |row| {
+                    child.update(ctx, row, env)
+                });
+            }
+            _ => (),
         }
         //TODO Columns update from data
     }

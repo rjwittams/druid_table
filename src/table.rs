@@ -151,7 +151,7 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>
 }
 
-impl<TableData: Data> TableState<TableData> {
+impl<TableData: IndexedData> TableState<TableData> where TableData::Item : Data{
     pub fn new(
         config: TableConfig,
         resolved_config: ResolvedTableConfig,
@@ -159,26 +159,48 @@ impl<TableData: Data> TableState<TableData> {
         measures: AxisPair<AxisMeasure>,
         cells_del: Arc<dyn CellsDelegate<TableData>>
     ) -> Self {
-        TableState {
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            config,
-            resolved_config,
-            table_data: data,
-            remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
-            remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
-            selection: TableSelection::default(),
-            measures,
-            cells_del
-        }
+            let mut state = TableState {
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                config,
+                resolved_config,
+                table_data: data,
+                remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
+                remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
+                selection: TableSelection::default(),
+                measures,
+                cells_del
+            };
+            state.remap_rows();
+            state.remap_cols();
+            state
+    }
+
+
+    fn remap_rows(&mut self) {
+        let state = self;
+        state.remaps[TableAxis::Rows] = state.cells_del.remap_items(&state.table_data, &state.remap_specs[TableAxis::Rows]);
+        state.measures[TableAxis::Rows].set_axis_properties(
+            state.resolved_config.cell_border_thickness,
+            state.table_data.idx_len(),
+            &state.remaps[TableAxis::Rows],
+        );
+    }
+
+    fn remap_cols(&mut self) {
+        let state = self;
+        state.remaps[TableAxis::Columns] = state.remap_specs[TableAxis::Columns]
+            .remap_placements(LogIdx(state.cells_del.number_of_columns_in_data(&state.table_data) - 1));
+
+        state.measures[TableAxis::Columns].set_axis_properties(
+            state.resolved_config.cell_border_thickness,
+            state.cells_del.number_of_columns_in_data(&state.table_data),
+            &state.remaps[TableAxis::Columns],
+        );
     }
 }
 
 impl<TableData: Data> TableState<TableData>{
-
-    pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec) -> Remap) {
-        self.remaps[axis] = f(&self.table_data, &self.remap_specs[axis]);
-    }
 
     pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx) {
         log::info!(
@@ -210,7 +232,7 @@ type TableChild<TableData> = WidgetPod<
     Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
 >;
 
-pub struct Table<TableData: Data> {
+pub struct Table<TableData: IndexedData> where TableData::Item : Data{
     child: TableChild<TableData>,
 }
 
@@ -232,7 +254,7 @@ impl<TableData> TableScopePolicy<TableData> {
     }
 }
 
-impl<TableData: Data> ScopePolicy for TableScopePolicy<TableData> {
+impl<TableData: IndexedData> ScopePolicy for TableScopePolicy<TableData> where TableData::Item : Data {
     type In = TableData;
     type State = TableState<TableData>;
     type Transfer = TableScopeTransfer<TableData>;
@@ -258,7 +280,8 @@ impl<TableData> TableScopeTransfer<TableData> {
     }
 }
 
-impl<TableData: Data> ScopeTransfer for TableScopeTransfer<TableData> {
+impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData>
+where TableData::Item : Data{
     type In = TableData;
     type State = TableState<TableData>;
 
@@ -274,34 +297,15 @@ impl<TableData: Data> ScopeTransfer for TableScopeTransfer<TableData> {
 
     fn update_computed(&self, old_state: &Self::State, state: &mut Self::State) -> bool {
         let remaps_same = old_state.remap_specs.zip_with(&state.remap_specs, |old, new| old.same(new));
-        // if !remap_same[TableAxis::Rows] {
-        //     data.remap_axis(TableAxis::Rows, |d, s| self.cell_delegate.remap_items(d, s));
-        //     data.measures[TableAxis::Rows].set_axis_properties(
-        //         data.resolved_config.cell_border_thickness,
-        //         data.table_data.idx_len(),
-        //         &data.remaps[TableAxis::Rows],
-        //     );
-        //     ctx.request_layout(); // Could avoid if we know we overflow scroll?
-        // }
-        // if !remap_same[TableAxis::Columns] {
-        //     data.remap_axis(TableAxis::Columns, |d, s| {
-        //         s.remap_placements(LogIdx(self.cell_delegate.number_of_columns_in_data(d) - 1))
-        //         // TODO check for none
-        //     });
-        //     log::info!("Remap for cols {:?}", data.remaps[TableAxis::Columns]);
-        //     data.measures[TableAxis::Columns].set_axis_properties(
-        //         data.resolved_config.cell_border_thickness,
-        //         self.cell_delegate
-        //             .number_of_columns_in_data(&data.table_data),
-        //         &data.remaps[TableAxis::Columns],
-        //     );
-        //     ctx.request_layout();
-        // }
-        remaps_same.for_each(|axis, same| {
-            if !same {
-                log::info!("Remap changed in scope {:?}", axis);
-            }
-        });
+
+        if !remaps_same[TableAxis::Rows] {
+            state.remap_rows();
+        }
+
+        if !remaps_same[TableAxis::Columns] {
+            state.remap_cols();
+        }
+
         true
     }
 }
@@ -408,16 +412,16 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
     }
 }
 
-impl<T: Data> Widget<T> for Table<T> {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+impl<TableData: IndexedData> Widget<TableData> for Table<TableData> where TableData::Item : Data {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableData, env: &Env) {
         self.child.event(ctx, event, data, env)
     }
 
-    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &T, env: &Env) {
+    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &TableData, env: &Env) {
         self.child.lifecycle(ctx, event, data, env);
     }
 
-    fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
+    fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &TableData, data: &TableData, env: &Env) {
         if ctx.env_changed(){
             if let Some(state) = self.child.widget_mut().state_mut() {
                 state.resolved_config = state.config.resolve(env);
@@ -426,14 +430,14 @@ impl<T: Data> Widget<T> for Table<T> {
         self.child.update(ctx, data, env);
     }
 
-    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
+    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &TableData, env: &Env) -> Size {
         let size = self.child.layout(ctx, bc, data, env);
         self.child
             .set_layout_rect(ctx, data, env, Rect::from_origin_size(Point::ORIGIN, size));
         size
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
         self.child.paint_raw(ctx, data, env);
     }
 }
