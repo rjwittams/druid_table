@@ -204,7 +204,7 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
     } else {
         AxisMeasurementType::Individual
     };
-    TableBuilder::<HelloRow, Vector<HelloRow>>::new()
+    TableBuilder::<Vector<HelloRow>>::new()
         .measuring_axis(TableAxis::Rows, measurement_type)
         .measuring_axis(TableAxis::Columns, measurement_type)
         .headings(settings.show_headings)

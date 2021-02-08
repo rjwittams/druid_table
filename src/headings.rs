@@ -7,21 +7,20 @@ use druid::{
 };
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
-use crate::columns::{CellCtx, CellRender, CellDelegate};
-use crate::config::{ResolvedTableConfig, TableConfig};
-use crate::data::{IndexedItems, SortSpec};
+use crate::columns::{CellCtx, CellRender};
+use crate::data::{SortSpec};
 use crate::headings::HeaderMovement::{Disallowed, Permitted};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
-use crate::{IndicesSelection, CellsDelegate};
+use crate::{IndicesSelection, IndexedData};
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
 
 pub trait HeadersFromData {
     type TableData: Data;
     type Header: Data;
-    type Headers: IndexedItems<Item = Self::Header, Idx = LogIdx>;
+    type Headers: IndexedData<Item = Self::Header>;
     fn get_headers(&self, table_data: &Self::TableData) -> Self::Headers;
 }
 
@@ -39,7 +38,7 @@ impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
     }
 }
 
-impl<Headers: IndexedItems<Idx = LogIdx> + Clone, TableData: Data> HeadersFromData
+impl<Headers: IndexedData + Clone, TableData: Data> HeadersFromData
     for SuppliedHeaders<Headers, TableData>
 where
     Headers::Item: Data,
@@ -77,13 +76,13 @@ impl<TableData> HeadersFromIndices<TableData> {
     }
 }
 
-impl<TableData: IndexedItems + Data> HeadersFromData for HeadersFromIndices<TableData> {
+impl<TableData: IndexedData> HeadersFromData for HeadersFromIndices<TableData> {
     type TableData = TableData;
     type Header = LogIdx;
     type Headers = LogIdxTable;
 
     fn get_headers(&self, table_data: &TableData) -> LogIdxTable {
-        LogIdxTable::new(table_data.idx_len())
+        LogIdxTable::new(table_data.data_len())
     }
 }
 

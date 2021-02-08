@@ -2,23 +2,24 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    Affine, BoxConstraints, Command, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Selector, Size, UpdateCtx, Widget, WidgetPod,
+    Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
+    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
 };
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, CellRender};
-use crate::config::{ResolvedTableConfig, TableConfig};
+use crate::config::{ResolvedTableConfig};
 use crate::data::{IndexedData, Remapper};
 use crate::render_ext::RenderContextExt;
 use crate::selection::{CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
-use crate::{EditorFactory, IndexedItems, Remap, RemapSpec};
+use crate::{EditorFactory, Remap, RemapSpec};
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::ops::{DerefMut, Deref};
+use std::ops::{Deref};
+use std::collections::HashMap;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item> + Debug
@@ -71,7 +72,7 @@ impl <TableData: IndexedData> Remapper<TableData> for Arc<dyn CellsDelegate<Tabl
 impl <TableData: IndexedData>  EditorFactory<TableData::Item> for Arc<dyn CellsDelegate<TableData>>
     where
         TableData::Item: Data {
-    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedItems>::Item>>> {
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
         self.deref().make_editor(ctx)
     }
 }
@@ -99,7 +100,7 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn handle_event<TableData: IndexedItems<Idx = LogIdx, Item = RowData>>(
+    fn handle_event<TableData: IndexedData<Item = RowData>>(
         &mut self,
         ctx: &mut EventCtx,
         event: &Event,
@@ -117,7 +118,7 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn start_editing<TableData: IndexedItems<Item = RowData>>(
+    fn start_editing<TableData: IndexedData<Item = RowData>>(
         &mut self,
         ctx: &mut EventCtx,
         data: &mut TableData,
@@ -141,7 +142,7 @@ impl<RowData: Data> Editing<RowData> {
         }
     }
 
-    fn stop_editing<TableData: IndexedItems<Item = RowData>>(&mut self, _data: &mut TableData) {
+    fn stop_editing<TableData: IndexedData<Item = RowData>>(&mut self, _data: &mut TableData) {
         match self {
             Editing::Cell { .. } => {
                 // Work out what to do with the previous pod if there is one.
@@ -156,9 +157,10 @@ impl<RowData: Data> Editing<RowData> {
 
 pub struct Cells<TableData>
 where
-    TableData: IndexedData<Idx = LogIdx>,
+    TableData: IndexedData,
     TableData::Item: Data
 {
+    cell_pods: HashMap<AxisPair<LogIdx>, WidgetPod<TableData::Item, Box<dyn Widget<TableData::Item>>>>,
     editing: Editing<TableData::Item>,
     dragging_selection: bool,
     phantom_td: PhantomData<TableData>,
@@ -166,11 +168,12 @@ where
 
 impl<TableData> Cells<TableData>
 where
-    TableData: IndexedData<Idx = LogIdx>,
+    TableData: IndexedData,
     TableData::Item: Data
 {
     pub fn new() -> Cells<TableData> {
         Cells {
+            cell_pods: Default::default(),
             editing: Inactive,
             dragging_selection: false,
             phantom_td: PhantomData::default(),
@@ -231,7 +234,7 @@ where
         env: &Env,
         rtc: &ResolvedTableConfig,
         cell_delegate: &impl CellsDelegate<TableData>,
-        cols: &mut impl Iterator<Item = VisIdx>,
+        cols: &mut impl Iterator<Item=VisIdx>,
         log_row_idx: LogIdx,
         vis_row_idx: VisIdx,
         row: &TableData::Item,
@@ -332,12 +335,10 @@ where
     }
 }
 
-pub const INIT_CELLS: Selector<()> = Selector::new("druid-builtin.table.init-cells");
-pub const REMAP_CHANGED: Selector<TableAxis> = Selector::new("druid-builtin.table.remap-changed");
 
 impl<TableData> Widget<TableState<TableData>> for Cells<TableData>
 where
-    TableData: IndexedData<Idx = LogIdx>,
+    TableData: IndexedData,
     TableData::Item: Data
 {
     fn event(
@@ -592,7 +593,7 @@ where
 
 impl<TableData> BindableAccess for Cells<TableData>
 where
-    TableData: IndexedData<Idx = LogIdx>,
+    TableData: IndexedData,
     TableData::Item: Data
 {
     bindable_self_body!();

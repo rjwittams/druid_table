@@ -9,67 +9,33 @@ use std::cmp::Reverse;
 // This ended up sort of similar to Lens,
 // so I've named the methods similarly.
 // But it is implemented by the data itself
-pub trait IndexedItems {
-    type Item;
-    type Idx: Copy + Ord; // + Into<usize>?
-                          // This takes a callback so it can work
-                          // the same way for concrete and virtual data sources
-                          // but still provide a reference.
-    fn with<V>(&self, idx: Self::Idx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
+pub trait IndexedData : Data {
+    type Item : Data;
+    fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
-    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V>;
+    fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V>;
     // Seems advisable not to clash with len
-    fn idx_len(&self) -> usize;
+    fn data_len(&self) -> usize;
 
     fn is_empty(&self) -> bool {
-        self.idx_len() == 0
+        self.data_len() == 0
     }
 }
 
-pub trait IndexedData: IndexedItems + Data
-where
-    <Self as IndexedItems>::Item: Data,
-{
-}
-
-impl<T> IndexedData for T
-where
-    T: IndexedItems + Data,
-    T::Item: Data,
-{
-}
-
-impl<RowData: Clone> IndexedItems for Vector<RowData> {
+impl<RowData: Data> IndexedData for Vector<RowData> {
     type Item = RowData;
-    type Idx = LogIdx;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
         let option = self.get(idx.0);
         option.map(f)
     }
 
-    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
+    fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
         let option = self.get_mut(idx.0);
         option.map(f)
     }
 
-    fn idx_len(&self) -> usize {
+    fn data_len(&self) -> usize {
         Vector::len(self)
-    }
-}
-
-impl<RowData> IndexedItems for Vec<RowData> {
-    type Item = RowData;
-    type Idx = LogIdx;
-    fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&RowData) -> V) -> Option<V> {
-        self.get(idx.0).map(f)
-    }
-
-    fn with_mut<V>(&mut self, idx: Self::Idx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
-        self.get_mut(idx.0).map(f)
-    }
-
-    fn idx_len(&self) -> usize {
-        Vec::len(self)
     }
 }
 
@@ -256,8 +222,8 @@ pub trait Remapper<TableData: IndexedData>
 where
     TableData::Item: Data,
 {
-    // This takes our normal data and a spec, and returns a remapped view of it if required
     fn sort_fixed(&self, idx: usize) -> bool;
     fn initial_spec(&self) -> RemapSpec;
+    // This takes our normal data and a spec, and returns a remap of its indices
     fn remap_items(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap;
 }

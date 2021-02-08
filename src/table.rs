@@ -4,7 +4,7 @@ use crate::config::ResolvedTableConfig;
 use crate::headings::HeadersFromData;
 use crate::selection::CellDemap;
 use crate::{
-    CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, TableConfig,
+    CellRender, Cells, Headings, IndexedData, LogIdx, Remap, RemapSpec, TableConfig,
     TableSelection, VisIdx,
 };
 use druid::widget::{
@@ -41,7 +41,7 @@ impl<
 pub trait HeaderBuildT {
     type TableData: Data;
     type Header: Data;
-    type Headers: IndexedItems<Item = Self::Header, Idx = LogIdx> + 'static;
+    type Headers: IndexedData<Item = Self::Header> + 'static;
     type HeadersSource: HeadersFromData<
         Headers = Self::Headers,
         Header = Self::Header,
@@ -69,7 +69,7 @@ impl<
 }
 
 pub struct TableArgs<
-    TableData: IndexedData<Idx = LogIdx>,
+    TableData: IndexedData,
     RowH: HeaderBuildT<TableData = TableData>,
     ColH: HeaderBuildT<TableData = TableData>,
     CellsDel: CellsDelegate<TableData> + 'static,
@@ -83,8 +83,7 @@ pub struct TableArgs<
 }
 
 impl<
-        RowData: Data,
-        TableData: IndexedData<Item = RowData, Idx = LogIdx>,
+        TableData: IndexedData,
         RowH: HeaderBuildT<TableData = TableData>,
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
@@ -108,7 +107,7 @@ impl<
 // This trait exists to move type parameters to associated types
 pub trait TableArgsT {
     type RowData: Data; // Required because associated type bounds are unstable
-    type TableData: IndexedData<Item = Self::RowData, Idx = LogIdx>;
+    type TableData: IndexedData<Item = Self::RowData>;
     type RowH: HeaderBuildT<TableData = Self::TableData>;
     type ColH: HeaderBuildT<TableData = Self::TableData>;
 
@@ -117,7 +116,7 @@ pub trait TableArgsT {
 }
 
 impl<
-        TableData: IndexedData<Idx = LogIdx>,
+        TableData: IndexedData,
         RowH: HeaderBuildT<TableData = TableData>,
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
@@ -182,7 +181,7 @@ impl<TableData: IndexedData> TableState<TableData> where TableData::Item : Data{
         state.remaps[TableAxis::Rows] = state.cells_del.remap_items(&state.table_data, &state.remap_specs[TableAxis::Rows]);
         state.measures[TableAxis::Rows].set_axis_properties(
             state.resolved_config.cell_border_thickness,
-            state.table_data.idx_len(),
+            state.table_data.data_len(),
             &state.remaps[TableAxis::Rows],
         );
     }
@@ -310,7 +309,7 @@ where TableData::Item : Data{
     }
 }
 
-impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>> Table<TableData> {
+impl<TableData: IndexedData> Table<TableData> {
     pub fn new<Args: TableArgsT<TableData = TableData> + 'static>(
         args: Args,
         measures: AxisPair<AxisMeasure>,

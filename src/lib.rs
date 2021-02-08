@@ -24,7 +24,7 @@ pub use columns::{
     column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell,
 };
 pub use config::TableConfig;
-pub use data::{IndexedData, IndexedItems, Remap, RemapSpec, Remapper, SortDirection};
+pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs};

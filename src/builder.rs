@@ -4,12 +4,13 @@ use crate::columns::{
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
-use crate::data::{IndexedData, IndexedItems};
+use crate::data::{IndexedData};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
 use crate::{CellRender, HeaderBuild, Table};
 use druid::{theme, Data, KeyOrValue};
 use std::marker::PhantomData;
+use im::Vector;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub enum AxisMeasurementType {
@@ -23,8 +24,8 @@ impl Default for AxisMeasurementType {
     }
 }
 
-pub struct TableBuilder<RowData: Data, TableData: Data> {
-    table_columns: Vec<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>,
+pub struct TableBuilder<TableData: IndexedData> {
+    table_columns: Vec<TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
     column_header_delegate: Box<dyn CellRender<String>>,
     row_header_delegate: Box<dyn CellRender<LogIdx>>,
     table_config: TableConfig,
@@ -33,8 +34,8 @@ pub struct TableBuilder<RowData: Data, TableData: Data> {
     measurements: AxisPair<AxisMeasurementType>,
 }
 
-impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>> Default
-    for TableBuilder<RowData, TableData>
+impl<TableData: IndexedData> Default
+    for TableBuilder<TableData>
 {
     fn default() -> Self {
         Self::new()
@@ -61,16 +62,16 @@ impl ShowHeadings {
 pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
     HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellRender<LogIdx>>>,
-    HeaderBuild<SuppliedHeaders<Vec<String>, TableData>, Box<dyn CellRender<String>>>,
-    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedItems>::Item>>>,
+    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>, Box<dyn CellRender<String>>>,
+    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedData>::Item>>>,
 >;
 
-impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
-    TableBuilder<RowData, TableData>
+impl<TableData: IndexedData>
+    TableBuilder<TableData>
 {
-    pub fn new() -> TableBuilder<RowData, TableData> {
+    pub fn new() -> TableBuilder<TableData> {
         TableBuilder {
-            table_columns: Vec::<TableColumn<RowData, Box<dyn CellDelegate<RowData>>>>::new(),
+            table_columns: Vec::new(),
             row_header_delegate: Box::new(
                 HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))
                     .on_result_of(|br: &LogIdx| br.0.to_string()),
@@ -98,12 +99,12 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         self
     }
 
-    pub fn with(mut self, col: TableColumn<RowData, Box<dyn CellDelegate<RowData>>>) -> Self {
+    pub fn with(mut self, col: TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>) -> Self {
         self.table_columns.push(col);
         self
     }
 
-    pub fn with_column<CD: CellDelegate<RowData> + 'static>(
+    pub fn with_column<CD: CellDelegate<TableData::Item> + 'static>(
         mut self,
         header: impl Into<String>,
         cell_delegate: CD,
@@ -112,7 +113,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         self
     }
 
-    pub fn add_column<CD: CellDelegate<RowData> + 'static>(
+    pub fn add_column<CD: CellDelegate<TableData::Item> + 'static>(
         &mut self,
         header: impl Into<String>,
         cell_render: CD,
@@ -138,7 +139,7 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
     }
 
     fn build_args(self) -> DefaultTableArgs<TableData> {
-        let column_headers: Vec<String> = self
+        let column_headers: Vector<String> = self
             .table_columns
             .iter()
             .map(|tc| tc.header.clone())

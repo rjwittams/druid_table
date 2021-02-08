@@ -5,9 +5,9 @@ use crate::axis_measure::{AxisPair, LogIdx};
 use crate::data::SortDirection::Ascending;
 use crate::data::{RemapDetails, SortDirection, SortSpec};
 use crate::selection::SingleCell;
-use crate::{CellsDelegate, IndexedData, IndexedItems, Remap, RemapSpec, Remapper, TableAxis};
+use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
 use druid::im::Vector;
-use druid::kurbo::{Line, PathEl};
+use druid::kurbo::{PathEl};
 use druid::piet::{FontFamily, Text, TextLayoutBuilder};
 use druid::widget::prelude::*;
 use druid::widget::TextBox;
@@ -589,7 +589,7 @@ where
     }
 }
 
-impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     Remapper<TableData> for ProvidedColumns<TableData, ColumnType>
 where
     TableData::Item: Data,
@@ -627,7 +627,7 @@ where
             Remap::new() // Todo: preserve moves
         } else {
             //Todo: Filter
-            let mut idxs: Vector<LogIdx> = (0usize..table_data.idx_len()).map(LogIdx).collect(); //TODO Give up if too big?
+            let mut idxs: Vector<LogIdx> = (0usize..table_data.data_len()).map(LogIdx).collect(); //TODO Give up if too big?
             idxs.sort_by(|a, b| {
                 table_data
                     .with(*a, |a| {
@@ -651,7 +651,7 @@ where
     }
 }
 
-impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     CellRender<TableData::Item> for ProvidedColumns<TableData, ColumnType>
 where
     TableData::Item: Data,
@@ -669,14 +669,14 @@ where
         ctx: &mut EventCtx,
         cell: &CellCtx,
         event: &Event,
-        data: &mut <TableData as IndexedItems>::Item,
+        data: &mut TableData::Item,
         env: &Env,
     ) {
         self.cols.event(ctx, cell, event, data, env);
     }
 }
 
-impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     EditorFactory<TableData::Item> for ProvidedColumns<TableData, ColumnType>
 where
     TableData::Item: Data,
@@ -684,12 +684,12 @@ where
     fn make_editor(
         &self,
         ctx: &CellCtx,
-    ) -> Option<Box<dyn Widget<<TableData as IndexedItems>::Item>>> {
+    ) -> Option<Box<dyn Widget<TableData::Item>>> {
         self.cols.make_editor(ctx)
     }
 }
 
-impl<TableData: IndexedData<Idx = LogIdx>, ColumnType: CellDelegate<TableData::Item>>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     CellsDelegate<TableData> for ProvidedColumns<TableData, ColumnType>
 where
     TableData::Item: Data,
