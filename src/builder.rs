@@ -7,7 +7,7 @@ use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedItems};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
-use crate::{CellRender, HeaderBuild};
+use crate::{CellRender, HeaderBuild, Table};
 use druid::{theme, Data, KeyOrValue};
 use std::marker::PhantomData;
 
@@ -126,18 +126,18 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
         self
     }
 
-    pub fn build_measure(&self, axis: TableAxis, size: f64) -> AxisMeasure {
+    fn build_measure(&self, axis: TableAxis, size: f64) -> AxisMeasure {
         AxisMeasure::new(self.measurements[axis], size)
     }
 
-    pub fn build_measures(&self) -> AxisPair<AxisMeasure> {
+    fn build_measures(&self) -> AxisPair<AxisMeasure> {
         AxisPair::new(
             self.build_measure(TableAxis::Rows, 30.),
             self.build_measure(TableAxis::Columns, 100.),
         )
     }
 
-    pub fn build_args(self) -> DefaultTableArgs<TableData> {
+    fn build_args(self) -> DefaultTableArgs<TableData> {
         let column_headers: Vec<String> = self
             .table_columns
             .iter()
@@ -165,5 +165,10 @@ impl<RowData: Data, TableData: IndexedData<Item = RowData, Idx = LogIdx>>
             col_build,
             self.table_config,
         )
+    }
+
+    pub fn build(self) -> Table<TableData> {
+        let measures = self.build_measures();
+        Table::new(self.build_args(), measures)
     }
 }

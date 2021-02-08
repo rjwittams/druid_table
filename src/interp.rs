@@ -1,6 +1,6 @@
-use druid_widget_nursery::animation::{AnimationCtx, AnimationId, AnimationStatus};
 use druid::kurbo::{Line, Point, Rect, Size};
 use druid::piet::Color;
+use druid_widget_nursery::animation::{AnimationCtx, AnimationId, AnimationStatus};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -79,10 +79,7 @@ pub trait HasInterp: Clone + Debug {
 
     fn tween_now(self, other: Self, frac: f64) -> Result<Self, InterpError> {
         let mut res = self.clone();
-        Self::Interp::build(self, other).interp(
-            &AnimationCtx::running(frac),
-            &mut res,
-        )?;
+        Self::Interp::build(self, other).interp(&AnimationCtx::running(frac), &mut res)?;
         Ok(res)
     }
 }
@@ -956,14 +953,14 @@ impl Interp for ColorInterp {
 #[cfg(test)]
 mod test {
     use super::*;
-    use druid_widget_nursery::animation::AnimationEvent::Ended;
-    use druid_widget_nursery::animation::{Animator, AnimationEvent, AnimationId};
     use crate::interp::InterpHolder::*;
     use crate::vis::{MarkInterp, MarkShapeInterp, TextMarkInterp};
     use crate::{Mark, VisMarks};
+    use druid_widget_nursery::animation::AnimationEvent::Ended;
+    use druid_widget_nursery::animation::{AnimationEvent, AnimationId, Animator};
     use std::mem::size_of;
-    use std::time::Duration;
     use std::num::NonZeroU32;
+    use std::time::Duration;
 
     #[test]
     fn test_merge() {
@@ -1009,7 +1006,10 @@ mod test {
         let mut animator: Animator = Default::default();
         let mut root_0: InterpNode<Line> = Default::default();
 
-        let ai_0 = animator.new_animation().duration(Duration::from_nanos(100)).id();
+        let ai_0 = animator
+            .new_animation()
+            .duration(Duration::from_nanos(100))
+            .id();
         root_0.get().p0.get().x = 0.0.tween(20.0).select_anim(ai_0);
         let mut root_1: InterpNode<Line> = Default::default();
 
@@ -1055,7 +1055,10 @@ mod test {
         simple_logger::init();
         let mut animator: Animator = Default::default();
 
-        let ai_0 = animator.new_animation().duration(Duration::from_nanos(100)).id();
+        let ai_0 = animator
+            .new_animation()
+            .duration(Duration::from_nanos(100))
+            .id();
         let mut root_0: InterpNode<Line> = Default::default();
         root_0.get().p0.get().x = 0.0.tween(20.0);
         root_0 = root_0.select_anim(ai_0);

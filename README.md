@@ -6,19 +6,19 @@ This project was to learn rust.
 * Virtualized rows and columns, ie data does not have to reside in memory and there is nothing stored per row/column/cell (if fixed sizes are used).
 * Custom cell and header rendering
 * Columns can be static or data derived
-* Selections (single cell + row & column) with keyboard control
-* Sorting (multi column, asc/desc) - up front specified right now. Interactive by double clicking in column headers (CTRL for multi select).
-* Trait based design for customisation (and possible monomorphisation benefits) :
+* Selections (single cell + row & column) with keyboard control (CTRL for multi select of columns)
+* Sorting (multi column, asc/desc) - up front specified or interactive by double clicking in column headers.
+* Trait based design for customisation:
     * Data sources:
         * Currently im::Vector is supported out of the box.
-        * The interface works for both virtualized and concrete data sources by reference. Minimum copying required. 
+        * The interface works for both virtualized and concrete data sources by reference.
     * Columns:
         * The default configured columns that are boxed onto the heap, allowing composition. Columns can be adapted with lenses or functions (to pull fields out of your row type). 
         * Implement your own "CellsDelegate" if configuration up front won't work - for example deriving columns from the data (DB result sets).
     * Axes: 
         * The default AxisMeasures allow user driven column resizing - right now this takes up O(n) memory in items on that axis. 
         * The FixedAxisMeasure stores no data, so is better for huge virtual tables. See examples/bigtable - tested on a quintillion cells!
-
+    
 Planned:
   * Fuller configuration (improved builder)
   * Filter

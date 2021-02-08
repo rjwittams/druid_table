@@ -1,7 +1,7 @@
 use druid_table::{
     AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate,
-    EditorFactory, FixedAxisMeasure, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems,
-    LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
+    EditorFactory, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap,
+    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
 };
 
 use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
@@ -107,7 +107,7 @@ where
     }
 }
 
-fn build_root_widget() -> impl Widget<LogIdxTable> {
+fn build_root_widget() -> Table<LogIdxTable> {
     let table_config = TableConfig::new();
 
     let inner_render = TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string());
@@ -132,7 +132,7 @@ fn build_root_widget() -> impl Widget<LogIdxTable> {
         AxisMeasure::new(AxisMeasurementType::Uniform, 25.),
         AxisMeasure::new(AxisMeasurementType::Uniform, 100.),
     );
-    Table::new_in_scope(
+    Table::new(
         TableArgs::new(
             BigTableCells::new(
                 TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),

@@ -15,7 +15,7 @@ use crate::render_ext::RenderContextExt;
 use crate::selection::{CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
 use crate::{EditorFactory, IndexedItems, Remap};
-use druid_bindings::{BindableAccess, bindable_self_body};
+use druid_bindings::{bindable_self_body, BindableAccess};
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item>
@@ -314,12 +314,15 @@ where
                             self.editing.handle_event(ctx, event, &mut data.data, env);
                         } else {
                             if me.count == 1 {
+                                let selected_cell = cell.clone();
                                 if me.mods.meta() || me.mods.ctrl() {
-                                    new_selection = data.selection.add_selection(cell.into());
+                                    new_selection =
+                                        data.selection.add_selection(selected_cell.into());
                                 } else if me.mods.shift() {
-                                    new_selection = data.selection.move_extent(cell.into());
+                                    new_selection =
+                                        data.selection.move_extent(selected_cell.into());
                                 } else {
-                                    new_selection = Some(cell.into());
+                                    new_selection = Some(selected_cell.into());
                                 }
 
                                 ctx.set_handled();
@@ -334,6 +337,20 @@ where
                                     &cell,
                                     |cell_ctx| cd.make_editor(cell_ctx),
                                 );
+                            }
+
+                            if let Some(ns) = &new_selection {
+                                if ns.same(&data.selection) {
+                                    data.data.with_mut(cell.log.row, |item| {
+                                        self.cell_delegate.event(
+                                            ctx,
+                                            &CellCtx::Cell(&cell),
+                                            event,
+                                            item,
+                                            env,
+                                        );
+                                    });
+                                }
                             }
                         }
                     }

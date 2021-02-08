@@ -32,6 +32,9 @@ impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         self.deref().paint(ctx, cell, data, env);
     }
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
+        self.deref().event(ctx, cell, event, data, env);
+    }
 }
 
 impl<RowData> EditorFactory<RowData> for Box<dyn CellDelegate<RowData>> {
@@ -59,6 +62,10 @@ impl<T> CellRender<T> for Box<dyn CellRender<T>> {
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         self.deref().paint(ctx, cell, data, env);
     }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
+        self.deref().event(ctx, cell, event, data, env);
+    }
 }
 
 #[derive(Debug)]
@@ -71,6 +78,7 @@ pub enum CellCtx<'a> {
 pub trait CellRender<T> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env); // Use to cache resources like fonts
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env);
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {}
 }
 
 impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
@@ -88,6 +96,19 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
         {
             if let Some(cell_render) = self.get(col.0) {
                 cell_render.paint(ctx, cell, data, env)
+            }
+        }
+    }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
+        if let CellCtx::Cell(SingleCell {
+            log: AxisPair { col, .. },
+            ..
+        }) = cell
+        {
+            if let Some(cell_render) = self.get(col.0) {
+                dbg!(event);
+                cell_render.event(ctx, cell, event, data, env)
             }
         }
     }
@@ -169,6 +190,14 @@ where
             inner.paint(ctx, cell, inner_data, env);
         })
     }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
+        let inner = &self.0.inner;
+        dbg!(event);
+        self.0.wrapper.with_mut(data, |inner_data| {
+            inner.event(ctx, cell, event, inner_data, env);
+        })
+    }
 }
 
 impl<T, U, L, DC> DataCompare<T> for LensWrapped<T, U, L, DC>
@@ -218,6 +247,8 @@ where
         let inner_data = (self.0.wrapper)(data);
         inner.paint(ctx, cell, &inner_data, env);
     }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {}
 }
 
 impl<T, U, F, DC> DataCompare<T> for FuncWrapped<T, U, F, DC>
@@ -509,6 +540,10 @@ impl<T: Data, CR: CellDelegate<T>> CellRender<T> for TableColumn<T, CR> {
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
         self.cell_delegate.paint(ctx, cell, data, env)
     }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
+        self.cell_delegate.event(ctx, cell, dbg!(event), data, env);
+    }
 }
 
 impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
@@ -617,6 +652,17 @@ where
 
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &TableData::Item, env: &Env) {
         self.cols.paint(ctx, cell, data, env);
+    }
+
+    fn event(
+        &self,
+        ctx: &mut EventCtx,
+        cell: &CellCtx,
+        event: &Event,
+        data: &mut <TableData as IndexedItems>::Item,
+        env: &Env,
+    ) {
+        self.cols.event(ctx, cell, event, data, env);
     }
 }
 

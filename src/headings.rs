@@ -15,8 +15,8 @@ use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
 use crate::IndicesSelection;
+use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
-use druid_bindings::{BindableAccess, bindable_self_body};
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -277,6 +277,8 @@ where
                         ctx.set_cursor(cursor);
                         ctx.set_handled();
                     }
+                } else {
+                    ctx.clear_cursor();
                 } // TODO grabber for when header can move (ie selected)
             }
             Event::MouseUp(me) => {

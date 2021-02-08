@@ -13,8 +13,8 @@ use druid::widget::{
     SizedBox, Stepper, ViewSwitcher,
 };
 use druid::{
-    AppLauncher, Data, Env, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx, Point,
-    RenderContext, Widget, WidgetExt, WindowDesc,
+    AppLauncher, Data, Env, Event, EventCtx, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx,
+    Point, RenderContext, Widget, WidgetExt, WindowDesc,
 };
 use druid::{Color, Value};
 use std::cmp::Ordering;
@@ -91,6 +91,15 @@ impl CellRender<f64> for PieCell {
         ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
 
         ctx.stroke(&circle, &Color::BLACK, 1.0);
+    }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut f64, env: &Env) {
+        match event {
+            Event::MouseDown(me) => {
+                *data = 1.0 - *data;
+            }
+            _ => (),
+        }
     }
 }
 
@@ -189,24 +198,15 @@ fn group<T: Data, W: Widget<T> + 'static>(w: W) -> Padding<T> {
     w.border(Color::WHITE, 0.5).padding(5.)
 }
 
-fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
-    let table_builder = TableBuilder::<HelloRow, Vector<HelloRow>>::new()
-        .measuring_axis(
-            TableAxis::Rows,
-            if settings.row_fixed {
-                AxisMeasurementType::Uniform
-            } else {
-                AxisMeasurementType::Individual
-            },
-        )
-        .measuring_axis(
-            TableAxis::Columns,
-            if settings.col_fixed {
-                AxisMeasurementType::Uniform
-            } else {
-                AxisMeasurementType::Individual
-            },
-        )
+fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
+    let measurement_type = if settings.col_fixed {
+        AxisMeasurementType::Uniform
+    } else {
+        AxisMeasurementType::Individual
+    };
+    TableBuilder::<HelloRow, Vector<HelloRow>>::new()
+        .measuring_axis(TableAxis::Rows, measurement_type)
+        .measuring_axis(TableAxis::Columns, measurement_type)
         .headings(settings.show_headings)
         .border(settings.border_thickness)
         .with_column("Language", TextCell::new().lens(HelloRow::lang))
@@ -236,12 +236,8 @@ fn build_table(settings: Settings) -> impl Widget<Vector<HelloRow>> {
         )
         .with_column("Greeting 4", TextCell::new().lens(HelloRow::greeting))
         .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
-        .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting));
-
-    let measures = table_builder.build_measures();
-    let table = Table::new_in_scope(table_builder.build_args(), measures);
-
-    table
+        .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting))
+        .build()
 }
 
 pub fn main() {
