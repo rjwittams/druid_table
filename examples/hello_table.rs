@@ -104,7 +104,7 @@ impl CellRender<f64> for PieCell {
 }
 
 impl EditorFactory<f64> for PieCell {
-    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
+    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
         None
     }
 }
@@ -242,7 +242,7 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
 
 pub fn main() {
     // describe the main window
-    let main_window = WindowDesc::new(build_main_widget)
+    let main_window = WindowDesc::new(build_main_widget())
         .title(WINDOW_TITLE)
         .window_size((800.0, 500.0));
 

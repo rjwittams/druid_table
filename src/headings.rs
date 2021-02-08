@@ -7,14 +7,14 @@ use druid::{
 };
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
-use crate::columns::{CellCtx, CellRender};
+use crate::columns::{CellCtx, CellRender, CellDelegate};
 use crate::config::{ResolvedTableConfig, TableConfig};
 use crate::data::{IndexedItems, SortSpec};
 use crate::headings::HeaderMovement::{Disallowed, Permitted};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
-use crate::IndicesSelection;
+use crate::{IndicesSelection, CellsDelegate};
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
 
@@ -99,8 +99,6 @@ where
     Render: CellRender<HeadersSource::Header>,
 {
     axis: TableAxis,
-    config: TableConfig,
-    resolved_config: Option<ResolvedTableConfig>,
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
@@ -116,15 +114,12 @@ where
 {
     pub fn new(
         axis: TableAxis,
-        config: TableConfig,
         headers_source: HeadersSource,
         header_render: Render,
         allow_moves: bool,
     ) -> Headings<HeadersSource, Render> {
         Headings {
             axis,
-            config,
-            resolved_config: None,
             headers_source,
             headers: None,
             header_render,
@@ -156,7 +151,7 @@ where
         sort_dirs: &HashMap<LogIdx, SortSpec>,
         vis_main_idx: VisIdx,
     ) -> Option<()> {
-        let rtc = self.resolved_config.as_ref()?;
+        let rtc = &data.resolved_config;
         let headers = self.headers.as_ref()?;
         let axis = self.axis;
         let header_render = &mut self.header_render;
@@ -312,9 +307,8 @@ where
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
-            let rtc = self.config.resolve(env);
-            self.headers = Some(self.headers_source.get_headers(&data.data)); // TODO Option
-            self.resolved_config = Some(rtc);
+            self.headers = Some(self.headers_source.get_headers(&data.table_data));
+            // TODO Option
         }
     }
 
@@ -326,7 +320,7 @@ where
         _env: &Env,
     ) {
         if !old_data.same(data) {
-            self.headers = Some(self.headers_source.get_headers(&data.data));
+            self.headers = Some(self.headers_source.get_headers(&data.table_data));
             ctx.request_layout(); // TODO Only relayout if actually changed
         }
     }
@@ -339,13 +333,10 @@ where
         _env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
-        let cross_axis_length = if let Some(rc) = &self.resolved_config {
-            match self.axis {
-                TableAxis::Columns => rc.col_header_height,
-                TableAxis::Rows => rc.row_header_width,
-            }
-        } else {
-            self.axis.default_header_cross()
+        let rc = &data.resolved_config;
+        let cross_axis_length = match self.axis {
+            TableAxis::Columns => rc.col_header_height,
+            TableAxis::Rows => rc.row_header_width,
         };
 
         bc.constrain(self.axis.size(
@@ -372,7 +363,8 @@ where
             .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction)))
             .collect();
 
-        if let Some(rtc) = &self.resolved_config {
+        {
+            let rtc = &data.resolved_config;
             self.header_render.init(ctx, env);
             let rect = ctx.region().bounding_box();
 

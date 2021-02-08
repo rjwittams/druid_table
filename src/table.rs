@@ -1,17 +1,23 @@
 use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
+use crate::config::ResolvedTableConfig;
 use crate::headings::HeadersFromData;
 use crate::selection::CellDemap;
 use crate::{
     CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, TableConfig,
     TableSelection, VisIdx,
 };
-use druid::widget::{Axis, CrossAxisAlignment, DefaultScopePolicy, Flex, Scope, Scroll};
+use druid::widget::{
+    Axis, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll,
+};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetPod,
 };
 use druid_bindings::*;
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::fmt::Debug;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -134,29 +140,44 @@ where
 pub(crate) struct TableState<TableData: Data> {
     scroll_x: f64,
     scroll_y: f64,
-    pub(crate) data: TableData,
+    pub(crate) config: TableConfig,
+    pub(crate) resolved_config: ResolvedTableConfig,
+    pub(crate) table_data: TableData,
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
     pub(crate) selection: TableSelection,
     #[data(ignore)]
     pub(crate) measures: AxisPair<AxisMeasure>, // TODO
+    pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>
 }
 
 impl<TableData: Data> TableState<TableData> {
-    pub fn new(data: TableData, measures: AxisPair<AxisMeasure>) -> Self {
+    pub fn new(
+        config: TableConfig,
+        resolved_config: ResolvedTableConfig,
+        data: TableData,
+        measures: AxisPair<AxisMeasure>,
+        cells_del: Arc<dyn CellsDelegate<TableData>>
+    ) -> Self {
         TableState {
             scroll_x: 0.0,
             scroll_y: 0.0,
-            data,
+            config,
+            resolved_config,
+            table_data: data,
             remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
             remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
             selection: TableSelection::default(),
             measures,
+            cells_del
         }
     }
+}
+
+impl<TableData: Data> TableState<TableData>{
 
     pub fn remap_axis(&mut self, axis: TableAxis, f: impl Fn(&TableData, &RemapSpec) -> Remap) {
-        self.remaps[axis] = f(&self.data, &self.remap_specs[axis]);
+        self.remaps[axis] = f(&self.table_data, &self.remap_specs[axis]);
     }
 
     pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx) {
@@ -184,10 +205,105 @@ impl CellDemap for AxisPair<Remap> {
     }
 }
 
-type TableChild<T> = WidgetPod<T, Box<dyn Widget<T>>>;
+type TableChild<TableData> = WidgetPod<
+    TableData,
+    Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
+>;
 
-pub struct Table<T> {
-    child: TableChild<T>,
+pub struct Table<TableData: Data> {
+    child: TableChild<TableData>,
+}
+
+struct TableScopePolicy<TableData> {
+    config: TableConfig,
+    measures: AxisPair<AxisMeasure>,
+    cells_delegate: Arc<dyn CellsDelegate<TableData>>,
+    phantom_td: PhantomData<TableData>,
+}
+
+impl<TableData> TableScopePolicy<TableData> {
+    pub fn new(config: TableConfig, measures: AxisPair<AxisMeasure>, cells_delegate: Arc<dyn CellsDelegate<TableData>>) -> Self {
+        TableScopePolicy {
+            config,
+            measures,
+            cells_delegate,
+            phantom_td: Default::default(),
+        }
+    }
+}
+
+impl<TableData: Data> ScopePolicy for TableScopePolicy<TableData> {
+    type In = TableData;
+    type State = TableState<TableData>;
+    type Transfer = TableScopeTransfer<TableData>;
+
+    fn create(self, inner: &Self::In, env: &Env) -> (Self::State, Self::Transfer) {
+        let rc = self.config.resolve(env);
+        (
+            TableState::new(self.config, rc, inner.clone(), self.measures, self.cells_delegate),
+            TableScopeTransfer::new(),
+        )
+    }
+}
+
+struct TableScopeTransfer<TableData> {
+    phantom_td: PhantomData<TableData>,
+}
+
+impl<TableData> TableScopeTransfer<TableData> {
+    pub fn new() -> Self {
+        TableScopeTransfer {
+            phantom_td: Default::default(),
+        }
+    }
+}
+
+impl<TableData: Data> ScopeTransfer for TableScopeTransfer<TableData> {
+    type In = TableData;
+    type State = TableState<TableData>;
+
+    fn read_input(&self, state: &mut Self::State, inner: &Self::In, env: &Env) {
+        state.table_data = inner.clone();
+    }
+
+    fn write_back_input(&self, state: &Self::State, inner: &mut Self::In) {
+        if !inner.same(&state.table_data) {
+            *inner = state.table_data.clone();
+        }
+    }
+
+    fn update_computed(&self, old_state: &Self::State, state: &mut Self::State) -> bool {
+        let remaps_same = old_state.remap_specs.zip_with(&state.remap_specs, |old, new| old.same(new));
+        // if !remap_same[TableAxis::Rows] {
+        //     data.remap_axis(TableAxis::Rows, |d, s| self.cell_delegate.remap_items(d, s));
+        //     data.measures[TableAxis::Rows].set_axis_properties(
+        //         data.resolved_config.cell_border_thickness,
+        //         data.table_data.idx_len(),
+        //         &data.remaps[TableAxis::Rows],
+        //     );
+        //     ctx.request_layout(); // Could avoid if we know we overflow scroll?
+        // }
+        // if !remap_same[TableAxis::Columns] {
+        //     data.remap_axis(TableAxis::Columns, |d, s| {
+        //         s.remap_placements(LogIdx(self.cell_delegate.number_of_columns_in_data(d) - 1))
+        //         // TODO check for none
+        //     });
+        //     log::info!("Remap for cols {:?}", data.remaps[TableAxis::Columns]);
+        //     data.measures[TableAxis::Columns].set_axis_properties(
+        //         data.resolved_config.cell_border_thickness,
+        //         self.cell_delegate
+        //             .number_of_columns_in_data(&data.table_data),
+        //         &data.remaps[TableAxis::Columns],
+        //     );
+        //     ctx.request_layout();
+        // }
+        remaps_same.for_each(|axis, same| {
+            if !same {
+                log::info!("Remap changed in scope {:?}", axis);
+            }
+        });
+        true
+    }
 }
 
 impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>> Table<TableData> {
@@ -208,7 +324,7 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
         let table_config = args.table_config;
 
         let cells_delegate = args.cells_delegate;
-        let cells = Cells::new(table_config.clone(), cells_delegate);
+        let cells = Cells::new();
 
         let cells_scroll = Scroll::new(cells).binding(
             TableState::<TableData>::scroll_x
@@ -216,7 +332,8 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
                 .and(TableState::<TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical))),
         );
 
-        Self::add_headings(args.col_h, args.row_h, measures, table_config, cells_scroll)
+        let policy = TableScopePolicy::new(table_config.clone(), measures.clone(), Arc::new(cells_delegate));
+        Self::add_headings(args.col_h, args.row_h, policy, table_config, cells_scroll)
     }
 
     fn add_headings<
@@ -225,20 +342,14 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
     >(
         col_h: Option<ColH>,
         row_h: Option<RowH>,
-        measures: AxisPair<AxisMeasure>,
+        policy: TableScopePolicy<TableData>,
         table_config: TableConfig,
         widget: impl Widget<TableState<TableData>> + 'static,
     ) -> TableChild<TableData> {
         if let Some(col_h) = col_h {
             let (source, render) = col_h.content();
 
-            let col_headings = Headings::new(
-                TableAxis::Columns,
-                table_config.clone(),
-                source,
-                render,
-                true,
-            );
+            let col_headings = Headings::new(TableAxis::Columns, source, render, true);
             let ch_scroll = Scroll::new(col_headings).disable_scrollbars().binding(
                 TableState::<TableData>::scroll_x.bind(ScrollToProperty::new(Axis::Horizontal)),
             );
@@ -247,14 +358,14 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
                 .cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_child(ch_scroll)
                 .with_flex_child(widget, 1.);
-            Self::add_row_headings(measures, table_config, true, row_h, cells_column)
+            Self::add_row_headings(policy, table_config, true, row_h, cells_column)
         } else {
-            Self::add_row_headings(measures, table_config, false, row_h, widget)
+            Self::add_row_headings(policy, table_config, false, row_h, widget)
         }
     }
 
     fn add_row_headings<RowH: HeaderBuildT<TableData = TableData>>(
-        measures: AxisPair<AxisMeasure>,
+        policy: TableScopePolicy<TableData>,
         table_config: TableConfig,
         corner_needed: bool,
         row_h: Option<RowH>,
@@ -262,8 +373,7 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
     ) -> TableChild<TableData> {
         if let Some(row_h) = row_h {
             let (source, render) = row_h.content();
-            let row_headings =
-                Headings::new(TableAxis::Rows, table_config.clone(), source, render, false);
+            let row_headings = Headings::new(TableAxis::Rows, source, render, false);
 
             let row_scroll = Scroll::new(row_headings).disable_scrollbars().binding(
                 TableState::<TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical)),
@@ -271,7 +381,7 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
 
             let mut rh_col = Flex::column().cross_axis_alignment(CrossAxisAlignment::Start);
             if corner_needed {
-                rh_col.add_spacer(table_config.col_header_height)
+                rh_col.add_spacer(table_config.col_header_height.clone())
             }
             rh_col.add_flex_child(row_scroll, 1.);
 
@@ -281,24 +391,20 @@ impl<RowData: Data, TableData: Data + IndexedItems<Idx = LogIdx, Item = RowData>
                 .with_flex_child(widget, 1.)
                 .center();
 
-            Self::wrap_in_scope(measures, row)
+            Self::wrap_in_scope(policy, row)
         } else {
-            Self::wrap_in_scope(measures, widget)
+            Self::wrap_in_scope(policy, widget)
         }
     }
 
     fn wrap_in_scope<W: Widget<TableState<TableData>> + 'static>(
-        measures: AxisPair<AxisMeasure>,
+        policy: TableScopePolicy<TableData>,
         widget: W,
     ) -> TableChild<TableData> {
-        let data_lens = lens!(TableState<TableData>, data);
-        WidgetPod::new(Box::new(Scope::new(
-            DefaultScopePolicy::from_lens(
-                move |d: TableData| TableState::new(d, measures.clone()),
-                data_lens,
-            ),
-            widget,
-        )))
+        WidgetPod::new(Scope::new(
+            policy,
+            Box::new(widget),
+        ))
     }
 }
 
@@ -312,6 +418,11 @@ impl<T: Data> Widget<T> for Table<T> {
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
+        if ctx.env_changed(){
+            if let Some(state) = self.child.widget_mut().state_mut() {
+                state.resolved_config = state.config.resolve(env);
+            }
+        }
         self.child.update(ctx, data, env);
     }
 

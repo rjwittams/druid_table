@@ -22,6 +22,11 @@ impl<T: Debug> AxisPair<T> {
         ca
     }
 
+    pub fn for_each(&self, f: impl Fn(TableAxis, &T) ){
+        f(TableAxis::Rows, &self.row);
+        f(TableAxis::Columns, &self.col);
+    }
+
     pub fn map<O: Debug>(&self, f: impl Fn(&T) -> O) -> AxisPair<O> {
         AxisPair::new(f(&self.row), f(&self.col))
     }

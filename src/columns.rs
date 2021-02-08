@@ -17,7 +17,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 
 pub trait EditorFactory<RowData> {
-    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;
 }
 
 pub trait CellDelegate<RowData>:
@@ -38,8 +38,8 @@ impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
 }
 
 impl<RowData> EditorFactory<RowData> for Box<dyn CellDelegate<RowData>> {
-    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
-        self.deref_mut().make_editor(ctx)
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
+        self.deref().make_editor(ctx)
     }
 }
 
@@ -115,13 +115,13 @@ impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
 }
 
 impl<T, EF: EditorFactory<T>> EditorFactory<T> for Vec<EF> {
-    fn make_editor(&mut self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+    fn make_editor(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         if let CellCtx::Cell(SingleCell {
             log: AxisPair { col, .. },
             ..
         }) = cell
         {
-            if let Some(ef) = self.get_mut(col.0) {
+            if let Some(ef) = self.get(col.0) {
                 return ef.make_editor(cell);
             }
         }
@@ -221,7 +221,7 @@ where
     L: Lens<T, U> + Clone + 'static,
     EF: EditorFactory<U>,
 {
-    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         // TODO work out if we can avoid a chain of boxing...
         if let Some(widget) = self.0.inner.make_editor(ctx) {
             Some(Box::new(widget.lens(self.0.wrapper.clone())))
@@ -353,7 +353,7 @@ impl CellRender<String> for TextCell {
 }
 
 impl EditorFactory<String> for TextCell {
-    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<String>>> {
+    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<String>>> {
         Some(Box::new(TextBox::new().expand_height()))
     }
 }
@@ -439,7 +439,7 @@ impl DataCompare<String> for TextCell {
     }
 }
 
-pub struct TableColumn<T: Data, CD: CellDelegate<T>> {
+pub struct TableColumn<T, CD> {
     pub(crate) header: String,
     cell_delegate: CD,
     pub(crate) width: TableColumnWidth,
@@ -553,7 +553,7 @@ impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
 }
 
 impl<T: Data, CR: CellDelegate<T>> EditorFactory<T> for TableColumn<T, CR> {
-    fn make_editor(&mut self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         self.cell_delegate.make_editor(ctx)
     }
 }
@@ -565,6 +565,17 @@ where
     cols: Vec<TableColumn<TableData::Item, ColumnType>>,
     phantom_td: PhantomData<TableData>,
 }
+
+impl <TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug for ProvidedColumns<TableData, ColumnType>
+    where
+        TableData::Item: Data{
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("ProvidedColumns")
+            .field("cols", &self.cols)
+            .finish()
+    }
+}
+
 
 impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     ProvidedColumns<TableData, ColumnType>
@@ -672,7 +683,7 @@ where
     TableData::Item: Data,
 {
     fn make_editor(
-        &mut self,
+        &self,
         ctx: &CellCtx,
     ) -> Option<Box<dyn Widget<<TableData as IndexedItems>::Item>>> {
         self.cols.make_editor(ctx)

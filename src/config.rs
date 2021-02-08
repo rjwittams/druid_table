@@ -4,7 +4,7 @@ use druid::{theme, Color, Env, KeyOrValue};
 pub(crate) const DEFAULT_COL_HEADER_HEIGHT: f64 = 25.0;
 pub(crate) const DEFAULT_ROW_HEADER_WIDTH: f64 = 100.0;
 
-#[derive(Clone)]
+#[derive(Clone, Data, Debug)]
 pub struct TableConfig {
     pub col_header_height: KeyOrValue<f64>,
     pub row_header_width: KeyOrValue<f64>,
@@ -18,6 +18,7 @@ pub struct TableConfig {
     pub focus_color: KeyOrValue<Color>,
 }
 
+#[derive(Clone, Data, Debug)]
 pub struct ResolvedTableConfig {
     pub(crate) col_header_height: f64,
     pub(crate) row_header_width: f64,
