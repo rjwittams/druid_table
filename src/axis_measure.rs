@@ -19,7 +19,7 @@ pub enum TableAxis {
 }
 
 // Acts as an enum map
-#[derive(Eq, PartialEq, Debug, Clone)]
+#[derive(Eq, PartialEq, Debug, Clone, Hash)]
 pub struct AxisPair<T: Debug> {
     pub row: T,
     pub col: T,
@@ -183,6 +183,7 @@ enum AxisMeasureInner {
 }
 
 use AxisMeasureInner::*;
+use std::hash::Hash;
 
 impl AxisMeasure {
     fn border(&self) -> f64 {
@@ -518,7 +519,6 @@ impl AxisMeasureT for StoredAxisMeasure {
     }
 }
 
-#[cfg(not)]
 mod test {
     use crate::axis_measure::{AxisMeasureT, VisIdx};
     use crate::{FixedAxisMeasure, Remap, StoredAxisMeasure};
@@ -531,7 +531,7 @@ mod test {
         let mut ax = FixedAxisMeasure::new(99.0);
 
         test_equal_sized(&mut ax);
-        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(12), 34.), 99.);
+        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(12), 34.), false);
     }
 
     fn test_equal_sized<AX: AxisMeasureT + Debug>(ax: &mut AX) {
@@ -553,13 +553,15 @@ mod test {
             vec![VisIdx(1), VisIdx(2), VisIdx(2)]
         );
 
+
+
         assert_eq!(
-            ax.vis_range_from_pixels(105.0, 295.0),
-            (VisIdx(1), VisIdx(2))
+            (ax.vis_idx_from_pixel(105.0),  ax.vis_idx_from_pixel(295.0)),
+            (Some(VisIdx(1)), Some(VisIdx(2)))
         );
         assert_eq!(
-            ax.vis_range_from_pixels(100.0, 300.0),
-            (VisIdx(1), VisIdx(3))
+            (ax.vis_idx_from_pixel(100.0), ax.vis_idx_from_pixel(300.0)),
+            (Some(VisIdx(1)), Some(VisIdx(3)))
         );
         let lengths = (1usize..=3)
             .into_iter()
@@ -571,12 +573,24 @@ mod test {
     }
 
     #[test]
-    fn stored_axis() {
-        let mut ax = StoredAxisMeasure::new(99.);
+    fn stored_axis_equal() {
+        let mut ax = StoredAxisMeasure::new(100.);
         test_equal_sized(&mut ax);
 
-        assert_eq!(ax.set_pixel_length_for_vis(VisIdx(2), 49.), 49.);
-        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(1), 109.), 9.);
-        assert_eq!(ax.total_pixel_length(), 260.0)
+        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(2), 160.), true);
+        assert_eq!(ax.total_pixel_length(), 160.0);
+        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(1), 110.), true);
+        assert_eq!(ax.total_pixel_length(), 170.0)
+    }
+
+    #[test]
+    fn stored_axis_() {
+        let mut ax = StoredAxisMeasure::new(99.);
+        ax.set_axis_properties(1.0, 2, &Remap::Pristine);
+
+        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(1), 159.), true);
+        assert_eq!(ax.total_pixel_length(), 160.0);
+        assert_eq!(ax.set_far_pixel_for_vis(VisIdx(0), 109.), true);
+        assert_eq!(ax.total_pixel_length(), 170.0)
     }
 }

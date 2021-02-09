@@ -1,10 +1,8 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{
-    Affine, BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
-};
+use druid::{BoxConstraints, Data, Env, Event, EventCtx, KbKey, LayoutCtx, LifeCycle, LifeCycleCtx,
+            PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, InternalLifeCycle};
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::cells::Editing::Inactive;
@@ -20,26 +18,23 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::ops::{Deref};
 use std::collections::HashMap;
+use std::time::Instant;
+use priority_queue::PriorityQueue;
+use std::cmp::Reverse;
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item> + Debug
-where
-    TableData::Item: Data,
 {
-    fn number_of_columns_in_data(&self, data: &TableData) -> usize;
+    fn data_columns(&self, data: &TableData) -> usize;
 }
 
-impl <TableData: IndexedData> CellsDelegate<TableData> for Arc<dyn CellsDelegate<TableData>>
-    where
-        TableData::Item: Data{
-    fn number_of_columns_in_data(&self, data: &TableData) -> usize{
-        self.as_ref().number_of_columns_in_data(data)
+impl <TableData: IndexedData> CellsDelegate<TableData> for Arc<dyn CellsDelegate<TableData>> {
+    fn data_columns(&self, data: &TableData) -> usize{
+        self.as_ref().data_columns(data)
     }
 }
 
-impl <TableData: IndexedData>  CellRender<TableData::Item> for Arc<dyn CellsDelegate<TableData>>
-    where
-        TableData::Item: Data{
+impl <TableData: IndexedData>  CellRender<TableData::Item> for Arc<dyn CellsDelegate<TableData>> {
     fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
         //self.deref().init(ctx, env)
     }
@@ -51,11 +46,13 @@ impl <TableData: IndexedData>  CellRender<TableData::Item> for Arc<dyn CellsDele
     fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut TableData::Item, env: &Env) {
         self.deref().event(ctx, cell, event, data, env)
     }
+
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
+        self.deref().make_display(cell)
+    }
 }
 
-impl <TableData: IndexedData> Remapper<TableData> for Arc<dyn CellsDelegate<TableData>>
-    where
-        TableData::Item: Data {
+impl <TableData: IndexedData> Remapper<TableData> for Arc<dyn CellsDelegate<TableData>> {
     fn sort_fixed(&self, idx: usize) -> bool {
         self.deref().sort_fixed(idx)
     }
@@ -69,9 +66,7 @@ impl <TableData: IndexedData> Remapper<TableData> for Arc<dyn CellsDelegate<Tabl
     }
 }
 
-impl <TableData: IndexedData>  EditorFactory<TableData::Item> for Arc<dyn CellsDelegate<TableData>>
-    where
-        TableData::Item: Data {
+impl <TableData: IndexedData>  EditorFactory<TableData::Item> for Arc<dyn CellsDelegate<TableData>> {
     fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
         self.deref().make_editor(ctx)
     }
@@ -146,7 +141,8 @@ impl<RowData: Data> Editing<RowData> {
         match self {
             Editing::Cell { .. } => {
                 // Work out what to do with the previous pod if there is one.
-                // We could have lazy editors (that don't write back to data immediately) and send them a special command saying 'you are being shut down'.
+                // We could have lazy editors (that don't write back to data immediately)
+                // and w
                 // Would need to give them data for their row
             }
             Editing::Inactive => {}
@@ -155,25 +151,23 @@ impl<RowData: Data> Editing<RowData> {
     }
 }
 
-pub struct Cells<TableData>
-where
-    TableData: IndexedData,
-    TableData::Item: Data
+pub struct Cells<TableData: IndexedData>
 {
-    cell_pods: HashMap<AxisPair<LogIdx>, WidgetPod<TableData::Item, Box<dyn Widget<TableData::Item>>>>,
+    start: Instant,
+    cell_pods: HashMap<AxisPair<LogIdx>, Option<WidgetPod<TableData::Item, Box<dyn Widget<TableData::Item>>>>>,
+    cells_lru: PriorityQueue<AxisPair<LogIdx>, Reverse<Instant>>,
     editing: Editing<TableData::Item>,
     dragging_selection: bool,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData> Cells<TableData>
-where
-    TableData: IndexedData,
-    TableData::Item: Data
+impl <TableData: IndexedData> Cells<TableData>
 {
     pub fn new() -> Cells<TableData> {
         Cells {
+            start: Instant::now(),
             cell_pods: Default::default(),
+            cells_lru: Default::default(),
             editing: Inactive,
             dragging_selection: false,
             phantom_td: PhantomData::default(),
@@ -197,13 +191,69 @@ where
         measures.map(|m| m.total_pixel_length()).size()
     }
 
+    fn ensure_cell_pods(&mut self, data: &TableState<TableData>)->bool{
+        let now = Instant::now();
+        //log::info!("Ensuring pods {:?}", (Instant::now() - self.start).as_secs_f32() );
+
+        let draw_rect = data.scroll_rect.intersect(Rect::from_origin_size(
+            Point::ZERO,
+            self.measured_size(&data.measures),
+        ));
+
+        let cell_rect = CellRect::new(
+            data.measures[TableAxis::Rows].vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            data.measures[TableAxis::Columns].vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
+        );
+
+
+        let mut added = 0;
+        let mut visible = 0;
+        let cell_delegate = &data.cells_del;
+        for vis_row_idx in cell_rect.rows() {
+            if let Some(log_row_idx) = data.remaps[TableAxis::Rows].get_log_idx(vis_row_idx) {
+                for vis_col_idx in cell_rect.cols(){
+                    if let Some(log_col_idx) = data.remaps[TableAxis::Columns].get_log_idx(vis_col_idx) {
+                        visible += 1;
+                        let sc = SingleCell::new(
+                            AxisPair::new(vis_row_idx, vis_col_idx),
+                            AxisPair::new(log_row_idx, log_col_idx),
+                        );
+                        let cell = CellCtx::Cell(&sc);
+
+                        self.cell_pods.entry(sc.log.clone()).or_insert_with_key(|key| {
+                            added += 1;
+                            cell_delegate.make_display(&cell).map(WidgetPod::new)
+                        });
+                        self.cells_lru.push(sc.log.clone(), Reverse(now));
+                    }
+                }
+            }
+        }
+
+        let max_widgets = (2.5 * (visible as f64)).floor() as isize;
+        let removed = 0.max((self.cell_pods.len() as isize)- max_widgets);
+        for _ in 0..removed {
+            if let Some((log_cell, _)) = self.cells_lru.pop() {
+                self.cell_pods.remove(&log_cell);
+            }
+        }
+
+        if added > 0 {
+            log::info!("Ensuring cells pix rect {:?}, cell rect {:?}, {}t/{}v/+{}/-{} widgets",
+                       &data.scroll_rect, &cell_rect, self.cell_pods.len(), visible, added, removed);
+        }
+
+        added > 0 || removed > 0
+    }
+
     fn paint_cells(
-        &self,
+        &mut self,
         ctx: &mut PaintCtx,
         data: &TableState<TableData>,
         env: &Env,
         rect: &CellRect,
     ) {
+        let start = Instant::now();
         for vis_row_idx in rect.rows() {
             let col_remap = &data.remaps[TableAxis::Columns];
             let measures = &data.measures;
@@ -215,7 +265,6 @@ where
                         ctx,
                         env,
                         &data.resolved_config,
-                        &data.cells_del,
                         &mut rect.cols(),
                         log_row_idx,
                         vis_row_idx,
@@ -226,14 +275,16 @@ where
                 });
             }
         }
+
+        //let duration = start.elapsed();
+        //log::info!("Paint {:?} {} secs {:?}", (start - self.start).as_secs_f32(), duration.as_secs_f32(), rect)
     }
 
     fn paint_row(
-        &self,
+        &mut self,
         ctx: &mut PaintCtx,
         env: &Env,
         rtc: &ResolvedTableConfig,
-        cell_delegate: &impl CellsDelegate<TableData>,
         cols: &mut impl Iterator<Item=VisIdx>,
         log_row_idx: LogIdx,
         vis_row_idx: VisIdx,
@@ -248,6 +299,8 @@ where
                     AxisPair::new(log_row_idx, log_col_idx),
                 );
 
+                let cell_pod = self.cell_pods.get_mut(&sc.log);
+
                 let cell_rect = Rect::from_origin_size(
                     measures
                         .zip_with(&sc.vis, |m, vis| m.first_pixel_from_vis(*vis))
@@ -261,13 +314,11 @@ where
                 let padded_rect = cell_rect.inset(-rtc.cell_padding);
 
                 ctx.with_save(|ctx| {
-                    let layout_origin = padded_rect.origin().to_vec2();
                     ctx.clip(padded_rect);
-                    ctx.transform(Affine::translate(layout_origin));
-                    let cell = CellCtx::Cell(&sc);
-                    ctx.with_child_ctx(padded_rect, |ctxt| {
-                        cell_delegate.paint(ctxt, &cell, row, env);
-                    });
+                    if let Some(Some(pod)) = cell_pod{
+                        //log::info!("Paint cell {:?}, {:?}", &sc.vis, pod.paint_rect());
+                        pod.paint(ctx, row, env)
+                    }
                 });
 
                 ctx.stroke_bottom_left_border(
@@ -336,10 +387,7 @@ where
 }
 
 
-impl<TableData> Widget<TableState<TableData>> for Cells<TableData>
-where
-    TableData: IndexedData,
-    TableData::Item: Data
+impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData>
 {
     fn event(
         &mut self,
@@ -379,21 +427,6 @@ where
                                 &cell,
                                 |cell_ctx| cd.make_editor(cell_ctx),
                             );
-                        }
-
-                        if let Some(ns) = &new_selection {
-                            let cd = &data.cells_del;
-                            if ns.same(&data.selection) {
-                                data.table_data.with_mut(cell.log.row, |item| {
-                                    cd.event(
-                                        ctx,
-                                        &CellCtx::Cell(&cell),
-                                        event,
-                                        item,
-                                        env,
-                                    );
-                                });
-                            }
                         }
                     }
                 }
@@ -466,6 +499,7 @@ where
             },
         }
 
+
         if let Some(sel) = new_selection {
             data.selection = sel;
             if data.selection.has_focus() && !self.editing.is_active() {
@@ -473,6 +507,20 @@ where
             }
         }
 
+        if let Some(foc) = data.selection.focus() {
+            data.table_data.with_mut(foc.log.row, |item| {
+                if let Some(Some(pod)) = self.cell_pods.get_mut(&foc.log) {
+                    if pod.is_initialized() {
+                        pod.event(
+                            ctx,
+                            event,
+                            item,
+                            env,
+                        );
+                    }
+                }
+            });
+        }
     }
 
     fn lifecycle(
@@ -482,16 +530,22 @@ where
         data: &TableState<TableData>,
         env: &Env,
     ) {
-        if let LifeCycle::WidgetAdded = event {
-
-        } else {
-            match &mut self.editing {
-                Editing::Cell { single_cell, child } => {
-                    data.table_data.with(single_cell.log.row, |row| {
-                        child.lifecycle(ctx, event, row, env)
-                    });
-                }
-                _ => (),
+        match &mut self.editing {
+            Editing::Cell { single_cell, child } => {
+                data.table_data.with(single_cell.log.row, |row| {
+                    child.lifecycle(ctx, event, row, env)
+                });
+            }
+            _ => (),
+        }
+        // TODO: visibility?
+        for (log_cell, pod) in &mut self.cell_pods{
+            if let Some(pod) = pod {
+                data.table_data.with( log_cell.row, |row| {
+                    if matches!(event, LifeCycle::Internal(InternalLifeCycle::RouteWidgetAdded)) || pod.is_initialized() {
+                        pod.lifecycle(ctx, event, row, env);
+                    }
+                });
             }
         }
     }
@@ -504,12 +558,8 @@ where
         env: &Env,
     ) {
         if !old_data.table_data.same(&data.table_data)
-            || !old_data.remap_specs[TableAxis::Rows].same(&data.remap_specs[TableAxis::Rows])
+            || !old_data.remaps.same(&data.remaps)
         {
-            ctx.request_layout()
-        }
-
-        if !old_data.remap_specs[TableAxis::Columns].same(&data.remap_specs[TableAxis::Columns]) {
             ctx.request_layout()
         }
 
@@ -525,7 +575,27 @@ where
             }
             _ => (),
         }
-        //TODO Columns update from data
+
+
+        if !old_data.scroll_rect.same(&data.scroll_rect) {
+            if self.ensure_cell_pods(data) {
+                ctx.children_changed();
+                ctx.request_anim_frame();
+            }
+        }
+
+        // TODO: visible?
+        // TODO: Stateless cell widgets?
+        // TODO: Extract changed cells from data.table_data (extend IndexedData interface)
+        for (log_cell, pod) in &mut self.cell_pods{
+            if let Some(pod) = pod {
+                if pod.is_initialized() {
+                    data.table_data.with(log_cell.row, |row| {
+                        pod.update(ctx, row, env);
+                    });
+                }
+            }
+        }
     }
 
     fn layout(
@@ -536,6 +606,7 @@ where
         env: &Env,
     ) -> Size {
         bc.debug_check("TableCells");
+        //log::info!("Layout {:?}", (Instant::now() - self.start).as_secs_f32());
 
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
@@ -563,12 +634,49 @@ where
         }
         let measured = self.measured_size(&data.measures);
         let size = bc.constrain(measured);
+
+        let draw_rect = data.scroll_rect.intersect(Rect::from_origin_size(
+            Point::ZERO,
+            measured,
+        ));
+
+        let cell_rect = CellRect::new(
+            data.measures[TableAxis::Rows].vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            data.measures[TableAxis::Columns].vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
+        );
+
+        let row_measure = &data.measures[TableAxis::Rows];
+        let col_measure = &data.measures[TableAxis::Columns];
+
+        for vis_row_idx in cell_rect.rows() {
+            if let Some(log_row_idx) = data.remaps[TableAxis::Rows].get_log_idx(vis_row_idx) {
+
+                if let (Some(y), Some(height)) = (row_measure.first_pixel_from_vis(vis_row_idx), row_measure.pixels_length_for_vis(vis_row_idx)) {
+                    data.table_data.with(log_row_idx, |row| {
+                        for vis_col_idx in cell_rect.cols() {
+                            if let Some(log_col_idx) = data.remaps[TableAxis::Columns].get_log_idx(vis_col_idx) {
+                                if let (Some(x), Some(width)) = (col_measure.first_pixel_from_vis(vis_col_idx), col_measure.pixels_length_for_vis(vis_col_idx)) {
+                                    if let Some(Some(cell_pod)) = self.cell_pods.get_mut(&AxisPair::new(log_row_idx, log_col_idx)) {
+                                        if cell_pod.is_initialized()  {
+
+                                            let size = cell_pod.layout(ctx, &BoxConstraints::tight(Size::new(width, height)), row, env);
+                                            //log::info!("Cell {:?} size {}", (vis_row_idx, vis_col_idx), size);
+                                            // TODO: could align the given size to different edge/corner
+                                            cell_pod.set_origin(ctx, row, env, (x, y).into());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
         size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
-        //data.cells_del.init(ctx, env); // TODO reduce calls? Invalidate on some changes
-
         let rtc = &data.resolved_config;
         let rect = ctx.region().bounding_box();
 
@@ -577,13 +685,12 @@ where
             self.measured_size(&data.measures),
         ));
 
-        ctx.fill(draw_rect, &rtc.cells_background);
-
         let cell_rect = CellRect::new(
             data.measures[TableAxis::Rows].vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
             data.measures[TableAxis::Columns].vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
         );
 
+        ctx.fill(draw_rect, &rtc.cells_background);
         self.paint_cells(ctx, data, env, &cell_rect);
         self.paint_selections(ctx, data, &rtc, &cell_rect);
 

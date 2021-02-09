@@ -1,5 +1,5 @@
 use crate::columns::{
-    CellDelegate, CellRenderExt, HeaderCell, ProvidedColumns, TableColumn, TextCell,
+    CellDelegate, CellRenderExt, ProvidedColumns, TableColumn, TextCell,
 };
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
@@ -11,6 +11,8 @@ use crate::{CellRender, HeaderBuild, Table};
 use druid::{theme, Data, KeyOrValue};
 use std::marker::PhantomData;
 use im::Vector;
+use druid::lens::Map;
+use crate::vis::MarkShape::Text;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub enum AxisMeasurementType {
@@ -73,12 +75,16 @@ impl<TableData: IndexedData>
         TableBuilder {
             table_columns: Vec::new(),
             row_header_delegate: Box::new(
-                HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))
-                    .on_result_of(|br: &LogIdx| br.0.to_string()),
+                //HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))
+                TextCell::new().text_color(theme::LABEL_COLOR)
+                    .lens( Map::new(|br: &LogIdx| br.0.to_string(),
+                                    |br: &mut LogIdx, a: String|{} ) )
+
             ),
-            column_header_delegate: Box::new(HeaderCell::new(
+            column_header_delegate: Box::new(//HeaderCell::new(
                 TextCell::new().text_color(theme::LABEL_COLOR),
-            )),
+            //)
+            ),
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,

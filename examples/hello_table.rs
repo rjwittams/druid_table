@@ -2,15 +2,15 @@ use std::fmt::Debug;
 
 use druid_table::{
     column, AxisMeasurementType, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory,
-    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell,
+    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, WidgetCell,
 };
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
 use druid::theme::PLACEHOLDER_COLOR;
 use druid::widget::{
-    Button, Checkbox, CrossAxisAlignment, Flex, Label, MainAxisAlignment, Padding, RadioGroup,
-    SizedBox, Stepper, ViewSwitcher,
+    Button, Checkbox, CrossAxisAlignment, Flex, Label, MainAxisAlignment, Padding, Painter,
+    RadioGroup, SizedBox, Stepper, ViewSwitcher,
 };
 use druid::{
     AppLauncher, Data, Env, Event, EventCtx, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx,
@@ -28,6 +28,7 @@ struct HelloRow {
     greeting: String,
     westernised: String,
     who_knows: f64,
+    complete: bool,
 }
 
 impl HelloRow {
@@ -36,12 +37,14 @@ impl HelloRow {
         greeting: impl Into<String>,
         westernised: impl Into<String>,
         percent: f64,
+        complete: bool,
     ) -> HelloRow {
         HelloRow {
             lang: lang.into(),
             greeting: greeting.into(),
             westernised: westernised.into(),
             who_knows: percent / 100.,
+            complete,
         }
     }
 }
@@ -101,6 +104,28 @@ impl CellRender<f64> for PieCell {
             _ => (),
         }
     }
+
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
+        Some(Box::new(
+            Painter::new(|ctx: &mut PaintCtx, data: &f64, _env: &Env| {
+                let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN);
+
+                //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
+                let circle = CircleSegment::new(
+                    rect.center(),
+                    (f64::min(rect.height(), rect.width()) / 2.) - 2.,
+                    0.,
+                    0.,
+                    2. * PI * *data,
+                );
+                ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
+                ctx.stroke(&circle, &Color::BLACK, 1.0);
+            })
+            .on_click(|ctx: &mut EventCtx, data: &mut f64, env: &Env| {
+                *data = 1.0 - *data;
+            }),
+        ))
+    }
 }
 
 impl EditorFactory<f64> for PieCell {
@@ -111,7 +136,7 @@ impl EditorFactory<f64> for PieCell {
 
 fn build_main_widget() -> impl Widget<HelloState> {
     // Need a wrapper widget to get selection/scroll events out of it
-    let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.);
+    let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., true);
 
     let buttons = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
@@ -209,7 +234,20 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
         .measuring_axis(TableAxis::Columns, measurement_type)
         .headings(settings.show_headings)
         .border(settings.border_thickness)
-        .with_column("Language", TextCell::new().lens(HelloRow::lang))
+        .with_column(
+            "Language",
+            WidgetCell::new(
+                |cell| {
+                    Label::new(|data: &String, env: &Env| data.clone()).with_text_color(Color::BLUE)
+                },
+                || HelloRow::lang,
+            )
+            .compare_with(|a, b| a.len().cmp(&b.len())),
+        )
+        .with_column(
+            "Complete",
+            WidgetCell::new(|cell| Checkbox::new(""), || HelloRow::complete).compare_natural(),
+        )
         .with_column(
             "Greeting",
             TextCell::new().font_size(17.).lens(HelloRow::greeting),
@@ -249,15 +287,15 @@ pub fn main() {
     // create the initial app state
     let initial_state = HelloState {
         items: vector![
-            HelloRow::new("English", "Hello", "Hello", 99.1),
-            HelloRow::new("Français", "Bonjour", "Bonjour", 95.0),
-            HelloRow::new("Espanol", "Hola", "Hola", 95.0),
-            HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85.),
-            HelloRow::new("Hindi", "नमस्ते", "namaste", 74.),
-            HelloRow::new("Arabic", "مرحبا", "marhabaan", 24.),
-            HelloRow::new("Portuguese", "olá", "olá", 30.),
-            HelloRow::new("Russian", "Привет", "Privet", 42.),
-            HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63.),
+            HelloRow::new("English", "Hello", "Hello", 99.1, true),
+            HelloRow::new("Français", "Bonjour", "Bonjour", 95.0, false),
+            HelloRow::new("Espanol", "Hola", "Hola", 95.0, true),
+            HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85., false),
+            HelloRow::new("Hindi", "नमस्ते", "namaste", 74., true),
+            HelloRow::new("Arabic", "مرحبا", "marhabaan", 24., true),
+            HelloRow::new("Portuguese", "olá", "olá", 30., false),
+            HelloRow::new("Russian", "Привет", "Privet", 42., false),
+            HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., false),
         ],
         settings: Settings {
             show_headings: ShowHeadings::Both,

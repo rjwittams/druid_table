@@ -1,21 +1,19 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{
-    Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
-    PaintCtx, Rect, Size, UpdateCtx, Widget,
-};
+use druid::{Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Rect, Size, UpdateCtx, Widget, Point, Color};
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
-use crate::columns::{CellCtx, CellRender};
+use crate::columns::{CellCtx, CellRender, HeaderInfo};
 use crate::data::{SortSpec};
 use crate::headings::HeaderMovement::{Disallowed, Permitted};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
-use crate::{IndicesSelection, IndexedData};
+use crate::{IndicesSelection, IndexedData, SortDirection};
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
+use druid::kurbo::PathEl;
 
 pub trait HeadersFromData {
     type TableData: Data;
@@ -169,15 +167,23 @@ where
 
         let padded_rect = cell_rect.inset(-rtc.cell_padding);
         if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
-            let cell = CellCtx::Header(&axis, log_main_idx, sort_dirs.get(&log_main_idx));
+            let sort_spec = sort_dirs.get(&log_main_idx);
+            let cell = CellCtx::Header(HeaderInfo::new(axis, log_main_idx,
+                                                       sort_spec));
+
+
 
             headers.with(log_main_idx, |col_name| {
                 ctx.with_save(|ctx| {
                     let layout_origin = padded_rect.origin().to_vec2();
                     ctx.clip(padded_rect);
                     ctx.transform(Affine::translate(layout_origin));
-                    ctx.with_child_ctx(padded_rect, |ctxt| {
-                        header_render.paint(ctxt, &cell, col_name, env);
+                    ctx.with_child_ctx(padded_rect, |ctx| {
+                        if let Some(sort_spec) = sort_spec{
+                            draw_sort_indicator(ctx, sort_spec)
+                        }
+
+                        header_render.paint(ctx, &cell, col_name, env);
                     });
                 });
             });
@@ -186,6 +192,51 @@ where
         }
         Some(())
     }
+}
+
+fn draw_sort_indicator(ctx: &mut PaintCtx, sort_spec: &SortSpec, ){
+    let rect = ctx
+        .region()
+        .bounding_box()
+        .with_origin(Point::ORIGIN)
+        .inset(-3.);
+    let rad = rect.height() * 0.25;
+    let up = sort_spec.direction == SortDirection::Ascending;
+
+    let arrow = make_arrow(
+        &Point::new(rect.max_x() - rad, rect.min_y()),
+        up,
+        rect.height(),
+        rad,
+    );
+    ctx.render_ctx.stroke(&arrow[..], &Color::WHITE, 1.0);
+    let rect1 = ctx.region().bounding_box();
+    let rect1 = rect1
+        .with_origin(Point::ORIGIN)
+        .with_size((rect1.width() - (rad + 3.) * 2., rect1.height()));
+    ctx.clip(rect1);
+}
+
+fn make_arrow(top_point: &Point, up: bool, height: f64, head_rad: f64) -> [PathEl; 5] {
+    let start_y = top_point.y;
+    let tip_y = start_y + height;
+
+    let (start_y, tip_y, mult) = if up {
+        (tip_y, start_y, -1.)
+    } else {
+        (start_y, tip_y, 1.0)
+    };
+    let head_start_y = tip_y - (head_rad * mult);
+
+    let mid_x = top_point.x;
+
+    [
+        PathEl::MoveTo((mid_x, start_y).into()),
+        PathEl::LineTo((mid_x, tip_y).into()),
+        PathEl::LineTo((mid_x - head_rad, head_start_y).into()),
+        PathEl::MoveTo((mid_x, tip_y).into()),
+        PathEl::LineTo((mid_x + head_rad, head_start_y).into()),
+    ]
 }
 
 impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>

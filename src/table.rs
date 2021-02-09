@@ -73,8 +73,7 @@ pub struct TableArgs<
     RowH: HeaderBuildT<TableData = TableData>,
     ColH: HeaderBuildT<TableData = TableData>,
     CellsDel: CellsDelegate<TableData> + 'static,
-> where
-    TableData::Item: Data,
+>
 {
     cells_delegate: CellsDel,
     row_h: Option<RowH>,
@@ -106,8 +105,7 @@ impl<
 
 // This trait exists to move type parameters to associated types
 pub trait TableArgsT {
-    type RowData: Data; // Required because associated type bounds are unstable
-    type TableData: IndexedData<Item = Self::RowData>;
+    type TableData: IndexedData;
     type RowH: HeaderBuildT<TableData = Self::TableData>;
     type ColH: HeaderBuildT<TableData = Self::TableData>;
 
@@ -121,10 +119,7 @@ impl<
         ColH: HeaderBuildT<TableData = TableData>,
         CellsDel: CellsDelegate<TableData> + 'static,
     > TableArgsT for TableArgs<TableData, RowH, ColH, CellsDel>
-where
-    TableData::Item: Data,
 {
-    type RowData = TableData::Item;
     type TableData = TableData;
     type RowH = RowH;
     type ColH = ColH;
@@ -137,8 +132,9 @@ where
 
 #[derive(Data, Clone, Debug, Lens)]
 pub(crate) struct TableState<TableData: Data> {
-    scroll_x: f64,
-    scroll_y: f64,
+    pub(crate) scroll_x: f64,
+    pub(crate) scroll_y: f64,
+    pub(crate) scroll_rect: Rect,
     pub(crate) config: TableConfig,
     pub(crate) resolved_config: ResolvedTableConfig,
     pub(crate) table_data: TableData,
@@ -150,7 +146,7 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>
 }
 
-impl<TableData: IndexedData> TableState<TableData> where TableData::Item : Data{
+impl<TableData: IndexedData> TableState<TableData>{
     pub fn new(
         config: TableConfig,
         resolved_config: ResolvedTableConfig,
@@ -161,6 +157,7 @@ impl<TableData: IndexedData> TableState<TableData> where TableData::Item : Data{
             let mut state = TableState {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
+                scroll_rect: Rect::ZERO,
                 config,
                 resolved_config,
                 table_data: data,
@@ -177,24 +174,23 @@ impl<TableData: IndexedData> TableState<TableData> where TableData::Item : Data{
 
 
     fn remap_rows(&mut self) {
-        let state = self;
-        state.remaps[TableAxis::Rows] = state.cells_del.remap_items(&state.table_data, &state.remap_specs[TableAxis::Rows]);
-        state.measures[TableAxis::Rows].set_axis_properties(
-            state.resolved_config.cell_border_thickness,
-            state.table_data.data_len(),
-            &state.remaps[TableAxis::Rows],
+        self.remaps[TableAxis::Rows] = self.cells_del
+            .remap_items(&self.table_data, &self.remap_specs[TableAxis::Rows]);
+        self.measures[TableAxis::Rows].set_axis_properties(
+            self.resolved_config.cell_border_thickness,
+            self.table_data.data_len(),
+            &self.remaps[TableAxis::Rows],
         );
     }
 
     fn remap_cols(&mut self) {
-        let state = self;
-        state.remaps[TableAxis::Columns] = state.remap_specs[TableAxis::Columns]
-            .remap_placements(LogIdx(state.cells_del.number_of_columns_in_data(&state.table_data) - 1));
+        self.remaps[TableAxis::Columns] = self.remap_specs[TableAxis::Columns]
+            .remap_placements(LogIdx(self.cells_del.data_columns(&self.table_data) - 1));
 
-        state.measures[TableAxis::Columns].set_axis_properties(
-            state.resolved_config.cell_border_thickness,
-            state.cells_del.number_of_columns_in_data(&state.table_data),
-            &state.remaps[TableAxis::Columns],
+        self.measures[TableAxis::Columns].set_axis_properties(
+            self.resolved_config.cell_border_thickness,
+            self.cells_del.data_columns(&self.table_data),
+            &self.remaps[TableAxis::Columns],
         );
     }
 }
@@ -231,7 +227,7 @@ type TableChild<TableData> = WidgetPod<
     Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
 >;
 
-pub struct Table<TableData: IndexedData> where TableData::Item : Data{
+pub struct Table<TableData: IndexedData>{
     child: TableChild<TableData>,
 }
 
@@ -253,7 +249,7 @@ impl<TableData> TableScopePolicy<TableData> {
     }
 }
 
-impl<TableData: IndexedData> ScopePolicy for TableScopePolicy<TableData> where TableData::Item : Data {
+impl<TableData: IndexedData> ScopePolicy for TableScopePolicy<TableData> {
     type In = TableData;
     type State = TableState<TableData>;
     type Transfer = TableScopeTransfer<TableData>;
@@ -279,8 +275,7 @@ impl<TableData> TableScopeTransfer<TableData> {
     }
 }
 
-impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData>
-where TableData::Item : Data{
+impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
     type In = TableData;
     type State = TableState<TableData>;
 
@@ -332,10 +327,11 @@ impl<TableData: IndexedData> Table<TableData> {
         let cells_scroll = Scroll::new(cells).binding(
             TableState::<TableData>::scroll_x
                 .bind(ScrollToProperty::new(Axis::Horizontal))
-                .and(TableState::<TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical))),
+                .and(TableState::<TableData>::scroll_y.bind(ScrollToProperty::new(Axis::Vertical)))
+                .and(TableState::<TableData>::scroll_rect.bind(ScrollRectProperty::default())),
         );
 
-        let policy = TableScopePolicy::new(table_config.clone(), measures.clone(), Arc::new(cells_delegate));
+        let policy = TableScopePolicy::new(table_config.clone(), measures, Arc::new(cells_delegate));
         Self::add_headings(args.col_h, args.row_h, policy, table_config, cells_scroll)
     }
 
@@ -411,7 +407,7 @@ impl<TableData: IndexedData> Table<TableData> {
     }
 }
 
-impl<TableData: IndexedData> Widget<TableData> for Table<TableData> where TableData::Item : Data {
+impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableData, env: &Env) {
         self.child.event(ctx, event, data, env)
     }

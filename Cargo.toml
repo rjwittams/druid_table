@@ -13,7 +13,7 @@ edition = "2018"
 druid = {path = "../druid/druid", features=["im"]}
 druid_bindings = {path = "../druid_bindings"}
 druid-widget-nursery = {path = "../druid-widget-nursery"}
-
+priority-queue = {version = "1.0.5"}
 im = { version = "15.0.0"}
 log = "0.4.8"
 simple_logger = { version = "1.6.0", default-features = false }

@@ -14,6 +14,7 @@ mod render_ext;
 mod selection;
 mod table;
 mod vis;
+mod lens;
 
 pub use axis_measure::{
     AxisMeasure, AxisPair, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
@@ -21,7 +22,7 @@ pub use axis_measure::{
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{
-    column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell,
+    column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell, WidgetCell
 };
 pub use config::TableConfig;
 pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection};
@@ -33,6 +34,8 @@ pub use vis::{
     MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis,
     VisEvent, VisMarks, VisMarksInterp, Visualization,
 };
+
+pub use lens::ReadOnly;
 
 #[macro_use]
 extern crate druid;

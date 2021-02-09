@@ -219,8 +219,6 @@ impl Default for RemapSpec {
 }
 
 pub trait Remapper<TableData: IndexedData>
-where
-    TableData::Item: Data,
 {
     fn sort_fixed(&self, idx: usize) -> bool;
     fn initial_spec(&self) -> RemapSpec;

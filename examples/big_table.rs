@@ -1,15 +1,27 @@
-use druid_table::{
-    AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate,
-    EditorFactory, HeaderBuild, HeadersFromIndices, IndexedData, IndexedItems, LogIdx, Remap,
-    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell,
-};
+use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, ReadOnly};
 
-use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc};
+use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc, EventCtx, Event};
 use druid_table::numbers_table::LogIdxTable;
 use std::marker::PhantomData;
+use std::fmt::{Debug, Formatter};
+use core::fmt;
+use druid::lens::Map;
 
 #[macro_use]
 extern crate log;
+
+#[derive(Data, Clone)]
+struct BigTableCols
+{
+    columns: usize
+}
+
+impl BigTableCols {
+    pub fn new(columns: usize) -> Self {
+        BigTableCols { columns }
+    }
+}
+
 
 #[derive(Clone)]
 struct BigTableCells<TableData: IndexedData, CR: CellRender<TableData::Item>>
@@ -19,6 +31,14 @@ where
     inner: CR,
     columns: usize,
     phantom_td: PhantomData<TableData>,
+}
+
+impl <TableData: IndexedData, CR: CellRender<TableData::Item>> Debug for BigTableCells<TableData, CR>
+    where
+        TableData::Item: Data{
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("BigTableCells").finish()
+    }
 }
 
 impl<TableData: IndexedData, CR: CellRender<TableData::Item>> BigTableCells<TableData, CR>
@@ -46,13 +66,19 @@ where
     fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &TableData::Item, env: &Env) {
         self.inner.paint(ctx, cell, data, env)
     }
+
+    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut <TableData as IndexedData>::Item, env: &Env) {
+
+    }
+
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
+        self.inner.make_display(cell)
+    }
 }
 
-impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
-    for BigTableCells<TableData, CR>
+impl IndexedData for BigTableCols
 {
     type Item = LogIdx;
-    type Idx = LogIdx;
 
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
         if idx.0 < self.columns {
@@ -62,11 +88,11 @@ impl<TableData: IndexedData<Item = LogIdx>, CR: CellRender<LogIdx>> IndexedItems
         }
     }
 
-    fn with_mut<V>(&mut self, _idx: Self::Idx, _f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
+    fn with_mut<V>(&mut self, _idx: LogIdx, _f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
         None
     }
 
-    fn idx_len(&self) -> usize {
+    fn data_len(&self) -> usize {
         self.columns
     }
 }
@@ -76,7 +102,7 @@ impl<TableData: IndexedData, CR: CellRender<TableData::Item>> CellsDelegate<Tabl
 where
     TableData::Item: Data,
 {
-    fn number_of_columns_in_data(&self, _data: &TableData) -> usize {
+    fn data_columns(&self, _data: &TableData) -> usize {
         self.columns
     }
 }
@@ -102,7 +128,7 @@ impl<CR: CellRender<TableData::Item>, TableData: IndexedData> EditorFactory<Tabl
 where
     TableData::Item: Data,
 {
-    fn make_editor(&mut self, _ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
+    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
         None
     }
 }
@@ -110,22 +136,20 @@ where
 fn build_root_widget() -> Table<LogIdxTable> {
     let table_config = TableConfig::new();
 
-    let inner_render = TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string());
-
-    let columns = 1_000_000_000;
     let rows = HeaderBuild::new(
         HeadersFromIndices::new(),
         TextCell::new()
             .text_color(Color::WHITE)
-            .on_result_of(|br: &LogIdx| br.0.to_string()),
+            .lens(ReadOnly::new(|br: &LogIdx| br.0.to_string()))
     );
 
-    let headers = BigTableCells::<LogIdxTable, _>::new(inner_render, columns);
+    let columns = 1_000_000_000;
+    let headers = BigTableCols::new(columns);
     let cols = HeaderBuild::new(
         SuppliedHeaders::new(headers),
         TextCell::new()
             .text_color(Color::WHITE)
-            .on_result_of(|br: &LogIdx| br.0.to_string()),
+            .lens(ReadOnly::new(|br: &LogIdx| br.0.to_string()))
     );
 
     let measures = AxisPair::new(
@@ -135,7 +159,7 @@ fn build_root_widget() -> Table<LogIdxTable> {
     Table::new(
         TableArgs::new(
             BigTableCells::new(
-                TextCell::new().on_result_of(|br: &LogIdx| br.0.to_string()),
+                TextCell::new().lens(ReadOnly::new(|br: &LogIdx| br.0.to_string())),
                 columns,
             ),
             Some(rows),
@@ -152,7 +176,7 @@ pub fn main() {
     info!("Hello table");
 
     // describe the main window
-    let main_window = WindowDesc::new(build_root_widget)
+    let main_window = WindowDesc::new(build_root_widget())
         .title("Big table")
         .window_size((400.0, 700.0));
 
