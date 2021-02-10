@@ -33,6 +33,30 @@ impl<T: Data + Debug + Default> Data for AxisPair<T> {
     }
 }
 
+impl AxisPair<AxisMeasure>{
+    pub(crate) fn cell_rect_from_pixels(&self, draw_rect: Rect) -> CellRect {
+        CellRect::new(
+            self.row.vis_range_from_pixels(draw_rect.y0, draw_rect.y1),
+            self.col.vis_range_from_pixels(draw_rect.x0, draw_rect.x1),
+        )
+    }
+
+    pub (crate) fn pixel_rect_for_cell(&self, vis: AxisPair<VisIdx>) -> Option<Rect>{
+        let origin = self
+            .zip_with(&vis, |m, vis| m.first_pixel_from_vis(*vis))
+            .opt().as_ref().map(AxisPair::point);
+
+        let size = self.zip_with(&vis, |m, vis| m.pixels_length_for_vis(*vis))
+            .opt().as_ref().map( AxisPair::size);
+
+        origin.zip(size).map(|(o, s)|Rect::from_origin_size(o,s))
+    }
+
+    pub (crate) fn measured_size(&self) -> Size{
+        self.map(|m| m.total_pixel_length()).size()
+    }
+}
+
 impl TableAxis {
     pub fn cross_axis(&self) -> TableAxis {
         match self {
@@ -182,8 +206,9 @@ enum AxisMeasureInner {
     Stored(Rc<RefCell<StoredAxisMeasure>>),
 }
 
-use AxisMeasureInner::*;
 use std::hash::Hash;
+use AxisMeasureInner::*;
+use crate::selection::CellRect;
 
 impl AxisMeasure {
     fn border(&self) -> f64 {
@@ -553,10 +578,8 @@ mod test {
             vec![VisIdx(1), VisIdx(2), VisIdx(2)]
         );
 
-
-
         assert_eq!(
-            (ax.vis_idx_from_pixel(105.0),  ax.vis_idx_from_pixel(295.0)),
+            (ax.vis_idx_from_pixel(105.0), ax.vis_idx_from_pixel(295.0)),
             (Some(VisIdx(1)), Some(VisIdx(2)))
         );
         assert_eq!(

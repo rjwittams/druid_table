@@ -7,14 +7,15 @@ mod cells;
 mod columns;
 mod config;
 mod data;
+mod ensured_pool;
 mod headings;
 mod interp;
+mod lens;
 pub mod numbers_table;
 mod render_ext;
 mod selection;
 mod table;
 mod vis;
-mod lens;
 
 pub use axis_measure::{
     AxisMeasure, AxisPair, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
@@ -22,7 +23,8 @@ pub use axis_measure::{
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{
-    column, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory, TextCell, WidgetCell
+    column, CellCtx, CellDelegate, DataCompare, DisplayFactory, DisplayFactoryExt,
+    WidgetCell,
 };
 pub use config::TableConfig;
 pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection};

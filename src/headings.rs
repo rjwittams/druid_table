@@ -1,22 +1,26 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Rect, Size, UpdateCtx, Widget, Point, Color};
+use druid::{
+    Affine, BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, InternalLifeCycle,
+    LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
+};
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
-use crate::columns::{CellCtx, CellRender, HeaderInfo};
-use crate::data::{SortSpec};
+use crate::columns::{CellCtx, DisplayFactory, HeaderInfo};
+use crate::data::SortSpec;
+use crate::ensured_pool::EnsuredPool;
 use crate::headings::HeaderMovement::{Disallowed, Permitted};
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::TableState;
-use crate::{IndicesSelection, IndexedData, SortDirection};
+use crate::{IndexedData, IndicesSelection, SortDirection};
+use druid::kurbo::PathEl;
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
-use druid::kurbo::PathEl;
 
 pub trait HeadersFromData {
-    type TableData: Data;
+    type TableData: IndexedData;
     type Header: Data;
     type Headers: IndexedData<Item = Self::Header>;
     fn get_headers(&self, table_data: &Self::TableData) -> Self::Headers;
@@ -36,7 +40,7 @@ impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
     }
 }
 
-impl<Headers: IndexedData + Clone, TableData: Data> HeadersFromData
+impl<Headers: IndexedData + Clone, TableData: IndexedData> HeadersFromData
     for SuppliedHeaders<Headers, TableData>
 where
     Headers::Item: Data,
@@ -93,12 +97,16 @@ enum HeaderMovement {
 pub struct Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
+    Render: DisplayFactory<HeadersSource::Header>,
 {
     axis: TableAxis,
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
     header_render: Render,
+    pods: EnsuredPool<
+        LogIdx,
+        Option<WidgetPod<HeadersSource::Header, Box<dyn Widget<HeadersSource::Header>>>>,
+    >,
     header_movement: HeaderMovement,
     resize_dragging: Option<VisIdx>,
     selection_dragging: bool,
@@ -107,7 +115,7 @@ where
 impl<HeadersSource, Render> Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
+    Render: DisplayFactory<HeadersSource::Header>,
 {
     pub fn new(
         axis: TableAxis,
@@ -120,6 +128,7 @@ where
             headers_source,
             headers: None,
             header_render,
+            pods: Default::default(),
             header_movement: if allow_moves { Permitted } else { Disallowed },
             resize_dragging: None,
             selection_dragging: false,
@@ -138,10 +147,34 @@ where
         ctx.request_layout();
     }
 
+    fn ensure_pods(&mut self, data: &TableState<HeadersSource::TableData>) -> bool {
+        let axis = self.axis;
+        let cross_rem = &data.remap_specs[self.axis.cross_axis()];
+        let sort_dirs: HashMap<LogIdx, SortSpec> = cross_rem
+            .sort_by
+            .iter()
+            .enumerate()
+            .map(|(ord, x)| (LogIdx(x.idx), SortSpec::new(ord, x.direction)))
+            .collect();
+
+        let header_render = &self.header_render;
+
+        self.pods.ensure(
+            data.log_idx_visible_for_axis(axis),
+            |li| li,
+            |log_main_idx| {
+                let sort_spec = sort_dirs.get(&log_main_idx);
+                let cell = CellCtx::Header(HeaderInfo::new(axis, log_main_idx, sort_spec));
+                header_render.make_display(&cell).map(WidgetPod::new)
+            },
+        )
+
+    }
+
     fn paint_header(
         &mut self,
         ctx: &mut PaintCtx,
-        data: &TableState<<HeadersSource as HeadersFromData>::TableData>,
+        data: &TableState<HeadersSource::TableData>,
         env: &Env,
         measure: &AxisMeasure,
         indices_selection: &IndicesSelection,
@@ -149,9 +182,9 @@ where
         vis_main_idx: VisIdx,
     ) -> Option<()> {
         let rtc = &data.resolved_config;
+        let pods = &mut self.pods;
         let headers = self.headers.as_ref()?;
         let axis = self.axis;
-        let header_render = &mut self.header_render;
 
         let cell_rect = Rect::from_origin_size(
             axis.cell_origin(measure.first_pixel_from_vis(vis_main_idx)?, 0.),
@@ -168,23 +201,19 @@ where
         let padded_rect = cell_rect.inset(-rtc.cell_padding);
         if let Some(log_main_idx) = data.remaps[self.axis].get_log_idx(vis_main_idx) {
             let sort_spec = sort_dirs.get(&log_main_idx);
-            let cell = CellCtx::Header(HeaderInfo::new(axis, log_main_idx,
-                                                       sort_spec));
-
-
 
             headers.with(log_main_idx, |col_name| {
                 ctx.with_save(|ctx| {
-                    let layout_origin = padded_rect.origin().to_vec2();
-                    ctx.clip(padded_rect);
-                    ctx.transform(Affine::translate(layout_origin));
-                    ctx.with_child_ctx(padded_rect, |ctx| {
-                        if let Some(sort_spec) = sort_spec{
-                            draw_sort_indicator(ctx, sort_spec)
-                        }
+                    let clip_rect = if let Some(sort_spec) = sort_spec {
+                        draw_sort_indicator(ctx, sort_spec, padded_rect)
+                    } else {
+                        padded_rect
+                    };
+                    ctx.clip(clip_rect);
 
-                        header_render.paint(ctx, &cell, col_name, env);
-                    });
+                    if let Some(Some(pod)) = pods.get_mut(&log_main_idx) {
+                        pod.paint(ctx, col_name, env);
+                    }
                 });
             });
 
@@ -194,13 +223,9 @@ where
     }
 }
 
-fn draw_sort_indicator(ctx: &mut PaintCtx, sort_spec: &SortSpec, ){
-    let rect = ctx
-        .region()
-        .bounding_box()
-        .with_origin(Point::ORIGIN)
-        .inset(-3.);
-    let rad = rect.height() * 0.25;
+fn draw_sort_indicator(ctx: &mut PaintCtx, sort_spec: &SortSpec, orig_rect: Rect) -> Rect {
+    let rect = orig_rect.inset(-3.);
+    let rad = rect.height() * 0.35;
     let up = sort_spec.direction == SortDirection::Ascending;
 
     let arrow = make_arrow(
@@ -209,12 +234,9 @@ fn draw_sort_indicator(ctx: &mut PaintCtx, sort_spec: &SortSpec, ){
         rect.height(),
         rad,
     );
-    ctx.render_ctx.stroke(&arrow[..], &Color::WHITE, 1.0);
-    let rect1 = ctx.region().bounding_box();
-    let rect1 = rect1
-        .with_origin(Point::ORIGIN)
-        .with_size((rect1.width() - (rad + 3.) * 2., rect1.height()));
-    ctx.clip(rect1);
+    ctx.render_ctx.stroke(&arrow[..], &Color::WHITE, 1.5);
+
+    orig_rect.with_size((orig_rect.width() - (rad + 3.) * 2., orig_rect.height()))
 }
 
 fn make_arrow(top_point: &Point, up: bool, height: f64, head_rad: f64) -> [PathEl; 5] {
@@ -243,7 +265,7 @@ impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>
     for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>
+    Render: DisplayFactory<HeadersSource::Header>,
 {
     fn event(
         &mut self,
@@ -305,7 +327,7 @@ where
                     }
                     ctx.set_handled()
                 } else if let HeaderMovement::Moving(_idx) = self.header_movement {
-                    // Show visual indicator
+                    //TODO: Show visual indicator
                     if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {}
                     ctx.set_handled()
                 } else if self.selection_dragging {
@@ -351,14 +373,34 @@ where
 
     fn lifecycle(
         &mut self,
-        _ctx: &mut LifeCycleCtx,
+        ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
         data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
             self.headers = Some(self.headers_source.get_headers(&data.table_data));
-            // TODO Option
+            if self.ensure_pods(data) {
+                ctx.children_changed();
+                ctx.request_anim_frame();
+            }
+        }
+
+        if let Some(headers) = &self.headers {
+            for (log_idx, pod) in &mut self.pods.entries_mut() {
+                if let Some(pod) = pod {
+                    headers.with(*log_idx, |header| {
+                        if matches!(
+                            event,
+                            LifeCycle::WidgetAdded
+                                | LifeCycle::Internal(InternalLifeCycle::RouteWidgetAdded)
+                        ) || pod.is_initialized()
+                        {
+                            pod.lifecycle(ctx, event, header, env);
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -371,28 +413,51 @@ where
     ) {
         if !old_data.same(data) {
             self.headers = Some(self.headers_source.get_headers(&data.table_data));
-            ctx.request_layout(); // TODO Only relayout if actually changed
+            if self.ensure_pods(data) {
+                ctx.children_changed();
+                ctx.request_anim_frame();
+            }
         }
     }
 
     fn layout(
         &mut self,
-        _ctx: &mut LayoutCtx,
+        ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
         data: &TableState<HeadersSource::TableData>,
-        _env: &Env,
+        env: &Env,
     ) -> Size {
         bc.debug_check("ColumnHeadings");
+        let axis = self.axis;
         let rc = &data.resolved_config;
-        let cross_axis_length = match self.axis {
+        let cross_axis_length = match axis {
             TableAxis::Columns => rc.col_header_height,
             TableAxis::Rows => rc.row_header_width,
         };
-
-        bc.constrain(self.axis.size(
-            data.measures[self.axis].total_pixel_length(),
-            cross_axis_length,
-        ))
+        let measure = &data.measures[axis];
+        let size = bc.constrain(axis.size(measure.total_pixel_length(), cross_axis_length));
+        let pods = &mut self.pods;
+        if let Some(headers) = &self.headers {
+            for vis_idx in data.vis_idx_visible_for_axis(axis) {
+                if let (Some(main_0), Some(main_extent), Some(log_idx) ) = (
+                    measure.first_pixel_from_vis(vis_idx),
+                    measure.pixels_length_for_vis(vis_idx),
+                    data.remaps[axis].get_log_idx(vis_idx)
+                ) {
+                    if let Some(Some(pod)) = pods.get_mut(&log_idx) {
+                        headers.with(log_idx, |header| {
+                            if pod.is_initialized() {
+                                let cell_size = axis.size(main_extent, cross_axis_length);
+                                pod.layout(ctx, &BoxConstraints::tight(cell_size).loosen(), header, env);
+                                let origin = axis.coords(main_0, 0.).into();
+                                pod.set_origin(ctx, header, env, origin);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        size
     }
 
     fn paint(
@@ -415,7 +480,6 @@ where
 
         {
             let rtc = &data.resolved_config;
-            self.header_render.init(ctx, env);
             let rect = ctx.region().bounding_box();
 
             ctx.fill(rect, &rtc.header_background);
@@ -442,7 +506,7 @@ where
 impl<HeadersSource, Render> BindableAccess for Headings<HeadersSource, Render>
 where
     HeadersSource: HeadersFromData,
-    Render: CellRender<HeadersSource::Header>,
+    Render: DisplayFactory<HeadersSource::Header>,
 {
     bindable_self_body!();
 }

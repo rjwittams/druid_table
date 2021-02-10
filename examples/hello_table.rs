@@ -1,8 +1,9 @@
 use std::fmt::Debug;
 
 use druid_table::{
-    column, AxisMeasurementType, CellCtx, CellRender, CellRenderExt, DataCompare, EditorFactory,
-    ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, TextCell, WidgetCell,
+    column, AxisMeasurementType, CellCtx, CellDelegate, CellsDelegate, DataCompare, DisplayFactory,
+    DisplayFactoryExt, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder,
+    WidgetCell,
 };
 
 use druid::im::{vector, Vector};
@@ -10,11 +11,11 @@ use druid::kurbo::CircleSegment;
 use druid::theme::PLACEHOLDER_COLOR;
 use druid::widget::{
     Button, Checkbox, CrossAxisAlignment, Flex, Label, MainAxisAlignment, Padding, Painter,
-    RadioGroup, SizedBox, Stepper, ViewSwitcher,
+    RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher,
 };
 use druid::{
-    AppLauncher, Data, Env, Event, EventCtx, KeyOrValue, Lens, LensExt, LocalizedString, PaintCtx,
-    Point, RenderContext, Widget, WidgetExt, WindowDesc,
+    AppLauncher, Data, Env, Event, EventCtx, FontDescriptor, FontFamily, KeyOrValue, Lens, LensExt,
+    LocalizedString, PaintCtx, Point, RenderContext, Widget, WidgetExt, WindowDesc,
 };
 use druid::{Color, Value};
 use std::cmp::Ordering;
@@ -69,69 +70,28 @@ struct HelloState {
     settings: Settings,
 }
 
-struct PieCell {}
-
-impl DataCompare<f64> for PieCell {
-    fn compare(&self, a: &f64, b: &f64) -> Ordering {
-        f64::partial_cmp(a, b).unwrap_or(Ordering::Equal)
-    }
-}
-
-impl CellRender<f64> for PieCell {
-    fn init(&mut self, _ctx: &mut PaintCtx, _env: &Env) {}
-
-    fn paint(&self, ctx: &mut PaintCtx, _cell: &CellCtx, data: &f64, _env: &Env) {
-        let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN);
-
-        //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
-        let circle = CircleSegment::new(
-            rect.center(),
-            (f64::min(rect.height(), rect.width()) / 2.) - 2.,
-            0.,
-            0.,
-            2. * PI * *data,
-        );
-        ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
-
-        ctx.stroke(&circle, &Color::BLACK, 1.0);
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut f64, env: &Env) {
-        match event {
-            Event::MouseDown(me) => {
-                *data = 1.0 - *data;
-            }
-            _ => (),
-        }
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
-        Some(Box::new(
+fn pie_cell<Row: Data, MakeLens: Fn() -> L, L: Lens<Row, f64> + 'static>(
+    make_lens: MakeLens,
+) -> impl CellDelegate<Row> {
+    WidgetCell::new_unsorted(
+        |cell| {
             Painter::new(|ctx: &mut PaintCtx, data: &f64, _env: &Env| {
-                let rect = ctx.region().bounding_box().with_origin(Point::ORIGIN);
-
-                //ctx.stroke( rect, &Color::rgb(0x60, 0x0, 0x10), 2.);
+                let rect = ctx.size().to_rect().inset(-5.);
                 let circle = CircleSegment::new(
                     rect.center(),
-                    (f64::min(rect.height(), rect.width()) / 2.) - 2.,
+                    (f64::min(rect.height(), rect.width()) / 2.),
                     0.,
                     0.,
                     2. * PI * *data,
                 );
                 ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
-                ctx.stroke(&circle, &Color::BLACK, 1.0);
+                ctx.stroke(&circle, &Color::BLACK, 1.5);
             })
-            .on_click(|ctx: &mut EventCtx, data: &mut f64, env: &Env| {
-                *data = 1.0 - *data;
-            }),
-        ))
-    }
-}
-
-impl EditorFactory<f64> for PieCell {
-    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<f64>>> {
-        None
-    }
+        },
+        make_lens,
+    )
+    .edit_with(|cell| Stepper::new().with_range(0.0, 1.0).with_step(0.02))
+    .compare_with(|a, b| f64::partial_cmp(a, b).unwrap_or(Ordering::Equal))
 }
 
 fn build_main_widget() -> impl Widget<HelloState> {
@@ -238,43 +198,47 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
             "Language",
             WidgetCell::new(
                 |cell| {
-                    Label::new(|data: &String, env: &Env| data.clone()).with_text_color(Color::BLUE)
+                    RawLabel::new()
+                        .with_font(FontDescriptor::new(FontFamily::SERIF))
+                        .with_text_size(15.)
+                        .with_text_color(Color::BLUE)
                 },
                 || HelloRow::lang,
             )
-            .compare_with(|a, b| a.len().cmp(&b.len())),
+            .compare_with(|a, b| a.len().cmp(&b.len()))
+            .edit_with(|cell| TextBox::new()),
         )
         .with_column(
             "Complete",
-            WidgetCell::new(|cell| Checkbox::new(""), || HelloRow::complete).compare_natural(),
+            WidgetCell::new(|cell| Checkbox::new(""), || HelloRow::complete),
         )
-        .with_column(
-            "Greeting",
-            TextCell::new().font_size(17.).lens(HelloRow::greeting),
-        )
+        .with_column("Greeting", WidgetCell::text(|| HelloRow::greeting))
         .with_column(
             "Westernised",
-            TextCell::new().font_size(17.).lens(HelloRow::westernised),
+            WidgetCell::text_configured(|rl| rl.with_text_size(17.), || HelloRow::westernised),
         )
-        .with(
-            column("Who knows?", PieCell {}.lens(HelloRow::who_knows))
-                .sort(SortDirection::Ascending),
-        )
+        .with(column("Who knows?", pie_cell(|| HelloRow::who_knows)).sort(SortDirection::Ascending))
         .with_column(
             "Greeting 2 with very long column name",
-            TextCell::new()
-                .font_name(KeyOrValue::Concrete("Courier New".into()))
-                .lens(HelloRow::greeting),
+            WidgetCell::text_configured(
+                |rl| {
+                    rl.with_font(FontDescriptor::new(FontFamily::new_unchecked(
+                        "Courier New",
+                    )))
+                },
+                || HelloRow::greeting,
+            ),
         )
         .with_column(
             "Greeting 3",
-            TextCell::new()
-                .text_color(Color::rgb8(0xD0, 0, 0))
-                .lens(HelloRow::greeting),
+            WidgetCell::text_configured(
+                |rl| rl.with_text_color(Color::rgb8(0xD0, 0, 0)),
+                || HelloRow::greeting,
+            ),
         )
-        .with_column("Greeting 4", TextCell::new().lens(HelloRow::greeting))
-        .with_column("Greeting 5", TextCell::new().lens(HelloRow::greeting))
-        .with_column("Greeting 6", TextCell::new().lens(HelloRow::greeting))
+        .with_column("Greeting 4", WidgetCell::text(|| HelloRow::greeting))
+        .with_column("Greeting 5", WidgetCell::text(|| HelloRow::greeting))
+        .with_column("Greeting 6", WidgetCell::text(|| HelloRow::greeting))
         .build()
 }
 

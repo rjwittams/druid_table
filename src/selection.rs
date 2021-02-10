@@ -8,6 +8,7 @@ use std::ops::{Add, Index, IndexMut, RangeInclusive};
 // Could be the address of a cell or something else we have one of for each axis
 
 impl<T: Debug> AxisPair<T> {
+
     pub fn new(row: T, col: T) -> AxisPair<T> {
         AxisPair { row, col }
     }
@@ -22,7 +23,11 @@ impl<T: Debug> AxisPair<T> {
         ca
     }
 
-    pub fn for_each(&self, f: impl Fn(TableAxis, &T) ){
+    pub fn from_tuple((row, col): (T, T)) -> AxisPair<T> {
+        AxisPair { row, col }
+    }
+
+    pub fn for_each(&self, f: impl Fn(TableAxis, &T)) {
         f(TableAxis::Rows, &self.row);
         f(TableAxis::Columns, &self.col);
     }
@@ -50,6 +55,7 @@ impl<T: Debug + Copy> AxisPair<Option<T>> {
 }
 
 impl AxisPair<f64> {
+
     // For conversion to points/ sizes
     fn unpack(&self) -> (f64, f64) {
         (self[TableAxis::Columns], self[TableAxis::Rows])
@@ -86,17 +92,22 @@ impl CellRect {
         }
     }
 
-    pub fn point(row: VisIdx, col: VisIdx) -> CellRect {
-        CellRect::new((row, row), (col, col))
+    pub fn point(point: AxisPair<VisIdx>) -> CellRect {
+        CellRect::new((point.row, point.row), (point.col, point.col))
     }
 
-    // Todo impl Iterator
-    pub fn rows(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+    pub fn rows(&self) -> impl Iterator<Item=VisIdx> {
         VisIdx::range_inc_iter(self.start_row, self.end_row) // Todo work out how to support custom range
     }
 
-    pub fn cols(&self) -> Map<RangeInclusive<usize>, fn(usize) -> VisIdx> {
+    pub fn cols(&self) -> impl Iterator<Item=VisIdx> {
         VisIdx::range_inc_iter(self.start_col, self.end_col)
+    }
+
+    pub fn cells(&self) -> impl Iterator<Item=AxisPair<VisIdx>> {
+        let (start_col, end_col) = (self.start_col, self.end_col);
+        VisIdx::range_inc_iter(self.start_row, self.end_row)
+            .flat_map(move |row| VisIdx::range_inc_iter(start_col, end_col).map(move |col|AxisPair::new(row, col)))
     }
 
     fn contains_cell(&self, cell_addr: &AxisPair<VisIdx>) -> bool {
@@ -104,7 +115,7 @@ impl CellRect {
             && self.contains_idx(TableAxis::Rows, cell_addr.row)
     }
 
-    fn range(&self, axis: TableAxis) -> (VisIdx, VisIdx) {
+    pub (crate) fn range(&self, axis: TableAxis) -> (VisIdx, VisIdx) {
         match axis {
             TableAxis::Rows => (self.start_row, self.end_row),
             TableAxis::Columns => (self.start_col, self.end_col),

@@ -7,41 +7,32 @@ use crate::data::{RemapDetails, SortDirection, SortSpec};
 use crate::selection::SingleCell;
 use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
 use druid::im::Vector;
-use druid::kurbo::{PathEl};
+use druid::kurbo::PathEl;
 use druid::piet::{FontFamily, Text, TextLayoutBuilder};
+use druid::text::{EditableText, TextStorage};
 use druid::widget::prelude::*;
-use druid::widget::{TextBox, Label};
+use druid::widget::{Label, RawLabel, TextBox};
 use druid::{theme, ArcStr, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 
-pub trait EditorFactory<RowData> {
+pub trait DisplayFactory<RowData> {
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;
     fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>>;
 }
 
-pub trait CellDelegate<RowData>:
-    CellRender<RowData> + DataCompare<RowData> + EditorFactory<RowData>
-{
+pub trait DataCompare<Item> {
+    fn compare(&self, a: &Item, b: &Item) -> Ordering;
 }
 
-impl<T> CellRender<T> for Box<dyn CellDelegate<T>> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.deref_mut().init(ctx, env)
-    }
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        self.deref().paint(ctx, cell, data, env);
-    }
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
-        self.deref().event(ctx, cell, event, data, env);
-    }
+pub trait CellDelegate<RowData>: DisplayFactory<RowData> + DataCompare<RowData> {}
 
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+impl<RowData> DisplayFactory<RowData> for Box<dyn CellDelegate<RowData>> {
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.deref().make_display(cell)
     }
-}
 
-impl<RowData> EditorFactory<RowData> for Box<dyn CellDelegate<RowData>> {
     fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.deref().make_editor(ctx)
     }
@@ -53,34 +44,24 @@ impl<T> DataCompare<T> for Box<dyn CellDelegate<T>> {
     }
 }
 
-impl<RowData, T> CellDelegate<RowData> for T where
-    T: CellRender<RowData> + DataCompare<RowData> + EditorFactory<RowData>
-{
-}
+impl<RowData, T> CellDelegate<RowData> for T where T: DisplayFactory<RowData> + DataCompare<RowData> {}
 
 // Todo change to boxed header delegate?
-impl<T> CellRender<T> for Box<dyn CellRender<T>> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.deref_mut().init(ctx, env)
-    }
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        self.deref().paint(ctx, cell, data, env);
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
-        self.deref().event(ctx, cell, event, data, env);
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+impl<RowData> DisplayFactory<RowData> for Box<dyn DisplayFactory<RowData>> {
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.deref().make_display(cell)
+    }
+
+    fn make_editor(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
+        self.deref().make_editor(cell)
     }
 }
 
 #[derive(Debug)]
-pub struct HeaderInfo<'a>{
+pub struct HeaderInfo<'a> {
     axis: TableAxis,
     idx: LogIdx,
-    sort: Option<&'a SortSpec>
+    sort: Option<&'a SortSpec>,
 }
 
 impl<'a> HeaderInfo<'a> {
@@ -96,59 +77,20 @@ pub enum CellCtx<'a> {
     Header(HeaderInfo<'a>),
 }
 
-pub trait CellRender<T> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env); // Use to cache resources like fonts
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env);
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {}
-
-    fn make_display(&self, cell: &CellCtx)->Option<Box<dyn Widget<T>>>;
-}
-
-impl<T, CR: CellRender<T>> CellRender<T> for Vec<CR> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        for col in self {
-            col.init(ctx, env)
-        }
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        if let CellCtx::Cell(SingleCell {
-            log: AxisPair { col, .. },
-            ..
-        }) = cell
-        {
-            if let Some(cell_render) = self.get(col.0) {
-                cell_render.paint(ctx, cell, data, env)
-            }
-        }
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
-        if let CellCtx::Cell(SingleCell {
-            log: AxisPair { col, .. },
-            ..
-        }) = cell
-        {
-            if let Some(cell_render) = self.get(col.0) {
-                cell_render.event(ctx, cell, event, data, env)
-            }
-        }
-    }
-
+impl<T, CR: DisplayFactory<T>> DisplayFactory<T> for Vec<CR> {
     fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         if let CellCtx::Cell(SingleCell {
-                                 log: AxisPair { col, .. },
-                                 ..
-                             }) = cell {
-            if let Some(cell_render) = self.get(col.0) {
-                return cell_render.make_display(cell)
+            log: AxisPair { col, .. },
+            ..
+        }) = cell
+        {
+            if let Some(found) = self.get(col.0) {
+                return found.make_display(cell);
             }
         }
         None
     }
-}
 
-impl<T, EF: EditorFactory<T>> EditorFactory<T> for Vec<EF> {
     fn make_editor(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         if let CellCtx::Cell(SingleCell {
             log: AxisPair { col, .. },
@@ -186,47 +128,33 @@ impl<T, U, W, I> Wrapped<T, U, W, I> {
     }
 }
 
-pub trait CellRenderExt<T: Data>: CellRender<T> + Sized + 'static {
+pub trait DisplayFactoryExt<T: Data>: DisplayFactory<T> + Sized + 'static {
     fn lens<S: Data, L: Lens<S, T>>(self, lens: L) -> LensWrapped<S, T, L, Self> {
         LensWrapped(Wrapped::new(self, lens))
     }
-
 }
 
-impl<T: Data, CR: CellRender<T> + 'static> CellRenderExt<T> for CR {}
+impl<T: Data, CR: DisplayFactory<T> + 'static> DisplayFactoryExt<T> for CR {}
 
-pub trait DataCompare<Item> {
-    fn compare(&self, a: &Item, b: &Item) -> Ordering;
-}
-
-impl<T, U, L, CR> CellRender<T> for LensWrapped<T, U, L, CR>
+impl<T, U, L, CR> DisplayFactory<T> for LensWrapped<T, U, L, CR>
 where
     T: Data,
     U: Data,
     L: Lens<T, U> + Clone + 'static,
-    CR: CellRender<U>,
+    CR: DisplayFactory<U>,
 {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.0.inner.init(ctx, env)
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        let inner = &self.0.inner;
-        self.0.wrapper.with(data, |inner_data| {
-            inner.paint(ctx, cell, inner_data, env);
-        })
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
-        let inner = &self.0.inner;
-        self.0.wrapper.with_mut(data, |inner_data| {
-            inner.event(ctx, cell, event, inner_data, env);
-        })
-    }
-
     fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
         // TODO work out if we can avoid a chain of boxing...
         if let Some(widget) = self.0.inner.make_display(cell) {
+            Some(Box::new(widget.lens(self.0.wrapper.clone())))
+        } else {
+            None
+        }
+    }
+
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+        // TODO work out if we can avoid a chain of boxing...
+        if let Some(widget) = self.0.inner.make_editor(ctx) {
             Some(Box::new(widget.lens(self.0.wrapper.clone())))
         } else {
             None
@@ -248,299 +176,133 @@ where
     }
 }
 
-impl<T, U, L, EF> EditorFactory<T> for LensWrapped<T, U, L, EF>
-where
-    T: Data,
-    U: Data,
-    L: Lens<T, U> + Clone + 'static,
-    EF: EditorFactory<U>,
-{
-    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
-        // TODO work out if we can avoid a chain of boxing...
-        if let Some(widget) = self.0.inner.make_editor(ctx) {
-            Some(Box::new(widget.lens(self.0.wrapper.clone())))
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct TextCell {
-    text_color: KeyOrValue<Color>,
-    font_name: KeyOrValue<ArcStr>,
-    font_size: KeyOrValue<f64>,
-    cached_font: Option<FontFamily>,
-}
-
-impl TextCell {
-    pub fn new() -> Self {
-        TextCell {
-            text_color: Color::BLACK.into(),
-            font_name: ArcStr::from("Gill Sans").into(),
-            font_size: theme::TEXT_SIZE_NORMAL.into(),
-            cached_font: None,
-        }
-    }
-
-    pub fn text_color(mut self, text_color: impl Into<KeyOrValue<Color>>) -> TextCell {
-        self.text_color = text_color.into();
-        self
-    }
-
-    pub fn font_name(mut self, font_name: impl Into<KeyOrValue<ArcStr>>) -> TextCell {
-        self.font_name = font_name.into();
-        self
-    }
-
-    pub fn font_size(mut self, font_size: impl Into<KeyOrValue<f64>>) -> TextCell {
-        self.font_size = font_size.into();
-        self
-    }
-
-    fn resolve_font(&self, ctx: &mut PaintCtx, env: &Env) -> FontFamily {
-        let font: FontFamily = ctx
-            .text()
-            .font_family(&*self.font_name.resolve(env))
-            .unwrap(); // TODO errors / fallback
-        font
-    }
-
-    fn paint_impl(&self, ctx: &mut PaintCtx, data: &str, env: &Env, font: &FontFamily) {
-        // TODO: error handling
-        // TODO: wrapping (multi line)
-
-        if let Ok(layout) = ctx
-            .text()
-            .new_text_layout(data.to_string())
-            .font(font.clone(), self.font_size.resolve(env))
-            .text_color(self.text_color.resolve(env))
-            .build()
-        {
-            ctx.draw_text(&layout, (0.0, 0.0));
-        }
-    }
-}
-
-
-
-impl Default for TextCell {
-    fn default() -> Self {
-        TextCell::new()
-    }
-}
-
-impl CellRender<String> for TextCell {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        if self.cached_font.is_none() {
-            let font = self.resolve_font(ctx, env);
-            self.cached_font = Some(font);
-        }
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, _cell: &CellCtx, data: &String, env: &Env) {
-        if let Some(font) = &self.cached_font {
-            self.paint_impl(ctx, &data, env, font);
-        } else {
-            //log::warn!("Font not cached, are you missing a call to init");
-            let font = self.resolve_font(ctx, env);
-            /*ctx.stroke(
-                Line::new((0., 0.), (100., 100.)),
-                &Color::rgb8(0xff, 0, 0),
-                2.,
-            );*/
-            self.paint_impl(ctx, &data, env, &font);
-        }
-    }
-
-    fn make_display(&self, _cell: &CellCtx) -> Option<Box<dyn Widget<String>>> {
-        Some(Label::new(|data: &String, env: &Env| data.clone()).with_text_color(self.text_color.clone()).boxed())
-    }
-}
-
-impl EditorFactory<String> for TextCell {
-    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<String>>> {
-        Some(Box::new(TextBox::new().expand_height()))
-    }
-}
-
-impl DataCompare<String> for TextCell {
-    fn compare(&self, a: &String, b: &String) -> Ordering {
-        a.cmp(b)
-    }
-}
-
-pub struct WidgetCell<MakeWidget, MakeLens, Row, Cell>{
-    make_widget: MakeWidget,
+pub struct WidgetCell<MakeLens, Row, Cell> {
     make_lens: MakeLens,
-    compare: Option<Box<dyn Fn(&Row, &Row)->Ordering>>,
+    make_widget: Box<dyn Fn(&CellCtx, &MakeLens) -> Option<Box<dyn Widget<Row>>>>,
+    make_editor: Option<Box<dyn Fn(&CellCtx, &MakeLens) -> Option<Box<dyn Widget<Row>>>>>,
+    compare: Option<Box<dyn Fn(&Row, &Row) -> Ordering>>,
     phantom_t: PhantomData<Row>,
-    phantom_c: PhantomData<Cell>
+    phantom_c: PhantomData<Cell>,
 }
 
-impl <MakeWidget: Fn(&CellCtx)->CellWidget,
-      MakeLens: Fn()->L,
-      L: Lens<Row, Cell> + 'static,
-      Row : Data,
-      Cell: Data,
-      CellWidget: Widget<Cell> + 'static> WidgetCell<MakeWidget, MakeLens, Row, Cell> {
-    pub fn new(make_widget: MakeWidget, make_lens: MakeLens) -> Self {
+impl<MakeLens: Fn() -> L, L: Lens<Row, Cell> + 'static, Row: Data, Cell: Data>
+    WidgetCell<MakeLens, Row, Cell>
+{
+    pub fn new_unsorted<CellWidget: Widget<Cell> + 'static>(
+        make_widget: impl Fn(&CellCtx) -> CellWidget + 'static,
+        make_lens: MakeLens,
+    ) -> Self {
         WidgetCell {
-            make_widget,
+            make_widget: Box::new(move |cell: &CellCtx, make_lens: &MakeLens| {
+                make_widget(cell).lens(make_lens()).boxed().into()
+            }),
             make_lens,
             compare: None,
-            phantom_t : Default::default(),
-            phantom_c: Default::default()
+            make_editor: None,
+            phantom_t: Default::default(),
+            phantom_c: Default::default(),
         }
     }
 
-    pub fn compare_with<Compare : Fn(&Cell, &Cell)->Ordering + 'static>(mut self, cmp: Compare)->Self{
+    pub fn compare_with<Compare: Fn(&Cell, &Cell) -> Ordering + 'static>(
+        mut self,
+        cmp: Compare,
+    ) -> Self {
         let lens = (self.make_lens)();
-        self.compare = Some(Box::new(move |a: &Row, b: &Row|
-            lens.with(a, |a|
-                lens.with(b, |b| cmp(a, b))
-            )
-        ));
+        self.compare = Some(Box::new(move |a: &Row, b: &Row| {
+            lens.with(a, |a| lens.with(b, |b| cmp(a, b)))
+        }));
         self
     }
 
-    pub fn compare_natural(mut self)->Self where Cell: Ord{
-        let lens = (self.make_lens)();
-        self.compare = Some(Box::new(move |a: &Row, b: &Row|{
-            lens.with(a, |a| {
-                lens.with(b, |b| a.cmp(b))
-            })
+    pub fn edit_with<EditWidget: Widget<Cell> + 'static>(
+        mut self,
+        make_editor: impl Fn(&CellCtx) -> EditWidget + 'static,
+    ) -> Self {
+        self.make_editor = Some(Box::new(move |cell: &CellCtx, make_lens: &MakeLens| {
+            make_editor(cell).lens(make_lens()).boxed().into()
         }));
         self
     }
 }
 
-impl <MakeWidget: Fn(&CellCtx)->CellWidget,
-    MakeLens: Fn()->L,
-    L: Lens<Row, Cell> + 'static,
-    Row : Data,
-    Cell: Data,
-    CellWidget: Widget<Cell> + 'static> CellRender<Row> for WidgetCell<MakeWidget, MakeLens, Row, Cell>{
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
+impl<MakeLens: Fn() -> L, L: Lens<Row, Cell> + 'static, Row: Data, Cell: Data + Ord>
+    WidgetCell<MakeLens, Row, Cell>
+{
+    // By default if the cell is ord we compare with that natural order
+    pub fn new<CellWidget: Widget<Cell> + 'static>(
+        make_widget: impl Fn(&CellCtx) -> CellWidget + 'static,
+        make_lens: MakeLens,
+    ) -> Self {
+        let lens = (make_lens)();
 
+        WidgetCell {
+            make_lens,
+            make_widget: Box::new(move |cell: &CellCtx, make_lens: &MakeLens| {
+                make_widget(cell).lens(make_lens()).boxed().into()
+            }),
+            make_editor: None,
+            compare: Some(Box::new(move |a: &Row, b: &Row| {
+                lens.with(a, |a| lens.with(b, |b| a.cmp(b)))
+            })),
+            phantom_t: Default::default(),
+            phantom_c: Default::default(),
+        }
+    }
+}
+
+impl<
+        MakeLens: Fn() -> L,
+        L: Lens<Row, Cell> + 'static,
+        Row: Data,
+        Cell: Data + Ord + TextStorage + EditableText,
+    > WidgetCell<MakeLens, Row, Cell>
+{
+    pub fn text(make_lens: MakeLens) -> Self {
+        Self::new(
+            |cell| RawLabel::new().with_text_color(Color::BLACK),
+            make_lens,
+        )
+        .edit_with(|cell| TextBox::new().expand() )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &Row, env: &Env) {
-
+    pub fn text_configured(
+        cfg: impl Fn(RawLabel<Cell>) -> RawLabel<Cell> + 'static,
+        make_lens: MakeLens,
+    ) -> Self {
+        Self::new(
+            move |cell| cfg(RawLabel::new().with_text_color(Color::BLACK)),
+            make_lens,
+        )
+        .edit_with(|cell| TextBox::new().expand() )
     }
+}
 
+impl<MakeLens: Fn() -> L, L: Lens<Row, Cell> + 'static, Row: Data, Cell: Data> DisplayFactory<Row>
+    for WidgetCell<MakeLens, Row, Cell>
+{
     fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<Row>>> {
-        log::info!("WidgetCell::make_display");
-        let widget = (self.make_widget)(cell);
-        Some(widget.lens((self.make_lens)()).boxed())
+        (self.make_widget)(cell, &self.make_lens)
+    }
+
+    fn make_editor(&self, cell: &CellCtx) -> Option<Box<dyn Widget<Row>>> {
+        self.make_editor
+            .as_ref()
+            .and_then(|m| m(cell, &self.make_lens))
     }
 }
 
-impl <MakeWidget: Fn(&CellCtx)->CellWidget,
-    MakeLens: Fn()->L,
-    L: Lens<Row, Cell>,
-    Row : Data,
-    Cell: Data,
-    CellWidget: Widget<Cell> + 'static> EditorFactory<Row> for WidgetCell<MakeWidget, MakeLens, Row, Cell> {
-    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<Row>>> {
-        None//Some(Box::new(TextBox::new().expand_height()))
-    }
-}
-
-impl <MakeWidget: Fn(&CellCtx)->CellWidget,
-    MakeLens: Fn()->L,
-    L: Lens<Row, Cell>,
-    Row : Data,
-    Cell: Data,
-    CellWidget: Widget<Cell> + 'static> DataCompare<Row> for WidgetCell<MakeWidget, MakeLens, Row, Cell> {
+impl<MakeLens: Fn() -> L, L: Lens<Row, Cell>, Row: Data, Cell: Data> DataCompare<Row>
+    for WidgetCell<MakeLens, Row, Cell>
+{
     fn compare(&self, a: &Row, b: &Row) -> Ordering {
-        if let Some(cmp) = &self.compare{
+        if let Some(cmp) = &self.compare {
             (cmp)(a, b)
         } else {
             Ordering::Equal
         }
     }
 }
-
-/*
-pub(crate) struct HeaderCell<T, I: CellRender<T>> {
-    inner: I,
-    phantom_t: PhantomData<T>,
-}
-
-impl<T, I: CellRender<T>> HeaderCell<T, I> {
-    pub fn new(inner: I) -> Self {
-        HeaderCell {
-            inner,
-            phantom_t: Default::default(),
-        }
-    }
-}
-
-fn make_arrow(top_point: &Point, up: bool, height: f64, head_rad: f64) -> Vec<PathEl> {
-    let start_y = top_point.y;
-    let tip_y = start_y + height;
-
-    let (start_y, tip_y, mult) = if up {
-        (tip_y, start_y, -1.)
-    } else {
-        (start_y, tip_y, 1.0)
-    };
-    let head_start_y = tip_y - (head_rad * mult);
-
-    let mid_x = top_point.x;
-
-    let arrow = vec![
-        PathEl::MoveTo((mid_x, start_y).into()),
-        PathEl::LineTo((mid_x, tip_y).into()),
-        PathEl::LineTo((mid_x - head_rad, head_start_y).into()),
-        PathEl::MoveTo((mid_x, tip_y).into()),
-        PathEl::LineTo((mid_x + head_rad, head_start_y).into()),
-    ];
-    arrow
-}
-
-impl<T, I: CellRender<T>> CellRender<T> for HeaderCell<T, I> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.inner.init(ctx, env);
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        match cell {
-            CellCtx::Header(HeaderInfo{sort: Some(ss), ..}) => {
-                let rect = ctx
-                    .region()
-                    .bounding_box()
-                    .with_origin(Point::ORIGIN)
-                    .inset(-3.);
-                let rad = rect.height() * 0.25;
-                let up = ss.direction == Ascending;
-
-                let arrow = make_arrow(
-                    &Point::new(rect.max_x() - rad, rect.min_y()),
-                    up,
-                    rect.height(),
-                    rad,
-                );
-                ctx.render_ctx.stroke(&arrow[..], &Color::WHITE, 1.0);
-                let rect1 = ctx.region().bounding_box();
-                let rect1 = rect1
-                    .with_origin(Point::ORIGIN)
-                    .with_size((rect1.width() - (rad + 3.) * 2., rect1.height()));
-                ctx.clip(rect1);
-                self.inner.paint(ctx, cell, data, env);
-            }
-            _ => {
-                self.inner.paint(ctx, cell, data, env);
-            }
-        }
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
-        unimplemented!();
-        None
-    }
-}*/
 
 pub struct TableColumn<T, CD> {
     pub(crate) header: String,
@@ -635,21 +397,15 @@ impl<T: Data, CD: CellDelegate<T>> TableColumn<T, CD> {
     }
 }
 
-impl<T: Data, CR: CellDelegate<T>> CellRender<T> for TableColumn<T, CR> {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.cell_delegate.init(ctx, env)
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &T, env: &Env) {
-        self.cell_delegate.paint(ctx, cell, data, env)
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut T, env: &Env) {
-        self.cell_delegate.event(ctx, cell, event, data, env);
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<T>>> {
+impl<RowData: Data, CR: CellDelegate<RowData>> DisplayFactory<RowData>
+    for TableColumn<RowData, CR>
+{
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.cell_delegate.make_display(cell)
+    }
+
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
+        self.cell_delegate.make_editor(ctx)
     }
 }
 
@@ -659,26 +415,20 @@ impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
     }
 }
 
-impl<T: Data, CR: CellDelegate<T>> EditorFactory<T> for TableColumn<T, CR> {
-    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<T>>> {
-        self.cell_delegate.make_editor(ctx)
-    }
-}
-
-pub struct ProvidedColumns<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-{
+pub struct ProvidedColumns<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> {
     cols: Vec<TableColumn<TableData::Item, ColumnType>>,
     phantom_td: PhantomData<TableData>,
 }
 
-impl <TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug for ProvidedColumns<TableData, ColumnType> {
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug
+    for ProvidedColumns<TableData, ColumnType>
+{
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ProvidedColumns")
             .field("cols", &self.cols)
             .finish()
     }
 }
-
 
 impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     ProvidedColumns<TableData, ColumnType>
@@ -691,8 +441,8 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    Remapper<TableData> for ProvidedColumns<TableData, ColumnType>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper<TableData>
+    for ProvidedColumns<TableData, ColumnType>
 {
     fn sort_fixed(&self, idx: usize) -> bool {
         self.cols.get(idx).map(|c| c.sort_fixed).unwrap_or(false)
@@ -752,45 +502,22 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
 }
 
 impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    CellRender<TableData::Item> for ProvidedColumns<TableData, ColumnType>
+    DisplayFactory<TableData::Item> for ProvidedColumns<TableData, ColumnType>
 {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.cols.init(ctx, env)
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &TableData::Item, env: &Env) {
-        self.cols.paint(ctx, cell, data, env);
-    }
-
-    fn event(
+    fn make_display(
         &self,
-        ctx: &mut EventCtx,
         cell: &CellCtx,
-        event: &Event,
-        data: &mut TableData::Item,
-        env: &Env,
-    ) {
-        self.cols.event(ctx, cell, event, data, env);
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
+    ) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
         self.cols.make_display(cell)
     }
-}
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    EditorFactory<TableData::Item> for ProvidedColumns<TableData, ColumnType>
-{
-    fn make_editor(
-        &self,
-        ctx: &CellCtx,
-    ) -> Option<Box<dyn Widget<TableData::Item>>> {
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
         self.cols.make_editor(ctx)
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    CellsDelegate<TableData> for ProvidedColumns<TableData, ColumnType>
+impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> CellsDelegate<TableData>
+    for ProvidedColumns<TableData, ColumnType>
 {
     fn data_columns(&self, _data: &TableData) -> usize {
         self.cols.len()

@@ -2,26 +2,24 @@ use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
 use crate::config::ResolvedTableConfig;
 use crate::headings::HeadersFromData;
-use crate::selection::CellDemap;
+use crate::selection::{CellDemap, SingleCell};
 use crate::{
-    CellRender, Cells, Headings, IndexedData, LogIdx, Remap, RemapSpec, TableConfig,
+    Cells, DisplayFactory, Headings, IndexedData, LogIdx, Remap, RemapSpec, TableConfig,
     TableSelection, VisIdx,
 };
-use druid::widget::{
-    Axis, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll,
-};
+use druid::widget::{Axis, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetPod,
 };
 use druid_bindings::*;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::fmt::Debug;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
-    HeaderRender: CellRender<HeadersSource::Header> + 'static,
+    HeaderRender: DisplayFactory<HeadersSource::Header> + 'static,
 > {
     source: HeadersSource,
     render: HeaderRender,
@@ -29,7 +27,7 @@ pub struct HeaderBuild<
 
 impl<
         HeadersSource: HeadersFromData + 'static,
-        HeaderRender: CellRender<HeadersSource::Header> + 'static,
+        HeaderRender: DisplayFactory<HeadersSource::Header> + 'static,
     > HeaderBuild<HeadersSource, HeaderRender>
 {
     pub fn new(source: HeadersSource, render: HeaderRender) -> Self {
@@ -42,19 +40,16 @@ pub trait HeaderBuildT {
     type TableData: Data;
     type Header: Data;
     type Headers: IndexedData<Item = Self::Header> + 'static;
-    type HeadersSource: HeadersFromData<
-        Headers = Self::Headers,
-        Header = Self::Header,
-        TableData = Self::TableData,
-    > + 'static;
-    type HeaderRender: CellRender<Self::Header> + 'static;
+    type HeadersSource: HeadersFromData<Headers = Self::Headers, Header = Self::Header, TableData = Self::TableData>
+        + 'static;
+    type HeaderRender: DisplayFactory<Self::Header> + 'static;
 
     fn content(self) -> (Self::HeadersSource, Self::HeaderRender);
 }
 
 impl<
         HeadersSource: HeadersFromData + 'static,
-        HeaderRender: CellRender<HeadersSource::Header> + 'static,
+        HeaderRender: DisplayFactory<HeadersSource::Header> + 'static,
     > HeaderBuildT for HeaderBuild<HeadersSource, HeaderRender>
 {
     type TableData = HeadersSource::TableData;
@@ -73,8 +68,7 @@ pub struct TableArgs<
     RowH: HeaderBuildT<TableData = TableData>,
     ColH: HeaderBuildT<TableData = TableData>,
     CellsDel: CellsDelegate<TableData> + 'static,
->
-{
+> {
     cells_delegate: CellsDel,
     row_h: Option<RowH>,
     col_h: Option<ColH>,
@@ -143,38 +137,38 @@ pub(crate) struct TableState<TableData: Data> {
     pub(crate) selection: TableSelection,
     #[data(ignore)]
     pub(crate) measures: AxisPair<AxisMeasure>, // TODO
-    pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>
+    pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>,
 }
 
-impl<TableData: IndexedData> TableState<TableData>{
+impl<TableData: IndexedData> TableState<TableData> {
     pub fn new(
         config: TableConfig,
         resolved_config: ResolvedTableConfig,
         data: TableData,
         measures: AxisPair<AxisMeasure>,
-        cells_del: Arc<dyn CellsDelegate<TableData>>
+        cells_del: Arc<dyn CellsDelegate<TableData>>,
     ) -> Self {
-            let mut state = TableState {
-                scroll_x: 0.0,
-                scroll_y: 0.0,
-                scroll_rect: Rect::ZERO,
-                config,
-                resolved_config,
-                table_data: data,
-                remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
-                remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
-                selection: TableSelection::default(),
-                measures,
-                cells_del
-            };
-            state.remap_rows();
-            state.remap_cols();
-            state
+        let mut state = TableState {
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            scroll_rect: Rect::ZERO,
+            config,
+            resolved_config,
+            table_data: data,
+            remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
+            remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
+            selection: TableSelection::default(),
+            measures,
+            cells_del,
+        };
+        state.remap_rows();
+        state.remap_cols();
+        state
     }
 
-
     fn remap_rows(&mut self) {
-        self.remaps[TableAxis::Rows] = self.cells_del
+        self.remaps[TableAxis::Rows] = self
+            .cells_del
             .remap_items(&self.table_data, &self.remap_specs[TableAxis::Rows]);
         self.measures[TableAxis::Rows].set_axis_properties(
             self.resolved_config.cell_border_thickness,
@@ -193,10 +187,38 @@ impl<TableData: IndexedData> TableState<TableData>{
             &self.remaps[TableAxis::Columns],
         );
     }
+
+    pub(crate) fn visible_rect(&self) ->Rect{
+        self.scroll_rect.intersect(Rect::from_origin_size(
+            Point::ZERO,
+            self.measures.measured_size()
+        ))
+    }
+
+    pub(crate) fn find_cell(&self, pos: Point) -> Option<SingleCell> {
+
+        let vis = self.measures.zip_with(&AxisPair::new(pos.y, pos.x ), |m, p|m.vis_idx_from_pixel(*p)).opt()?;
+        let log = self.remaps.get_log_cell(&vis)?;
+        Some(SingleCell::new(
+            vis,
+            log
+        ))
+    }
+
+    pub(crate) fn vis_idx_visible_for_axis(&self, axis: TableAxis) -> impl Iterator<Item=VisIdx>{
+        let vis_rect = self.visible_rect();
+        let cells = self.measures.cell_rect_from_pixels(vis_rect);
+        let (from, to) = cells.range(axis);
+        VisIdx::range_inc_iter(from, to)
+    }
+
+    pub(crate) fn log_idx_visible_for_axis(&self, axis: TableAxis) -> impl Iterator<Item=LogIdx> + '_{
+        let remap = &self.remaps[axis];
+        self.vis_idx_visible_for_axis(axis).flat_map(move |vis|remap.get_log_idx(vis))
+    }
 }
 
-impl<TableData: Data> TableState<TableData>{
-
+impl<TableData: Data> TableState<TableData> {
     pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx) {
         log::info!(
             "Move selection {:?} on {:?} to {:?}",
@@ -227,7 +249,7 @@ type TableChild<TableData> = WidgetPod<
     Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
 >;
 
-pub struct Table<TableData: IndexedData>{
+pub struct Table<TableData: IndexedData> {
     child: TableChild<TableData>,
 }
 
@@ -239,7 +261,11 @@ struct TableScopePolicy<TableData> {
 }
 
 impl<TableData> TableScopePolicy<TableData> {
-    pub fn new(config: TableConfig, measures: AxisPair<AxisMeasure>, cells_delegate: Arc<dyn CellsDelegate<TableData>>) -> Self {
+    pub fn new(
+        config: TableConfig,
+        measures: AxisPair<AxisMeasure>,
+        cells_delegate: Arc<dyn CellsDelegate<TableData>>,
+    ) -> Self {
         TableScopePolicy {
             config,
             measures,
@@ -257,7 +283,13 @@ impl<TableData: IndexedData> ScopePolicy for TableScopePolicy<TableData> {
     fn create(self, inner: &Self::In, env: &Env) -> (Self::State, Self::Transfer) {
         let rc = self.config.resolve(env);
         (
-            TableState::new(self.config, rc, inner.clone(), self.measures, self.cells_delegate),
+            TableState::new(
+                self.config,
+                rc,
+                inner.clone(),
+                self.measures,
+                self.cells_delegate,
+            ),
             TableScopeTransfer::new(),
         )
     }
@@ -290,7 +322,9 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
     }
 
     fn update_computed(&self, old_state: &Self::State, state: &mut Self::State) -> bool {
-        let remaps_same = old_state.remap_specs.zip_with(&state.remap_specs, |old, new| old.same(new));
+        let remaps_same = old_state
+            .remap_specs
+            .zip_with(&state.remap_specs, |old, new| old.same(new));
 
         if !remaps_same[TableAxis::Rows] {
             state.remap_rows();
@@ -331,7 +365,8 @@ impl<TableData: IndexedData> Table<TableData> {
                 .and(TableState::<TableData>::scroll_rect.bind(ScrollRectProperty::default())),
         );
 
-        let policy = TableScopePolicy::new(table_config.clone(), measures, Arc::new(cells_delegate));
+        let policy =
+            TableScopePolicy::new(table_config.clone(), measures, Arc::new(cells_delegate));
         Self::add_headings(args.col_h, args.row_h, policy, table_config, cells_scroll)
     }
 
@@ -400,10 +435,7 @@ impl<TableData: IndexedData> Table<TableData> {
         policy: TableScopePolicy<TableData>,
         widget: W,
     ) -> TableChild<TableData> {
-        WidgetPod::new(Scope::new(
-            policy,
-            Box::new(widget),
-        ))
+        WidgetPod::new(Scope::new(policy, Box::new(widget)))
     }
 }
 
@@ -412,12 +444,18 @@ impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
         self.child.event(ctx, event, data, env)
     }
 
-    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &TableData, env: &Env) {
+    fn lifecycle(
+        &mut self,
+        ctx: &mut LifeCycleCtx,
+        event: &LifeCycle,
+        data: &TableData,
+        env: &Env,
+    ) {
         self.child.lifecycle(ctx, event, data, env);
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &TableData, data: &TableData, env: &Env) {
-        if ctx.env_changed(){
+        if ctx.env_changed() {
             if let Some(state) = self.child.widget_mut().state_mut() {
                 state.resolved_config = state.config.resolve(env);
             }
@@ -425,7 +463,13 @@ impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
         self.child.update(ctx, data, env);
     }
 
-    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &TableData, env: &Env) -> Size {
+    fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        bc: &BoxConstraints,
+        data: &TableData,
+        env: &Env,
+    ) -> Size {
         let size = self.child.layout(ctx, bc, data, env);
         self.child
             .set_layout_rect(ctx, data, env, Rect::from_origin_size(Point::ORIGIN, size));

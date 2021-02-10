@@ -1,19 +1,22 @@
-use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellRender, CellRenderExt, CellsDelegate, EditorFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, TextCell, ReadOnly};
+use druid_table::{
+    AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory,
+    DisplayFactoryExt, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap,
+    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, WidgetCell,
+};
 
-use druid::{AppLauncher, Color, Data, Env, PaintCtx, Widget, WindowDesc, EventCtx, Event};
-use druid_table::numbers_table::LogIdxTable;
-use std::marker::PhantomData;
-use std::fmt::{Debug, Formatter};
 use core::fmt;
 use druid::lens::Map;
+use druid::{AppLauncher, Color, Data, Env, Event, EventCtx, PaintCtx, Widget, WindowDesc};
+use druid_table::numbers_table::LogIdxTable;
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 
 #[macro_use]
 extern crate log;
 
 #[derive(Data, Clone)]
-struct BigTableCols
-{
-    columns: usize
+struct BigTableCols {
+    columns: usize,
 }
 
 impl BigTableCols {
@@ -22,9 +25,8 @@ impl BigTableCols {
     }
 }
 
-
 #[derive(Clone)]
-struct BigTableCells<TableData: IndexedData, CR: CellRender<TableData::Item>>
+struct BigTableCells<TableData: IndexedData, CR: DisplayFactory<TableData::Item>>
 where
     TableData::Item: Data,
 {
@@ -33,15 +35,17 @@ where
     phantom_td: PhantomData<TableData>,
 }
 
-impl <TableData: IndexedData, CR: CellRender<TableData::Item>> Debug for BigTableCells<TableData, CR>
-    where
-        TableData::Item: Data{
+impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> Debug
+    for BigTableCells<TableData, CR>
+where
+    TableData::Item: Data,
+{
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("BigTableCells").finish()
     }
 }
 
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>> BigTableCells<TableData, CR>
+impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> BigTableCells<TableData, CR>
 where
     TableData::Item: Data,
 {
@@ -54,30 +58,19 @@ where
     }
 }
 
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>> CellRender<TableData::Item>
+impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> DisplayFactory<TableData::Item>
     for BigTableCells<TableData, CR>
-where
-    TableData::Item: Data,
 {
-    fn init(&mut self, ctx: &mut PaintCtx, env: &Env) {
-        self.inner.init(ctx, env);
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx, cell: &CellCtx, data: &TableData::Item, env: &Env) {
-        self.inner.paint(ctx, cell, data, env)
-    }
-
-    fn event(&self, ctx: &mut EventCtx, cell: &CellCtx, event: &Event, data: &mut <TableData as IndexedData>::Item, env: &Env) {
-
-    }
-
-    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<<TableData as IndexedData>::Item>>> {
+    fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
         self.inner.make_display(cell)
+    }
+
+    fn make_editor(&self, ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
+        None
     }
 }
 
-impl IndexedData for BigTableCols
-{
+impl IndexedData for BigTableCols {
     type Item = LogIdx;
 
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V> {
@@ -97,7 +90,7 @@ impl IndexedData for BigTableCols
     }
 }
 
-impl<TableData: IndexedData, CR: CellRender<TableData::Item>> CellsDelegate<TableData>
+impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> CellsDelegate<TableData>
     for BigTableCells<TableData, CR>
 where
     TableData::Item: Data,
@@ -107,7 +100,7 @@ where
     }
 }
 
-impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowData>>
+impl<RowData: Data, CR: DisplayFactory<RowData>, TableData: IndexedData<Item = RowData>>
     Remapper<TableData> for BigTableCells<TableData, CR>
 {
     fn sort_fixed(&self, _idx: usize) -> bool {
@@ -123,33 +116,25 @@ impl<RowData: Data, CR: CellRender<RowData>, TableData: IndexedData<Item = RowDa
     }
 }
 
-impl<CR: CellRender<TableData::Item>, TableData: IndexedData> EditorFactory<TableData::Item>
-    for BigTableCells<TableData, CR>
-where
-    TableData::Item: Data,
-{
-    fn make_editor(&self, _ctx: &CellCtx) -> Option<Box<dyn Widget<TableData::Item>>> {
-        None
-    }
-}
-
 fn build_root_widget() -> Table<LogIdxTable> {
     let table_config = TableConfig::new();
 
     let rows = HeaderBuild::new(
         HeadersFromIndices::new(),
-        TextCell::new()
-            .text_color(Color::WHITE)
-            .lens(ReadOnly::new(|br: &LogIdx| br.0.to_string()))
+        WidgetCell::text_configured(
+            |rl| rl.with_text_color(Color::WHITE),
+            || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
+        ),
     );
 
     let columns = 1_000_000_000;
     let headers = BigTableCols::new(columns);
     let cols = HeaderBuild::new(
         SuppliedHeaders::new(headers),
-        TextCell::new()
-            .text_color(Color::WHITE)
-            .lens(ReadOnly::new(|br: &LogIdx| br.0.to_string()))
+        WidgetCell::text_configured(
+            |rl| rl.with_text_color(Color::WHITE),
+            || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
+        ),
     );
 
     let measures = AxisPair::new(
@@ -159,7 +144,7 @@ fn build_root_widget() -> Table<LogIdxTable> {
     Table::new(
         TableArgs::new(
             BigTableCells::new(
-                TextCell::new().lens(ReadOnly::new(|br: &LogIdx| br.0.to_string())),
+                WidgetCell::text(|| ReadOnly::new(|br: &LogIdx| br.0.to_string())),
                 columns,
             ),
             Some(rows),

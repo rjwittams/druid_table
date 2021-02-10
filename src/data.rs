@@ -5,12 +5,13 @@ use druid::im::Vector;
 use druid::Data;
 use std::cmp::Ordering;
 use std::cmp::Reverse;
+use std::ops::Range;
 
 // This ended up sort of similar to Lens,
 // so I've named the methods similarly.
 // But it is implemented by the data itself
-pub trait IndexedData : Data {
-    type Item : Data;
+pub trait IndexedData: Data {
+    type Item: Data;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
     fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V>;
@@ -218,8 +219,7 @@ impl Default for RemapSpec {
     }
 }
 
-pub trait Remapper<TableData: IndexedData>
-{
+pub trait Remapper<TableData: IndexedData> {
     fn sort_fixed(&self, idx: usize) -> bool;
     fn initial_spec(&self) -> RemapSpec;
     // This takes our normal data and a spec, and returns a remap of its indices

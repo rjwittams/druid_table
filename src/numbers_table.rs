@@ -1,6 +1,6 @@
 use crate::axis_measure::LogIdx;
-use druid::{Data, Lens};
 use crate::IndexedData;
+use druid::{Data, Lens};
 
 #[derive(Debug, Data, Clone, Lens)]
 pub struct LogIdxTable {

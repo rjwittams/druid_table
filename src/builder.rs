@@ -1,18 +1,16 @@
-use crate::columns::{
-    CellDelegate, CellRenderExt, ProvidedColumns, TableColumn, TextCell,
-};
+use crate::columns::{CellDelegate, DisplayFactoryExt, ProvidedColumns, TableColumn};
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
-use crate::data::{IndexedData};
+use crate::data::IndexedData;
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
-use crate::{CellRender, HeaderBuild, Table};
-use druid::{theme, Data, KeyOrValue};
-use std::marker::PhantomData;
-use im::Vector;
-use druid::lens::Map;
 use crate::vis::MarkShape::Text;
+use crate::{DisplayFactory, HeaderBuild, ReadOnly, Table, WidgetCell};
+use druid::lens::{Identity, Map};
+use druid::{theme, Data, KeyOrValue};
+use im::Vector;
+use std::marker::PhantomData;
 
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub enum AxisMeasurementType {
@@ -28,17 +26,15 @@ impl Default for AxisMeasurementType {
 
 pub struct TableBuilder<TableData: IndexedData> {
     table_columns: Vec<TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
-    column_header_delegate: Box<dyn CellRender<String>>,
-    row_header_delegate: Box<dyn CellRender<LogIdx>>,
+    column_header_delegate: Box<dyn DisplayFactory<String>>,
+    row_header_delegate: Box<dyn DisplayFactory<LogIdx>>,
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
     measurements: AxisPair<AxisMeasurementType>,
 }
 
-impl<TableData: IndexedData> Default
-    for TableBuilder<TableData>
-{
+impl<TableData: IndexedData> Default for TableBuilder<TableData> {
     fn default() -> Self {
         Self::new()
     }
@@ -63,28 +59,23 @@ impl ShowHeadings {
 
 pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
-    HeaderBuild<HeadersFromIndices<TableData>, Box<dyn CellRender<LogIdx>>>,
-    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>, Box<dyn CellRender<String>>>,
+    HeaderBuild<HeadersFromIndices<TableData>, Box<dyn DisplayFactory<LogIdx>>>,
+    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>, Box<dyn DisplayFactory<String>>>,
     ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedData>::Item>>>,
 >;
 
-impl<TableData: IndexedData>
-    TableBuilder<TableData>
-{
+impl<TableData: IndexedData> TableBuilder<TableData> {
     pub fn new() -> TableBuilder<TableData> {
         TableBuilder {
             table_columns: Vec::new(),
-            row_header_delegate: Box::new(
-                //HeaderCell::new(TextCell::new().text_color(theme::LABEL_COLOR))
-                TextCell::new().text_color(theme::LABEL_COLOR)
-                    .lens( Map::new(|br: &LogIdx| br.0.to_string(),
-                                    |br: &mut LogIdx, a: String|{} ) )
-
-            ),
-            column_header_delegate: Box::new(//HeaderCell::new(
-                TextCell::new().text_color(theme::LABEL_COLOR),
-            //)
-            ),
+            row_header_delegate: Box::new(WidgetCell::text_configured(
+                |rl| rl.with_text_color(theme::LABEL_COLOR),
+                || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
+            )),
+            column_header_delegate: Box::new(WidgetCell::text_configured(
+                |rl| rl.with_text_color(theme::LABEL_COLOR),
+                || Identity,
+            )),
             table_config: TableConfig::new(),
             phantom_td: PhantomData::default(),
             show_headings: ShowHeadings::Both,
@@ -105,7 +96,10 @@ impl<TableData: IndexedData>
         self
     }
 
-    pub fn with(mut self, col: TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>) -> Self {
+    pub fn with(
+        mut self,
+        col: TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>,
+    ) -> Self {
         self.table_columns.push(col);
         self
     }
