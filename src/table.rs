@@ -1,6 +1,7 @@
 use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
 use crate::config::ResolvedTableConfig;
+use crate::data::RemapDetails;
 use crate::headings::HeadersFromData;
 use crate::selection::{CellDemap, SingleCell};
 use crate::{
@@ -13,9 +14,11 @@ use druid::{
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetPod,
 };
 use druid_bindings::*;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -124,7 +127,7 @@ impl<
     }
 }
 
-#[derive(Data, Clone, Debug, Lens)]
+#[derive(Data, Clone, Lens)]
 pub(crate) struct TableState<TableData: Data> {
     pub(crate) scroll_x: f64,
     pub(crate) scroll_y: f64,
@@ -175,11 +178,13 @@ impl<TableData: IndexedData> TableState<TableData> {
             self.table_data.data_len(),
             &self.remaps[TableAxis::Rows],
         );
+        // TODO: Maintain logical selection
+        self.selection = TableSelection::NoSelection;
     }
 
     fn remap_cols(&mut self) {
-        self.remaps[TableAxis::Columns] = self.remap_specs[TableAxis::Columns]
-            .remap_placements(LogIdx(self.cells_del.data_columns(&self.table_data) - 1));
+        // self.remaps[TableAxis::Columns] = self.remap_specs[TableAxis::Columns]
+        //     .remap_placements(LogIdx(self.cells_del.data_columns(&self.table_data) - 1));
 
         self.measures[TableAxis::Columns].set_axis_properties(
             self.resolved_config.cell_border_thickness,
@@ -188,50 +193,103 @@ impl<TableData: IndexedData> TableState<TableData> {
         );
     }
 
-    pub(crate) fn visible_rect(&self) ->Rect{
+    pub(crate) fn visible_rect(&self) -> Rect {
         self.scroll_rect.intersect(Rect::from_origin_size(
             Point::ZERO,
-            self.measures.measured_size()
+            self.measures.measured_size(),
         ))
     }
 
     pub(crate) fn find_cell(&self, pos: Point) -> Option<SingleCell> {
-
-        let vis = self.measures.zip_with(&AxisPair::new(pos.y, pos.x ), |m, p|m.vis_idx_from_pixel(*p)).opt()?;
+        let vis = self
+            .measures
+            .zip_with(&AxisPair::new(pos.y, pos.x), |m, p| {
+                m.vis_idx_from_pixel(*p)
+            })
+            .opt()?;
         let log = self.remaps.get_log_cell(&vis)?;
-        Some(SingleCell::new(
-            vis,
-            log
-        ))
+        Some(SingleCell::new(vis, log))
     }
 
-    pub(crate) fn vis_idx_visible_for_axis(&self, axis: TableAxis) -> impl Iterator<Item=VisIdx>{
+    pub(crate) fn vis_idx_visible_for_axis(&self, axis: TableAxis) -> impl Iterator<Item = VisIdx> {
         let vis_rect = self.visible_rect();
         let cells = self.measures.cell_rect_from_pixels(vis_rect);
         let (from, to) = cells.range(axis);
         VisIdx::range_inc_iter(from, to)
     }
 
-    pub(crate) fn log_idx_visible_for_axis(&self, axis: TableAxis) -> impl Iterator<Item=LogIdx> + '_{
+    pub(crate) fn log_idx_visible_for_axis(
+        &self,
+        axis: TableAxis,
+    ) -> impl Iterator<Item = LogIdx> + '_ {
         let remap = &self.remaps[axis];
-        self.vis_idx_visible_for_axis(axis).flat_map(move |vis|remap.get_log_idx(vis))
+        self.vis_idx_visible_for_axis(axis)
+            .flat_map(move |vis| remap.get_log_idx(vis))
     }
-}
 
-impl<TableData: Data> TableState<TableData> {
-    pub fn explicit_header_move(&mut self, axis: TableAxis, moved_to_idx: VisIdx) {
+    pub fn explicit_header_move(
+        &mut self,
+        axis: TableAxis,
+        moved_from_idx: VisIdx,
+        moved_to_idx: VisIdx,
+    ) {
         log::info!(
-            "Move selection {:?} on {:?} to {:?}",
+            "Move selection {:?}\n\t on {:?} from {:?} to {:?}",
             self.selection,
             axis,
+            moved_from_idx,
             moved_to_idx
         );
-        let mut offset = 0;
-        if let Some(headers_moved) = self.selection.fully_selected_on_axis(axis) {
-            for vis_idx in headers_moved {
-                if let Some(log_idx) = self.remaps[axis].get_log_idx(vis_idx) {
-                    self.remap_specs[axis].place(log_idx, moved_to_idx + VisOffset(offset));
-                    offset += 1;
+
+        let size = match axis {
+            TableAxis::Columns => self.cells_del.data_columns(&self.table_data),
+            TableAxis::Rows => self.table_data.data_len(),
+        };
+
+        if size > 0 {
+            let last_vis = VisIdx(size - 1);
+
+            let move_by = moved_to_idx - moved_from_idx;
+
+            if move_by != VisOffset(0) {
+                if let Some(mut headers_moved) = self.selection.fully_selected_on_axis(axis) {
+                    let mut past_end: Vec<LogIdx> = Default::default();
+
+                    if move_by.0 > 0 {
+                        headers_moved.reverse()
+                    }
+
+                    let mut current: Vec<_> = self.remaps[axis].iter(last_vis).collect();
+                    for vis_idx in headers_moved {
+                        let new_vis = vis_idx + move_by;
+                        if vis_idx.0 >= current.len() {
+                            log::warn!(
+                                "Trying to move {:?}->{:?} to {:?} but len is {}",
+                                vis_idx,
+                                current.get(vis_idx.0),
+                                new_vis,
+                                current.len()
+                            )
+                        } else {
+                            let log_idx = current.remove(vis_idx.0);
+
+                            if new_vis.0 >= current.len() {
+                                past_end.push(log_idx)
+                            } else {
+                                current.insert(new_vis.0, log_idx)
+                            }
+                        }
+                    }
+
+                    if move_by.0 > 0 {
+                        past_end.reverse()
+                    }
+                    current.append(&mut past_end);
+
+                    //self.selection.move_by(move_by, axis);
+                    self.remaps[axis] =
+                        Remap::Selected(RemapDetails::Full(current.into_iter().collect()));
+                    self.selection = TableSelection::NoSelection;
                 }
             }
         }
@@ -307,30 +365,75 @@ impl<TableData> TableScopeTransfer<TableData> {
     }
 }
 
+fn same_check<T: Data>(old: &T, new: &T) {
+    if !old.same(new) {
+        log::warn!("{} not same", std::any::type_name::<T>())
+    } else {
+        // log::info!("{} same", std::any::type_name::<T>())
+    }
+}
+
+fn indexed_same<TableData: IndexedData>(old: &TableData, new: &TableData) {
+    let (ol, nl) = (old.data_len(), new.data_len());
+    if ol != nl {
+        log::warn!("Lengths not the same {} {}", ol, nl);
+        return;
+    }
+
+    for idx in (0..ol).map(LogIdx) {
+        old.with(idx, |od| {
+            new.with(idx, |nd| {
+                if !od.same(nd) {
+                    log::info!("Not same at idx {}", idx.0);
+                }
+            });
+        });
+    }
+}
+
 impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
     type In = TableData;
     type State = TableState<TableData>;
 
-    fn read_input(&self, state: &mut Self::State, inner: &Self::In, env: &Env) {
-        state.table_data = inner.clone();
-    }
-
-    fn write_back_input(&self, state: &Self::State, inner: &mut Self::In) {
-        if !inner.same(&state.table_data) {
-            *inner = state.table_data.clone();
+    fn read_input(&self, state: &mut Self::State, input: &Self::In, env: &Env) {
+        if !input.same(&state.table_data) {
+            log::info!("Writing table_data");
+            state.table_data = input.clone();
         }
     }
 
-    fn update_computed(&self, old_state: &Self::State, state: &mut Self::State) -> bool {
+    fn write_back_input(&self, state: &Self::State, input: &mut Self::In) {
+        if !input.same(&state.table_data) {
+            *input = state.table_data.clone();
+        }
+    }
+
+    fn update_computed(&self, old_state: &Self::State, state: &mut Self::State, env: &Env) -> bool {
+        log::info!(
+            "Update computed TableScope data changed:{}",
+            !old_state.same(state)
+        );
+        same_check(&old_state.remaps, &state.remaps);
+        //same_check(&old_state.measures , &state.measures);
+        same_check(&old_state.resolved_config, &state.resolved_config);
+        same_check(&old_state.cells_del, &state.cells_del);
+        same_check(&old_state.scroll_rect, &state.scroll_rect);
+        same_check(&old_state.scroll_x, &state.scroll_x);
+        same_check(&old_state.scroll_y, &state.scroll_y);
+        same_check(&old_state.selection, &state.selection);
+        same_check(&old_state.table_data, &state.table_data);
+        indexed_same(&old_state.table_data, &state.table_data);
+
+        let data_changed = !old_state.table_data.same(&state.table_data);
         let remaps_same = old_state
             .remap_specs
             .zip_with(&state.remap_specs, |old, new| old.same(new));
 
-        if !remaps_same[TableAxis::Rows] {
+        if !remaps_same[TableAxis::Rows] || data_changed {
             state.remap_rows();
         }
 
-        if !remaps_same[TableAxis::Columns] {
+        if !remaps_same[TableAxis::Columns] || data_changed {
             state.remap_cols();
         }
 
@@ -437,11 +540,19 @@ impl<TableData: IndexedData> Table<TableData> {
     ) -> TableChild<TableData> {
         WidgetPod::new(Scope::new(policy, Box::new(widget)))
     }
+
+    fn state(&self) -> Option<&TableState<TableData>> {
+        self.child.widget().state()
+    }
+
+    fn state_mut(&mut self) -> Option<&mut TableState<TableData>> {
+        self.child.widget_mut().state_mut()
+    }
 }
 
 impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableData, env: &Env) {
-        self.child.event(ctx, event, data, env)
+        self.child.event(ctx, event, data, env);
     }
 
     fn lifecycle(
@@ -455,6 +566,13 @@ impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &TableData, data: &TableData, env: &Env) {
+        log::info!(
+            "Table update {:?} data:{}, env:{}, req_up:{}",
+            SystemTime::now(),
+            !_old_data.same(data),
+            ctx.env_changed(),
+            ctx.has_requested_update()
+        );
         if ctx.env_changed() {
             if let Some(state) = self.child.widget_mut().state_mut() {
                 state.resolved_config = state.config.resolve(env);
@@ -478,5 +596,66 @@ impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &TableData, env: &Env) {
         self.child.paint_raw(ctx, data, env);
+    }
+}
+
+impl<TableData: IndexedData> BindableAccess for Table<TableData> {
+    bindable_self_body!();
+}
+
+pub struct TableSelectionProp<TableData> {
+    phantom_td: PhantomData<TableData>,
+}
+
+impl<TableData> Default for TableSelectionProp<TableData> {
+    fn default() -> Self {
+        Self {
+            phantom_td: Default::default(),
+        }
+    }
+}
+
+impl<TableData: IndexedData> BindableProperty for TableSelectionProp<TableData> {
+    type Controlled = Table<TableData>;
+    type Value = TableSelection;
+    type Change = ();
+
+    fn write_prop(
+        &self,
+        controlled: &mut Self::Controlled,
+        ctx: &mut UpdateCtx,
+        field_val: &Self::Value,
+        env: &Env,
+    ) {
+        if let Some(s) = controlled.state_mut() {
+            s.selection = field_val.clone()
+        }
+    }
+
+    fn append_changes(
+        &self,
+        controlled: &Self::Controlled,
+        field_val: &Self::Value,
+        change: &mut Option<Self::Change>,
+        env: &Env,
+    ) {
+        if let Some(s) = controlled.state() {
+            if !s.selection.same(field_val) {
+                *change = Some(())
+            }
+        }
+    }
+
+    fn update_data_from_change(
+        &self,
+        controlled: &Self::Controlled,
+        ctx: &EventCtx,
+        field: &mut Self::Value,
+        change: Self::Change,
+        env: &Env,
+    ) {
+        if let Some(s) = controlled.state() {
+            *field = s.selection.clone()
+        }
     }
 }

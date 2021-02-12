@@ -100,14 +100,8 @@ impl<RowData: Data> Editing<RowData> {
         data: &mut TableData,
         env: &Env,
     ) {
-        match self {
-            Editing::Cell {
-                ref single_cell,
-                ref mut child,
-            } => {
-                data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
-            }
-            _ => {}
+        if let Editing::Cell { single_cell, child } = self {
+            data.with_mut(single_cell.log.row, |row| child.event(ctx, event, row, env));
         }
     }
 
@@ -311,6 +305,8 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
                             self.editing.stop_editing(&mut data.table_data);
                             self.dragging_selection = true;
                             ctx.set_active(true);
+
+
                         } else if me.count == 2 {
                             let cd = &data.cells_del;
                             self.editing.start_editing(
@@ -388,7 +384,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         if let Some(sel) = new_selection {
             data.selection = sel;
             if data.selection.has_focus() && !self.editing.is_active() {
-                ctx.request_focus();
+                 ctx.request_focus();
             }
         }
 
@@ -473,7 +469,6 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
             }
         }
 
-        // TODO: visible?
         // TODO: Stateless cell widgets?
         // TODO: Extract changed cells from data.table_data (extend IndexedData interface)
         for (log_cell, pod) in &mut self.cell_pool.entries_mut() {

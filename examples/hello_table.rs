@@ -1,18 +1,11 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 
-use druid_table::{
-    column, AxisMeasurementType, CellCtx, CellDelegate, CellsDelegate, DataCompare, DisplayFactory,
-    DisplayFactoryExt, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder,
-    WidgetCell,
-};
+use druid_table::{column, AxisMeasurementType, CellCtx, CellDelegate, CellsDelegate, DataCompare, DisplayFactory, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, WidgetCell, ReadOnly, TableSelection, TableSelectionProp};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
 use druid::theme::PLACEHOLDER_COLOR;
-use druid::widget::{
-    Button, Checkbox, CrossAxisAlignment, Flex, Label, MainAxisAlignment, Padding, Painter,
-    RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher,
-};
+use druid::widget::{Button, Checkbox, CrossAxisAlignment, Flex, Label, MainAxisAlignment, Padding, Painter, RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher, LineBreaking};
 use druid::{
     AppLauncher, Data, Env, Event, EventCtx, FontDescriptor, FontFamily, KeyOrValue, Lens, LensExt,
     LocalizedString, PaintCtx, Point, RenderContext, Widget, WidgetExt, WindowDesc,
@@ -20,8 +13,25 @@ use druid::{
 use druid::{Color, Value};
 use std::cmp::Ordering;
 use std::f64::consts::PI;
+use std::fmt;
+use druid_widget_nursery::DropdownSelect;
+use crate::WordOrder::{SubjectVerbObject, SubjectObjectVerb};
+use druid_bindings::*;
+
 
 const WINDOW_TITLE: LocalizedString<HelloState> = LocalizedString::new("Hello Table!");
+
+#[derive(Clone, Data, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum WordOrder{
+    SubjectObjectVerb,
+    SubjectVerbObject,
+}
+
+impl Display for WordOrder{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
 
 #[derive(Clone, Data, Lens, Debug)]
 struct HelloRow {
@@ -30,6 +40,7 @@ struct HelloRow {
     westernised: String,
     who_knows: f64,
     complete: bool,
+    word_order: WordOrder
 }
 
 impl HelloRow {
@@ -39,6 +50,7 @@ impl HelloRow {
         westernised: impl Into<String>,
         percent: f64,
         complete: bool,
+        word_order: WordOrder
     ) -> HelloRow {
         HelloRow {
             lang: lang.into(),
@@ -46,6 +58,7 @@ impl HelloRow {
             westernised: westernised.into(),
             who_knows: percent / 100.,
             complete,
+            word_order
         }
     }
 }
@@ -68,6 +81,7 @@ impl PartialEq for Settings {
 struct HelloState {
     items: Vector<HelloRow>,
     settings: Settings,
+    table_selection: TableSelection
 }
 
 fn pie_cell<Row: Data, MakeLens: Fn() -> L, L: Lens<Row, f64> + 'static>(
@@ -96,7 +110,7 @@ fn pie_cell<Row: Data, MakeLens: Fn() -> L, L: Lens<Row, f64> + 'static>(
 
 fn build_main_widget() -> impl Widget<HelloState> {
     // Need a wrapper widget to get selection/scroll events out of it
-    let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., true);
+    let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., true, WordOrder::SubjectObjectVerb);
 
     let buttons = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
@@ -150,6 +164,13 @@ fn build_main_widget() -> impl Widget<HelloState> {
         .with_child(Flex::row().with_child(Checkbox::new("Columns").lens(Settings::col_fixed)))
         .lens(HelloState::settings);
 
+    let selection = Flex::column()
+        .cross_axis_alignment( CrossAxisAlignment::Start )
+        .with_child( decor(Label::new("Selection")) )
+        .with_child( Label::new(|t: &TableSelection, e: &Env| format!("{:#?}", t) )
+            .with_line_break_mode(LineBreaking::WordWrap) )
+        .lens(HelloState::table_selection);
+
     let sidebar = Flex::column()
         .main_axis_alignment(MainAxisAlignment::Start)
         .cross_axis_alignment(CrossAxisAlignment::Start)
@@ -157,12 +178,16 @@ fn build_main_widget() -> impl Widget<HelloState> {
         .with_child(group(headings_control))
         .with_child(group(style))
         .with_child(group(measurements))
+        .with_child( group(selection) )
         .with_flex_spacer(1.)
         .fix_width(200.0);
 
     let vs = ViewSwitcher::new(
         |ts: &HelloState, _| ts.settings.clone(),
-        |sh, _, _| Box::new(build_table(sh.clone()).lens(HelloState::items)),
+        |sh, _, _| {
+            let table = build_table(sh.clone()).lens(HelloState::items);
+            table.binding(HelloState::table_selection.bind(TableSelectionProp::default()).back() ).boxed()
+        },
     )
     .padding(10.);
 
@@ -217,7 +242,11 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
             "Westernised",
             WidgetCell::text_configured(|rl| rl.with_text_size(17.), || HelloRow::westernised),
         )
-        .with(column("Who knows?", pie_cell(|| HelloRow::who_knows)).sort(SortDirection::Ascending))
+         .with(column("Who knows?", pie_cell(|| HelloRow::who_knows)).sort(SortDirection::Ascending))
+        .with_column("Word order", WidgetCell::new(
+            |cell| DropdownSelect::build_widget( vec![("Subject Verb Object", SubjectVerbObject), ("Subject Object Verb", SubjectObjectVerb)] ),
+            ||HelloRow::word_order
+        ))
         .with_column(
             "Greeting 2 with very long column name",
             WidgetCell::text_configured(
@@ -238,28 +267,29 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
         )
         .with_column("Greeting 4", WidgetCell::text(|| HelloRow::greeting))
         .with_column("Greeting 5", WidgetCell::text(|| HelloRow::greeting))
-        .with_column("Greeting 6", WidgetCell::text(|| HelloRow::greeting))
         .build()
 }
 
 pub fn main() {
+    use WordOrder::*;
+
     // describe the main window
     let main_window = WindowDesc::new(build_main_widget())
         .title(WINDOW_TITLE)
-        .window_size((800.0, 500.0));
+        .window_size((1100.0, 500.0));
 
     // create the initial app state
     let initial_state = HelloState {
         items: vector![
-            HelloRow::new("English", "Hello", "Hello", 99.1, true),
-            HelloRow::new("Français", "Bonjour", "Bonjour", 95.0, false),
-            HelloRow::new("Espanol", "Hola", "Hola", 95.0, true),
-            HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85., false),
-            HelloRow::new("Hindi", "नमस्ते", "namaste", 74., true),
-            HelloRow::new("Arabic", "مرحبا", "marhabaan", 24., true),
-            HelloRow::new("Portuguese", "olá", "olá", 30., false),
-            HelloRow::new("Russian", "Привет", "Privet", 42., false),
-            HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., false),
+            HelloRow::new("English", "Hello", "Hello", 99.1, true, SubjectVerbObject),
+            HelloRow::new("Français", "Bonjour", "Bonjour", 95.0, false, SubjectVerbObject),
+            HelloRow::new("Espanol", "Hola", "Hola", 95.0, true, SubjectVerbObject),
+            HelloRow::new("Mandarin", "你好", "nǐ hǎo", 85., false, SubjectVerbObject),
+            HelloRow::new("Hindi", "नमस्ते", "namaste", 74., true, SubjectObjectVerb),
+            HelloRow::new("Arabic", "مرحبا", "marhabaan", 24., true, SubjectObjectVerb),
+            HelloRow::new("Portuguese", "olá", "olá", 30., false, SubjectVerbObject),
+            HelloRow::new("Russian", "Привет", "Privet", 42., false, SubjectVerbObject),
+            HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., false, SubjectObjectVerb),
         ],
         settings: Settings {
             show_headings: ShowHeadings::Both,
@@ -267,6 +297,7 @@ pub fn main() {
             row_fixed: false,
             col_fixed: false,
         },
+        table_selection: TableSelection::NoSelection
     };
 
     // start the application

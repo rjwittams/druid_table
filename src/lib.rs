@@ -23,14 +23,14 @@ pub use axis_measure::{
 pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{
-    column, CellCtx, CellDelegate, DataCompare, DisplayFactory, DisplayFactoryExt,
+    column, CellCtx, CellDelegate, DataCompare, DisplayFactory,
     WidgetCell,
 };
 pub use config::TableConfig;
 pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
-pub use table::{HeaderBuild, Table, TableArgs};
+pub use table::{HeaderBuild, Table, TableArgs, TableSelectionProp};
 pub use vis::{
     AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, Mark,
     MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis,

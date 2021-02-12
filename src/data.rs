@@ -31,8 +31,16 @@ impl<RowData: Data> IndexedData for Vector<RowData> {
     }
 
     fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V> {
-        let option = self.get_mut(idx.0);
-        option.map(f)
+        if let Some(found) = self.get(idx.0){
+            let mut tmp = found.clone();
+            let ret = f(&mut tmp);
+            if !tmp.same(found){
+                self[idx.0] = tmp;
+            }
+            Some(ret)
+        }else{
+            None
+        }
     }
 
     fn data_len(&self) -> usize {
@@ -46,9 +54,9 @@ pub enum RemapDetails {
 }
 
 impl RemapDetails {
-    fn get_log_idx(&self, idx: VisIdx) -> Option<&LogIdx> {
+    fn get_log_idx(&self, idx: VisIdx) -> Option<LogIdx> {
         match self {
-            RemapDetails::Full(v) => v.get(idx.0),
+            RemapDetails::Full(v) => v.get(idx.0).cloned(),
         }
     }
 }
@@ -86,9 +94,14 @@ pub enum Remap {
 impl Remap {
     pub fn get_log_idx(&self, vis_idx: VisIdx) -> Option<LogIdx> {
         match self {
-            Remap::Selected(v) => v.get_log_idx(vis_idx).cloned(),
+            Remap::Selected(v) => v.get_log_idx(vis_idx),
             _ => Some(LogIdx(vis_idx.0)), // Dunno if right for internal
         }
+    }
+
+    pub fn iter(&self, last: VisIdx)->impl Iterator<Item=LogIdx>+ '_{
+        VisIdx::range_inc_iter(VisIdx(0), last)
+            .map(move |vis|self.get_log_idx(vis).unwrap_or_else(||LogIdx(vis.0)))
     }
 }
 
@@ -134,7 +147,6 @@ impl SortSpec {
 pub struct RemapSpec {
     pub(crate) sort_by: Vector<SortSpec>, // columns sorted
     // filters
-    pub(crate) placements: im::HashMap<LogIdx, (VisIdx, usize)>, // Explicit moves
 }
 
 impl RemapSpec {
@@ -169,52 +181,12 @@ impl RemapSpec {
         true
     }
 
-    pub(crate) fn place(&mut self, log_idx: LogIdx, vis_idx: VisIdx) {
-        self.placements
-            .insert(log_idx, (vis_idx, self.placements.len()));
-        log::info!("Placing {:?} at {:?}", log_idx, vis_idx)
-    }
-
-    pub(crate) fn remap_placements(&self, max_log_idx: LogIdx) -> Remap {
-        if self.placements.is_empty() {
-            Remap::new()
-        } else {
-            let mut all: Vector<LogIdx> = Vector::new();
-            let unplaced_log: Vector<LogIdx> = (0..=max_log_idx.0)
-                .filter(|li| !self.placements.contains_key(&LogIdx(*li)))
-                .map(LogIdx)
-                .collect();
-            let mut s_placements: Vec<_> = self.placements.iter().collect();
-            s_placements.sort_by_key(|(_, (_, o))| Reverse(*o));
-            let mut placed_by_vis: HashMap<VisIdx, LogIdx> = HashMap::new();
-
-            for (log, (vis, _)) in s_placements {
-                let mut v_a = *vis;
-                while placed_by_vis.contains_key(&v_a) {
-                    v_a = v_a + VisOffset(1)
-                }
-                placed_by_vis.insert(v_a, *log);
-            }
-
-            for log in unplaced_log {
-                while let Some(place) = placed_by_vis.remove(&VisIdx(all.len())) {
-                    all.push_back(place);
-                }
-                all.push_back(log);
-            }
-            for place in placed_by_vis.values() {
-                all.push_back(*place)
-            }
-            Remap::Selected(RemapDetails::Full(all))
-        }
-    }
 }
 
 impl Default for RemapSpec {
     fn default() -> Self {
         RemapSpec {
-            sort_by: Vector::default(),
-            placements: HashMap::default(),
+            sort_by: Vector::default()
         }
     }
 }

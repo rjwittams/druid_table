@@ -172,6 +172,14 @@ impl Sub<VisOffset> for VisIdx {
     }
 }
 
+impl Sub<VisIdx> for VisIdx{
+    type Output = VisOffset;
+
+    fn sub(self, rhs: VisIdx) -> Self::Output {
+        VisOffset((self.0 as isize) - (rhs.0 as isize))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AxisMeasure {
     inner: AxisMeasureInner,

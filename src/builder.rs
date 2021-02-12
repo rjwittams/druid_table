@@ -1,4 +1,4 @@
-use crate::columns::{CellDelegate, DisplayFactoryExt, ProvidedColumns, TableColumn};
+use crate::columns::{CellDelegate, ProvidedColumns, TableColumn};
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
