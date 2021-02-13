@@ -27,7 +27,7 @@ impl<T: Debug> AxisPair<T> {
         AxisPair { row, col }
     }
 
-    pub fn for_each(&self, f: impl Fn(TableAxis, &T)) {
+    pub fn for_each(&self, mut f: impl FnMut(TableAxis, &T)) {
         f(TableAxis::Rows, &self.row);
         f(TableAxis::Columns, &self.col);
     }

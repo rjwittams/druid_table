@@ -1,6 +1,6 @@
 use druid_table::{
     AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory,
-    DisplayFactoryExt, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap,
+    HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap,
     RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, WidgetCell,
 };
 
@@ -111,7 +111,7 @@ impl<RowData: Data, CR: DisplayFactory<RowData>, TableData: IndexedData<Item = R
         RemapSpec::default()
     }
 
-    fn remap_items(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
+    fn remap_from_records(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
         Remap::Pristine
     }
 }

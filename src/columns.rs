@@ -401,25 +401,25 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper
         spec
     }
 
-    fn remap_items(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
+    fn remap_from_records(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
         if remap_spec.is_empty() {
             Remap::new() // Todo: preserve moves
         } else {
             //Todo: Filter
             let mut idxs: Vector<LogIdx> = (0usize..table_data.data_len()).map(LogIdx).collect(); //TODO Give up if too big?
-            idxs.sort_by(|a, b| {
+            idxs.sort_by(|a_idx, b_idx| {
                 table_data
-                    .with(*a, |a| {
+                    .with(*a_idx, |a_row| {
                         table_data
-                            .with(*b, |b| {
+                            .with(*b_idx, |b_row| {
                                 for SortSpec { idx, direction } in &remap_spec.sort_by {
                                     let col = self.cols.get(*idx).unwrap();
-                                    let ord = col.compare(a, b);
+                                    let ord = col.compare(a_row, b_row);
                                     if ord != Ordering::Equal {
                                         return direction.apply(ord);
                                     }
                                 }
-                                Ordering::Equal
+                                a_idx.0.cmp(&b_idx.0)
                             })
                             .unwrap()
                     })

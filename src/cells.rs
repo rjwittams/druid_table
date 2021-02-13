@@ -10,7 +10,7 @@ use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisO
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, DisplayFactory};
 use crate::config::ResolvedTableConfig;
-use crate::data::{IndexedData, Remapper};
+use crate::data::{IndexedData, Remapper, IndexedDataOp};
 use crate::ensured_pool::EnsuredPool;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{CellDemap, CellRect, SingleCell, TableSelection};
@@ -65,8 +65,8 @@ impl<TableData: IndexedData> Remapper<TableData> for Arc<dyn CellsDelegate<Table
         self.deref().initial_spec()
     }
 
-    fn remap_items(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
-        self.deref().remap_items(table_data, remap_spec)
+    fn remap_from_records(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
+        self.deref().remap_from_records(table_data, remap_spec)
     }
 }
 
@@ -256,21 +256,45 @@ impl<TableData: IndexedData> Cells<TableData> {
         ctx: &mut PaintCtx,
         data: &TableState<TableData>,
         env: &Env,
-    ) -> Option<()> {
+    ) {
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
-                // TODO: excessive unwrapping
-                let rect = CellRect::point(single_cell.vis).to_pixel_rect(&data.measures)?;
-
-                ctx.with_save(|ctx| {
-                    ctx.render_ctx.clip(rect);
-                    data.table_data
-                        .with(single_cell.log.row, |row| child.paint(ctx, row, env));
-                });
+                if let Some(rect) = CellRect::point(single_cell.vis).to_pixel_rect(&data.measures) {
+                    ctx.with_save(|ctx| {
+                        ctx.render_ctx.clip(rect);
+                        data.table_data
+                            .with(single_cell.log.row, |row| child.paint(ctx, row, env));
+                    });
+                }
             }
             _ => (),
         }
-        Some(())
+    }
+
+    fn paint_animations(
+        &mut self,
+        ctx: &mut PaintCtx,
+        data: &TableState<TableData>,
+        env: &Env,
+    ) {
+        let anim_guard = data.animator.lock().unwrap();
+        anim_guard.with_context(|ac|{
+            for anim in &data.row_anims{
+                ac.with_animation(anim.id, |ac|{
+                    let prog = ac.progress();
+                    match anim.op{
+                        IndexedDataOp::Insert(_) => {}
+                        IndexedDataOp::Delete(_) => {}
+                        IndexedDataOp::Move(_, _) => {}
+                        IndexedDataOp::MoveUpdate(_, _) => {}
+                        IndexedDataOp::Update(row_log_idx) => {
+                           // let vis_idx = data.remaps.get_vis_idx(TableAxis::Rows, row_log_idx);
+                            //ctx.stroke(  )
+                        }
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -408,6 +432,19 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
             });
             //log::info!("Wanted to forward event to focused cell {:?} {:?}", event, delivered);
         }
+
+        if let Event::AnimFrame(nanos) = event {
+            // State split
+
+            let mut anim_guard = data.animator.lock().unwrap();
+            anim_guard.advance_by(*nanos as f64, |anim_ctx| {});
+
+            ctx.request_paint();
+
+            if anim_guard.running() {
+                ctx.request_anim_frame();
+            }
+        }
     }
 
     fn lifecycle(
@@ -447,6 +484,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         env: &Env,
     ) {
         if !old_data.table_data.same(&data.table_data) || !old_data.remaps.same(&data.remaps) {
+            log::info!("table data or remaps changed, request cells layout");
             ctx.request_layout()
         }
 
@@ -454,12 +492,21 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
             ctx.request_paint();
         }
 
-        match &mut self.editing {
+        let editor_valid = match &mut self.editing {
             Editing::Cell { single_cell, child } => {
-                data.table_data
-                    .with(single_cell.log.row, |row| child.update(ctx, row, env));
+                let valid = data.remaps.get_log_cell(&single_cell.vis)
+                    .map(|log|log.same(&single_cell.log)).unwrap_or(false);
+                if valid {
+                    data.table_data.with(single_cell.log.row, |row| child.update(ctx, row, env));
+                }
+                valid
             }
-            _ => (),
+            _ => true,
+        };
+
+        if !editor_valid{
+            self.editing = Editing::Inactive;
+            ctx.children_changed();
         }
 
         if !old_data.scroll_rect.same(&data.scroll_rect) {
@@ -558,6 +605,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         self.paint_selections(ctx, data, &rtc, &cell_rect);
 
         self.paint_editing(ctx, data, env);
+        self.paint_animations(ctx, data, env);
     }
 }
 

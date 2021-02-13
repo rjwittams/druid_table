@@ -1,7 +1,7 @@
 use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
 use crate::config::ResolvedTableConfig;
-use crate::data::RemapDetails;
+use crate::data::{RemapDetails, IndexedDataDiffer, RefreshDiffer, IndexedDataDiff, IndexedDataOp};
 use crate::headings::HeadersFromData;
 use crate::selection::{CellDemap, SingleCell};
 use crate::{
@@ -17,8 +17,12 @@ use druid_bindings::*;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, Instant, Duration};
+use druid_widget_nursery::animation::{Animator, AnimationId, SimpleCurve};
+use druid::platform_menus::win::file::new;
+use std::ops::{DerefMut, Deref};
+use druid::im::Vector;
 
 pub struct HeaderBuild<
     HeadersSource: HeadersFromData + 'static,
@@ -127,20 +131,39 @@ impl<
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct RowAnim{
+    pub(crate) id: AnimationId,
+    pub(crate) op: IndexedDataOp
+}
+
+impl RowAnim {
+    pub fn new(id: AnimationId, op: IndexedDataOp) -> Self {
+        RowAnim { id, op }
+    }
+}
+
+
 #[derive(Data, Clone, Lens)]
 pub(crate) struct TableState<TableData: Data> {
+    pub(crate) table_data: TableData,
+    pub(crate) input_instant: Instant,
     pub(crate) scroll_x: f64,
     pub(crate) scroll_y: f64,
     pub(crate) scroll_rect: Rect,
     pub(crate) config: TableConfig,
     pub(crate) resolved_config: ResolvedTableConfig,
-    pub(crate) table_data: TableData,
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
     pub(crate) selection: TableSelection,
     #[data(ignore)]
     pub(crate) measures: AxisPair<AxisMeasure>, // TODO
     pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>,
+    pub(crate) last_diff: Option<IndexedDataDiff>,
+    #[data(ignore)]
+    pub(crate) animator: Arc<Mutex<Animator>>,
+    #[data(ignore)]
+    pub(crate) row_anims: Vector<RowAnim>
 }
 
 impl<TableData: IndexedData> TableState<TableData> {
@@ -158,39 +181,44 @@ impl<TableData: IndexedData> TableState<TableData> {
             config,
             resolved_config,
             table_data: data,
+            input_instant: Instant::now(),
             remap_specs: AxisPair::new(RemapSpec::default(), RemapSpec::default()),
             remaps: AxisPair::new(Remap::Pristine, Remap::Pristine),
             selection: TableSelection::default(),
             measures,
             cells_del,
+            last_diff: None,
+            animator: Arc::new(Mutex::new(Animator::default())),
+            row_anims: Vector::new()
         };
         state.remap_rows();
-        state.remap_cols();
+        state.refresh_measure(TableAxis::Rows);
+        state.refresh_measure(TableAxis::Columns);
         state
     }
 
-    fn remap_rows(&mut self) {
-        self.remaps[TableAxis::Rows] = self
-            .cells_del
-            .remap_items(&self.table_data, &self.remap_specs[TableAxis::Rows]);
-        self.measures[TableAxis::Rows].set_axis_properties(
+    fn axis_log_len(&self, axis: TableAxis)->usize{
+        match axis {
+            TableAxis::Rows => self.table_data.data_len(),
+            TableAxis::Columns => self.cells_del.data_columns(&self.table_data)
+        }
+    }
+
+    fn refresh_measure(&mut self, axis: TableAxis) {
+        let log_len = self.axis_log_len(axis);
+        self.measures[axis].set_axis_properties(
             self.resolved_config.cell_border_thickness,
-            self.table_data.data_len(),
-            &self.remaps[TableAxis::Rows],
+            log_len,
+            &self.remaps[axis],
         );
         // TODO: Maintain logical selection
         self.selection = TableSelection::NoSelection;
     }
 
-    fn remap_cols(&mut self) {
-        // self.remaps[TableAxis::Columns] = self.remap_specs[TableAxis::Columns]
-        //     .remap_placements(LogIdx(self.cells_del.data_columns(&self.table_data) - 1));
-
-        self.measures[TableAxis::Columns].set_axis_properties(
-            self.resolved_config.cell_border_thickness,
-            self.cells_del.data_columns(&self.table_data),
-            &self.remaps[TableAxis::Columns],
-        );
+    fn remap_rows(&mut self) {
+        self.remaps[TableAxis::Rows] = self
+            .cells_del
+            .remap_from_records(&self.table_data, &self.remap_specs[TableAxis::Rows]);
     }
 
     pub(crate) fn visible_rect(&self) -> Rect {
@@ -315,6 +343,7 @@ struct TableScopePolicy<TableData> {
     config: TableConfig,
     measures: AxisPair<AxisMeasure>,
     cells_delegate: Arc<dyn CellsDelegate<TableData>>,
+    differ: Box<dyn IndexedDataDiffer<TableData>>,
     phantom_td: PhantomData<TableData>,
 }
 
@@ -323,11 +352,13 @@ impl<TableData> TableScopePolicy<TableData> {
         config: TableConfig,
         measures: AxisPair<AxisMeasure>,
         cells_delegate: Arc<dyn CellsDelegate<TableData>>,
+        differ: Box<dyn IndexedDataDiffer<TableData>>
     ) -> Self {
         TableScopePolicy {
             config,
             measures,
             cells_delegate,
+            differ,
             phantom_td: Default::default(),
         }
     }
@@ -348,19 +379,21 @@ impl<TableData: IndexedData> ScopePolicy for TableScopePolicy<TableData> {
                 self.measures,
                 self.cells_delegate,
             ),
-            TableScopeTransfer::new(),
+            TableScopeTransfer::new(self.differ),
         )
     }
 }
 
 struct TableScopeTransfer<TableData> {
     phantom_td: PhantomData<TableData>,
+    differ: Box<dyn IndexedDataDiffer<TableData>>
 }
 
-impl<TableData> TableScopeTransfer<TableData> {
-    pub fn new() -> Self {
+impl<TableData: IndexedData> TableScopeTransfer<TableData> {
+    pub fn new(differ: Box<dyn IndexedDataDiffer<TableData>>) -> Self {
         TableScopeTransfer {
             phantom_td: Default::default(),
+            differ
         }
     }
 }
@@ -396,9 +429,11 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
     type State = TableState<TableData>;
 
     fn read_input(&self, state: &mut Self::State, input: &Self::In, env: &Env) {
+        log::info!("Read input table data to TableState");
         if !input.same(&state.table_data) {
-            log::info!("Writing table_data");
+            log::info!("Actually wrote table data to TableState");
             state.table_data = input.clone();
+            state.input_instant = Instant::now();
         }
     }
 
@@ -425,17 +460,43 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
         indexed_same(&old_state.table_data, &state.table_data);
 
         let data_changed = !old_state.table_data.same(&state.table_data);
-        let remaps_same = old_state
+
+        let new_diff = self.differ.diff(&old_state.table_data, &state.table_data);
+        if let (Some(new_diff)) = &new_diff {
+            let actually_new = match &state.last_diff{
+                None => true,
+                Some(last_diff) => !last_diff.same(new_diff)
+            };
+
+            if actually_new {
+                let anim_id = state.animator.lock().unwrap().new_animation()
+                    .curve(SimpleCurve::EaseIn
+                    ).duration(Duration::from_millis(500)).id();
+                if new_diff.is_refresh() {} else {
+                    for op in new_diff.ops() {
+                        state.row_anims.push_back(RowAnim::new(anim_id, op));
+                    }
+                }
+            }
+        }
+        state.last_diff = new_diff.or(state.last_diff.take());
+
+        let remap_specs_same = old_state
             .remap_specs
             .zip_with(&state.remap_specs, |old, new| old.same(new));
 
-        if !remaps_same[TableAxis::Rows] || data_changed {
+        if !remap_specs_same[TableAxis::Rows] || data_changed {
             state.remap_rows();
         }
 
-        if !remaps_same[TableAxis::Columns] || data_changed {
-            state.remap_cols();
-        }
+        let remaps_same =
+            old_state.remaps.zip_with(&state.remaps, |old, new| old.same(new));
+
+        remaps_same.for_each(|axis, same|{
+            if !same {
+                state.refresh_measure(axis);
+            }
+        });
 
         true
     }
@@ -445,15 +506,17 @@ impl<TableData: IndexedData> Table<TableData> {
     pub fn new<Args: TableArgsT<TableData = TableData> + 'static>(
         args: Args,
         measures: AxisPair<AxisMeasure>,
+        differ: Box<dyn IndexedDataDiffer<TableData>>
     ) -> Self {
         Table {
-            child: Table::build_child(args, measures),
+            child: Table::build_child(args, measures, differ),
         }
     }
 
     fn build_child<Args: TableArgsT<TableData = TableData> + 'static>(
         args_t: Args,
         measures: AxisPair<AxisMeasure>,
+        differ: Box<dyn IndexedDataDiffer<TableData>>
     ) -> TableChild<TableData> {
         let args = args_t.content();
         let table_config = args.table_config;
@@ -469,7 +532,8 @@ impl<TableData: IndexedData> Table<TableData> {
         );
 
         let policy =
-            TableScopePolicy::new(table_config.clone(), measures, Arc::new(cells_delegate));
+            TableScopePolicy::new(table_config.clone(), measures,
+                                  Arc::new(cells_delegate), differ);
         Self::add_headings(args.col_h, args.row_h, policy, table_config, cells_scroll)
     }
 
@@ -579,6 +643,11 @@ impl<TableData: IndexedData> Widget<TableData> for Table<TableData> {
             }
         }
         self.child.update(ctx, data, env);
+        if let Some(state) = self.child.widget_mut().state_mut() {
+            if !state.row_anims.is_empty(){
+                ctx.request_anim_frame()
+            }
+        }
     }
 
     fn layout(

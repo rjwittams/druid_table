@@ -251,11 +251,13 @@ impl AxisMeasure {
     }
 
     fn last_vis_idx(&self) -> VisIdx {
-        let len = match &self.inner {
-            Fixed(f) => f.len,
-            Stored(s) => s.borrow().vis_pix_lengths.len(),
-        };
-        VisIdx(len - 1)
+        match &self.inner {
+            Fixed(f) =>  VisIdx(f.len - 1),
+            Stored(s) => {
+                let s = s.borrow();
+                s.remap.max_vis_idx(s.log_pix_lengths.len())
+            },
+        }
     }
 
     pub(crate) fn pixel_near_border(&self, pixel: f64) -> Option<VisIdx> {
@@ -413,7 +415,6 @@ impl AxisMeasureT for FixedAxisMeasure {
 pub struct StoredAxisMeasure {
     remap: Remap,
     log_pix_lengths: Vec<f64>,
-    vis_pix_lengths: Vec<f64>,
     first_pixels: BTreeMap<VisIdx, f64>, // TODO newtypes
     pixels_to_vis: BTreeMap<FloatOrd<f64>, VisIdx>,
     default_pixels: f64,
@@ -427,7 +428,6 @@ impl Debug for StoredAxisMeasure {
         let pti = &self.pixels_to_vis;
         fmt.debug_struct("StoredAxisMeasure")
             .field("log_pix_lengths", &self.log_pix_lengths)
-            .field("vis_pix_lengths", &self.vis_pix_lengths)
             .field("default_pixels", &self.default_pixels)
             .field("border", &self.border)
             .field("total_pixel_length", &self.total_pixel_length)
@@ -451,7 +451,6 @@ impl StoredAxisMeasure {
         StoredAxisMeasure {
             remap: Remap::new(),
             log_pix_lengths: Default::default(),
-            vis_pix_lengths: Default::default(),
             first_pixels: Default::default(),
             pixels_to_vis: Default::default(),
             default_pixels,
@@ -461,30 +460,21 @@ impl StoredAxisMeasure {
     }
 
     fn build_maps(&mut self) {
-        let mut cur = 0.;
-        self.vis_pix_lengths.clear();
-        if self.remap.is_pristine() {
-            self.vis_pix_lengths
-                .extend_from_slice(&self.log_pix_lengths)
-        } else {
-            for vis_idx in VisIdx::range_inc_iter(
-                VisIdx(0),
-                self.remap.max_vis_idx(self.log_pix_lengths.len()),
-            ) {
-                if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
-                    self.vis_pix_lengths.push(self.log_pix_lengths[log_idx.0]);
-                }
+        let mut pixels_so_far = 0.;
+        self.first_pixels.clear();
+        self.pixels_to_vis.clear();
+        for vis_idx in VisIdx::range_inc_iter(
+            VisIdx(0),
+            self.remap.max_vis_idx(self.log_pix_lengths.len()),
+        ){
+            if let Some(log_idx) = self.remap.get_log_idx(vis_idx) {
+                self.first_pixels.insert(vis_idx, pixels_so_far);
+                self.pixels_to_vis.insert(FloatOrd(pixels_so_far), vis_idx);
+                pixels_so_far += self.log_pix_lengths[log_idx.0] + self.border;
             }
         }
 
-        self.first_pixels.clear();
-        self.pixels_to_vis.clear();
-        for (idx, pixels) in self.vis_pix_lengths.iter().enumerate() {
-            self.first_pixels.insert(VisIdx(idx), cur);
-            self.pixels_to_vis.insert(FloatOrd(cur), VisIdx(idx));
-            cur += pixels + self.border;
-        }
-        self.total_pixel_length = cur;
+        self.total_pixel_length = pixels_so_far;
     }
 }
 
@@ -509,7 +499,7 @@ impl AxisMeasureT for StoredAxisMeasure {
     }
 
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
-        self.vis_pix_lengths.get(idx.0).copied()
+        self.log_pix_lengths.get(self.remap.get_log_idx(idx)?.0).copied()
     }
 
     fn can_resize(&self, _idx: VisIdx) -> bool {

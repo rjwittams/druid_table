@@ -6,6 +6,11 @@ use druid::Data;
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::ops::Range;
+use std::hash::Hash;
+use crate::data::IndexedDataOp::{Delete, Insert, Update, Move, MoveUpdate};
+use std::time::Instant;
+use std::sync::Arc;
+use itertools::Either;
 
 // This ended up sort of similar to Lens,
 // so I've named the methods similarly.
@@ -45,6 +50,106 @@ impl<RowData: Data> IndexedData for Vector<RowData> {
 
     fn data_len(&self) -> usize {
         Vector::len(self)
+    }
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub enum IndexedDataOp{
+    Insert(LogIdx),
+    Delete(LogIdx),
+    Move(LogIdx, LogIdx),
+    MoveUpdate(LogIdx, LogIdx),
+    Update(LogIdx),
+}
+
+#[derive(PartialEq, Debug, Data, Clone)]
+pub struct IndexedDataDiff{
+    instant: Instant,
+    #[data(ignore)]
+    ops: Option<Arc<[IndexedDataOp]>> // If this is None, then its a full refresh
+}
+
+impl IndexedDataDiff {
+    pub fn new(ops: Vec<IndexedDataOp>) -> Self {
+        let ops: Arc<[IndexedDataOp]> = ops.into();
+        IndexedDataDiff { instant: Instant::now(), ops: ops.into() }
+    }
+
+    pub fn refresh() -> Self{
+        IndexedDataDiff { instant: Instant::now(), ops: None }
+    }
+
+    pub fn is_refresh(&self) -> bool{
+        self.ops.is_none()
+    }
+
+    pub fn ops(&self) -> impl Iterator<Item=IndexedDataOp> + '_{
+        if let Some(ops) =  &self.ops{
+            ops.iter().cloned()
+        }else{
+            [].iter().cloned()
+        }
+    }
+}
+
+
+pub trait IndexedDataDiffer<T: IndexedData>{
+    fn diff(&self, old: &T, new: &T)->Option<IndexedDataDiff>;
+}
+
+pub struct RefreshDiffer;
+
+impl <T: IndexedData> IndexedDataDiffer<T> for RefreshDiffer {
+    fn diff(&self, old: &T, new: &T) -> Option<IndexedDataDiff> {
+         if old.same(new){
+            None
+        }else{
+            Some(IndexedDataDiff::refresh())
+        }
+    }
+}
+
+pub struct SlowVectorDiffer<F>{
+    key_extract: F
+}
+
+impl<F> SlowVectorDiffer<F> {
+    pub fn new<T, K>(key_extract: F) -> Self where T: Data, F: Fn(&T)->K, K: Hash + Eq + Clone {
+        SlowVectorDiffer { key_extract }
+    }
+}
+
+
+impl <T: Data, F: Fn(&T)->K, K: Hash + Eq + Clone> IndexedDataDiffer<Vector<T>> for SlowVectorDiffer<F> {
+    fn diff(&self, old: &Vector<T>, new: &Vector<T>) -> Option<IndexedDataDiff> {
+        if old.same(new){
+            None
+        }else {
+            let key_extract = &self.key_extract;
+            let mut old_indexes: HashMap::<_, _> = old.iter().enumerate()
+                .map(move |(idx, item)| (key_extract(item), idx)).collect();
+
+            let key_extract = &self.key_extract;
+            let mut ops = Vec::<IndexedDataOp>::new();
+            for (new_idx, new_item) in new.iter().enumerate() {
+                let key = key_extract(new_item);
+                if let Some(old_idx) = old_indexes.remove(&key) {
+                    let old_item = &old[old_idx];
+                    let updated = !old_item.same(new_item);
+                    let moved = old_idx != new_idx;
+                    match (updated, moved) {
+                        (false, false) => (),
+                        (false, true) => ops.push(Move(LogIdx(old_idx), LogIdx(new_idx))),
+                        (true, true) => ops.push(MoveUpdate(LogIdx(old_idx), LogIdx(old_idx))),
+                        (true, false) => ops.push(Update(LogIdx(new_idx))),
+                    }
+                } else {
+                    ops.push(Insert(LogIdx(new_idx)))
+                }
+            }
+            ops.extend(old_indexes.into_iter().map(|(_, old_idx)| Delete(LogIdx(old_idx))));
+            Some(IndexedDataDiff::new(ops))
+        }
     }
 }
 
@@ -195,5 +300,34 @@ pub trait Remapper<TableData: IndexedData> {
     fn sort_fixed(&self, idx: usize) -> bool;
     fn initial_spec(&self) -> RemapSpec;
     // This takes our normal data and a spec, and returns a remap of its indices
-    fn remap_items(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap;
+    fn remap_from_records(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap;
+}
+
+
+#[cfg(test)]
+mod test{
+    use crate::data::{SlowVectorDiffer, IndexedDataDiffer, IndexedDataDiff};
+    use druid::im::Vector;
+    use crate::data::IndexedDataOp::*;
+    use crate::LogIdx;
+
+    #[test]
+    fn test_slow_vec_differ(){
+        let differ = SlowVectorDiffer::new(|s:&(char, usize)|s.0);
+
+        let diff = differ.diff(
+            &vec![('A', 1usize), ('B', 2), ('C', 3), ('D', 5), ('T', 23)].into_iter().collect(),
+            &vec![('A', 1usize), ('B', 10), ('Z', 23), ('I', 13), ('D', 5), ('T', 12)].into_iter().collect()
+        );
+
+        assert_eq!(IndexedDataDiff::Ops(vec![Update(LogIdx(1)),
+                                             Insert(LogIdx(2)),
+                                             Insert(LogIdx(3)),
+                                             Move(LogIdx(3), LogIdx(4)),
+                                             MoveUpdate(LogIdx(4), LogIdx(4)),
+                                             Delete(LogIdx(2))]),
+                   diff)
+    }
+
+
 }

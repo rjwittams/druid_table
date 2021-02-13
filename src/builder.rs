@@ -2,7 +2,7 @@ use crate::columns::{CellDelegate, ProvidedColumns, TableColumn};
 
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
-use crate::data::IndexedData;
+use crate::data::{IndexedData, IndexedDataDiffer, RefreshDiffer};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
 use crate::vis::MarkShape::Text;
@@ -32,6 +32,7 @@ pub struct TableBuilder<TableData: IndexedData> {
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
     measurements: AxisPair<AxisMeasurementType>,
+    differ: Option<Box<dyn IndexedDataDiffer<TableData>>>
 }
 
 impl<TableData: IndexedData> Default for TableBuilder<TableData> {
@@ -83,7 +84,13 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
                 AxisMeasurementType::Individual,
                 AxisMeasurementType::Individual,
             ),
+            differ: None
         }
+    }
+
+    pub fn diff_with(mut self, differ: impl IndexedDataDiffer<TableData> + 'static) -> Self{
+        self.differ = Some(Box::new(differ));
+        self
     }
 
     pub fn border(mut self, thickness: impl Into<KeyOrValue<f64>>) -> Self {
@@ -168,8 +175,9 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
         )
     }
 
-    pub fn build(self) -> Table<TableData> {
+    pub fn build(mut self) -> Table<TableData> {
         let measures = self.build_measures();
-        Table::new(self.build_args(), measures)
+        let differ = self.differ.take().unwrap_or(Box::new(RefreshDiffer));
+        Table::new(self.build_args(), measures, differ)
     }
 }

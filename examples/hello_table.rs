@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use druid_table::{column, AxisMeasurementType, CellCtx, CellDelegate, CellsDelegate, DataCompare, DisplayFactory, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, WidgetCell, ReadOnly, TableSelection, TableSelectionProp};
+use druid_table::{column, AxisMeasurementType, CellCtx, CellDelegate, CellsDelegate, DataCompare, DisplayFactory, ShowHeadings, SortDirection, Table, TableAxis, TableBuilder, WidgetCell, ReadOnly, TableSelection, TableSelectionProp, SlowVectorDiffer};
 
 use druid::im::{vector, Vector};
 use druid::kurbo::CircleSegment;
@@ -17,6 +17,7 @@ use std::fmt;
 use druid_widget_nursery::DropdownSelect;
 use crate::WordOrder::{SubjectVerbObject, SubjectObjectVerb};
 use druid_bindings::*;
+use std::cell::RefCell;
 
 
 const WINDOW_TITLE: LocalizedString<HelloState> = LocalizedString::new("Hello Table!");
@@ -110,7 +111,13 @@ fn pie_cell<Row: Data, MakeLens: Fn() -> L, L: Lens<Row, f64> + 'static>(
 
 fn build_main_widget() -> impl Widget<HelloState> {
     // Need a wrapper widget to get selection/scroll events out of it
-    let row = || HelloRow::new("Japanese", "こんにちは", "Kon'nichiwa", 63., true, WordOrder::SubjectObjectVerb);
+
+    let mut count = RefCell::new(0);
+    let row = move || {
+        let mut cur = count.borrow_mut();
+        *cur = *cur + 1;
+        HelloRow::new(format!("Japanese_{}", *cur), "こんにちは", "Kon'nichiwa", 63., true, WordOrder::SubjectObjectVerb)
+    };
 
     let buttons = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
@@ -267,6 +274,7 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
         )
         .with_column("Greeting 4", WidgetCell::text(|| HelloRow::greeting))
         .with_column("Greeting 5", WidgetCell::text(|| HelloRow::greeting))
+        .diff_with( SlowVectorDiffer::new(|row: &HelloRow|row.lang.clone()) )
         .build()
 }
 

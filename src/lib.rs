@@ -27,7 +27,7 @@ pub use columns::{
     WidgetCell,
 };
 pub use config::TableConfig;
-pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection};
+pub use data::{IndexedData, Remap, RemapSpec, Remapper, SortDirection, SlowVectorDiffer};
 pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
 pub use table::{HeaderBuild, Table, TableArgs, TableSelectionProp};
