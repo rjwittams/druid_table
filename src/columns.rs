@@ -1,18 +1,14 @@
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use crate::axis_measure::{AxisPair, LogIdx};
-use crate::data::SortDirection::Ascending;
 use crate::data::{RemapDetails, SortDirection, SortSpec};
 use crate::selection::SingleCell;
 use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
-use druid::im::Vector;
-use druid::kurbo::PathEl;
-use druid::piet::{FontFamily, Text, TextLayoutBuilder};
 use druid::text::{EditableText, TextStorage};
 use druid::widget::prelude::*;
-use druid::widget::{Label, RawLabel, TextBox};
-use druid::{theme, ArcStr, Color, Data, Env, KeyOrValue, Lens, PaintCtx, Point, WidgetExt};
+use druid::widget::{RawLabel, TextBox};
+use druid::{Color, Data, KeyOrValue, Lens,  WidgetExt};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -46,7 +42,6 @@ impl<T> DataCompare<T> for Box<dyn CellDelegate<T>> {
 
 impl<RowData, T> CellDelegate<RowData> for T where T: DisplayFactory<RowData> + DataCompare<RowData> {}
 
-// Todo change to boxed header delegate?
 impl<RowData> DisplayFactory<RowData> for Box<dyn DisplayFactory<RowData>> {
     fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.deref().make_display(cell)
@@ -189,10 +184,10 @@ impl<
 {
     pub fn text(make_lens: MakeLens) -> Self {
         Self::new(
-            |cell| RawLabel::new().with_text_color(Color::BLACK),
+            |_| RawLabel::new().with_text_color(Color::BLACK),
             make_lens,
         )
-        .edit_with(|cell| TextBox::new().expand() )
+        .edit_with(|_| TextBox::new().expand())
     }
 
     pub fn text_configured(
@@ -200,10 +195,10 @@ impl<
         make_lens: MakeLens,
     ) -> Self {
         Self::new(
-            move |cell| cfg(RawLabel::new().with_text_color(Color::BLACK)),
+            move |_| cfg(RawLabel::new().with_text_color(Color::BLACK)),
             make_lens,
         )
-        .edit_with(|cell| TextBox::new().expand() )
+        .edit_with(|_| TextBox::new().expand())
     }
 }
 
@@ -252,9 +247,9 @@ impl<T: Data, CD: CellDelegate<T>> Debug for TableColumn<T, CD> {
 }
 
 pub struct TableColumnWidth {
-    initial: Option<KeyOrValue<f64>>,
-    min: Option<KeyOrValue<f64>>,
-    max: Option<KeyOrValue<f64>>,
+    pub(crate) initial: Option<KeyOrValue<f64>>,
+    pub(crate) min: Option<KeyOrValue<f64>>,
+    pub(crate) max: Option<KeyOrValue<f64>>,
 }
 
 impl Default for TableColumnWidth {
@@ -403,10 +398,12 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper
 
     fn remap_from_records(&self, table_data: &TableData, remap_spec: &RemapSpec) -> Remap {
         if remap_spec.is_empty() {
-            Remap::new() // Todo: preserve moves
+            Remap::Pristine(table_data.data_len()) // Todo: preserve moves
         } else {
+            log::info!("Remapping rows");
+
             //Todo: Filter
-            let mut idxs: Vector<LogIdx> = (0usize..table_data.data_len()).map(LogIdx).collect(); //TODO Give up if too big?
+            let mut idxs: Vec<LogIdx> = (0usize..table_data.data_len()).map(LogIdx).collect(); //TODO Give up if too big?
             idxs.sort_by(|a_idx, b_idx| {
                 table_data
                     .with(*a_idx, |a_row| {
@@ -425,7 +422,7 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper
                     })
                     .unwrap()
             });
-            Remap::Selected(RemapDetails::Full(idxs))
+            Remap::Selected(RemapDetails::make_full(idxs))
         }
     }
 }
@@ -448,7 +445,7 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
 impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> CellsDelegate<TableData>
     for ProvidedColumns<TableData, ColumnType>
 {
-    fn data_columns(&self, _data: &TableData) -> usize {
+    fn data_fields(&self, _data: &TableData) -> usize {
         self.cols.len()
     }
 }

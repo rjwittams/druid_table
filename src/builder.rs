@@ -5,9 +5,8 @@ use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedDataDiffer, RefreshDiffer};
 use crate::headings::{HeadersFromIndices, SuppliedHeaders};
 use crate::table::TableArgs;
-use crate::vis::MarkShape::Text;
 use crate::{DisplayFactory, HeaderBuild, ReadOnly, Table, WidgetCell};
-use druid::lens::{Identity, Map};
+use druid::lens::{Identity};
 use druid::{theme, Data, KeyOrValue};
 use im::Vector;
 use std::marker::PhantomData;
@@ -32,7 +31,7 @@ pub struct TableBuilder<TableData: IndexedData> {
     phantom_td: PhantomData<TableData>,
     show_headings: ShowHeadings,
     measurements: AxisPair<AxisMeasurementType>,
-    differ: Option<Box<dyn IndexedDataDiffer<TableData>>>
+    differ: Option<Box<dyn IndexedDataDiffer<TableData>>>,
 }
 
 impl<TableData: IndexedData> Default for TableBuilder<TableData> {
@@ -60,8 +59,8 @@ impl ShowHeadings {
 
 pub type DefaultTableArgs<TableData> = TableArgs<
     TableData,
-    HeaderBuild<HeadersFromIndices<TableData>, Box<dyn DisplayFactory<LogIdx>>>,
-    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>, Box<dyn DisplayFactory<String>>>,
+    HeaderBuild<HeadersFromIndices<TableData>>,
+    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>>,
     ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedData>::Item>>>,
 >;
 
@@ -84,11 +83,11 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
                 AxisMeasurementType::Individual,
                 AxisMeasurementType::Individual,
             ),
-            differ: None
+            differ: None,
         }
     }
 
-    pub fn diff_with(mut self, differ: impl IndexedDataDiffer<TableData> + 'static) -> Self{
+    pub fn diff_with(mut self, differ: impl IndexedDataDiffer<TableData> + 'static) -> Self {
         self.differ = Some(Box::new(differ));
         self
     }

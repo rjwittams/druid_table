@@ -2,41 +2,34 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    BoxConstraints, Data, Env, Event, EventCtx, InternalLifeCycle, KbKey, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
+    BoxConstraints, Data, Env, Event, EventCtx, InternalLifeCycle, KbKey, LayoutCtx,
+    LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
 };
 
-use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisOffset};
 use crate::cells::Editing::Inactive;
 use crate::columns::{CellCtx, DisplayFactory};
 use crate::config::ResolvedTableConfig;
-use crate::data::{IndexedData, Remapper, IndexedDataOp};
+use crate::data::{IndexedData, Remapper};
 use crate::ensured_pool::EnsuredPool;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{CellDemap, CellRect, SingleCell, TableSelection};
-use crate::table::TableState;
+use crate::table::{TableState, PixelRange};
 use crate::{Remap, RemapSpec};
 use druid_bindings::{bindable_self_body, BindableAccess};
-use priority_queue::PriorityQueue;
-use std::cmp::Reverse;
-use std::collections::hash_map::{Iter, IterMut};
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
+
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
-use druid::widget::Axis;
 
 pub trait CellsDelegate<TableData: IndexedData>:
-    DisplayFactory<TableData::Item> + Remapper<TableData> + Debug
+    DisplayFactory<TableData::Item> + Remapper<TableData>
 {
-    fn data_columns(&self, data: &TableData) -> usize;
+    fn data_fields(&self, data: &TableData) -> usize;
 }
 
 impl<TableData: IndexedData> CellsDelegate<TableData> for Arc<dyn CellsDelegate<TableData>> {
-    fn data_columns(&self, data: &TableData) -> usize {
-        self.as_ref().data_columns(data)
+    fn data_fields(&self, data: &TableData) -> usize {
+        self.as_ref().data_fields(data)
     }
 }
 
@@ -144,7 +137,6 @@ impl<RowData: Data> Editing<RowData> {
 }
 
 pub struct Cells<TableData: IndexedData> {
-    start: Instant,
     cell_pool: EnsuredPool<
         AxisPair<LogIdx>,
         Option<WidgetPod<TableData::Item, Box<dyn Widget<TableData::Item>>>>,
@@ -154,10 +146,22 @@ pub struct Cells<TableData: IndexedData> {
     phantom_td: PhantomData<TableData>,
 }
 
+fn override_rect(mut pix_rect: Rect, pix_ranges: AxisPair<Option<&PixelRange>>)->Rect{
+    if let Some(ov) = pix_ranges[TableAxis::Rows] {
+        pix_rect.y0 = ov.p_0;
+        pix_rect.y1 = ov.p_1;
+    }
+
+    if let Some(ov) = pix_ranges[TableAxis::Columns] {
+        pix_rect.x0 = ov.p_0;
+        pix_rect.x1 = ov.p_1;
+    }
+    pix_rect
+}
+
 impl<TableData: IndexedData> Cells<TableData> {
     pub fn new() -> Cells<TableData> {
         Cells {
-            start: Instant::now(),
             cell_pool: Default::default(),
             editing: Inactive,
             dragging_selection: false,
@@ -176,16 +180,14 @@ impl<TableData: IndexedData> Cells<TableData> {
                 .map(|log| SingleCell::new(vis, log))
         });
 
-        let changed = self.cell_pool.ensure(
+        self.cell_pool.ensure(
             single_cells,
             |sc| &sc.log,
             |sc| {
                 let cell = CellCtx::Cell(&sc);
                 cell_delegate.make_display(&cell).map(WidgetPod::new)
             },
-        );
-
-        changed
+        )
     }
 
     fn paint_cells(
@@ -195,14 +197,14 @@ impl<TableData: IndexedData> Cells<TableData> {
         env: &Env,
         rect: &CellRect,
     ) {
-        let measures = &data.measures;
-        let table_data = &data.table_data;
         let rtc = &data.resolved_config;
         for vis in rect.cells() {
             if let Some(log) = data.remaps.get_log_cell(&vis) {
-                table_data.with(log.row, |row| {
-                    if let Some(cell_rect) = measures.pixel_rect_for_cell(vis) {
-                        let padded_rect = cell_rect.inset(-rtc.cell_padding);
+                data.table_data.with(log.row, |row| {
+                    let overridden = data.overrides.measure.zip_with(&log, |m, k|m.get(k));
+                    if let Some(pix_rect) = data.measures.pixel_rect_for_cell(vis) {
+                        let pix_rect = override_rect(pix_rect, overridden);
+                        let padded_rect = pix_rect.inset(-rtc.cell_padding);
 
                         ctx.with_save(|ctx| {
                             ctx.clip(padded_rect);
@@ -212,7 +214,7 @@ impl<TableData: IndexedData> Cells<TableData> {
                         });
 
                         ctx.stroke_bottom_left_border(
-                            &cell_rect,
+                            &pix_rect,
                             &rtc.cells_border,
                             rtc.cell_border_thickness,
                         );
@@ -228,7 +230,7 @@ impl<TableData: IndexedData> Cells<TableData> {
         data: &TableState<TableData>,
         rtc: &ResolvedTableConfig,
         cell_rect: &CellRect,
-    ) -> Option<()> {
+    ) {
         let selected = data.selection.get_drawable_selections(cell_rect);
 
         let sel_color = &rtc.selection_color;
@@ -241,22 +243,18 @@ impl<TableData: IndexedData> Cells<TableData> {
             }
         }
 
-        let focus = selected.focus?;
-
-        ctx.stroke(
-            CellRect::point(focus).to_pixel_rect(&data.measures)?,
-            &rtc.focus_color,
-            (rtc.cell_border_thickness * 1.5).min(2.),
-        );
-        Some(())
+        if let Some(focus) = selected.focus{
+            if let Some(pixel_rect) = CellRect::point(focus).to_pixel_rect(&data.measures) {
+                ctx.stroke(
+                    pixel_rect,
+                    &rtc.focus_color,
+                    (rtc.cell_border_thickness * 1.5).min(2.),
+                );
+            }
+        }
     }
 
-    fn paint_editing(
-        &mut self,
-        ctx: &mut PaintCtx,
-        data: &TableState<TableData>,
-        env: &Env,
-    ) {
+    fn paint_editing(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
         match &mut self.editing {
             Editing::Cell { single_cell, child } => {
                 if let Some(rect) = CellRect::point(single_cell.vis).to_pixel_rect(&data.measures) {
@@ -269,32 +267,6 @@ impl<TableData: IndexedData> Cells<TableData> {
             }
             _ => (),
         }
-    }
-
-    fn paint_animations(
-        &mut self,
-        ctx: &mut PaintCtx,
-        data: &TableState<TableData>,
-        env: &Env,
-    ) {
-        let anim_guard = data.animator.lock().unwrap();
-        anim_guard.with_context(|ac|{
-            for anim in &data.row_anims{
-                ac.with_animation(anim.id, |ac|{
-                    let prog = ac.progress();
-                    match anim.op{
-                        IndexedDataOp::Insert(_) => {}
-                        IndexedDataOp::Delete(_) => {}
-                        IndexedDataOp::Move(_, _) => {}
-                        IndexedDataOp::MoveUpdate(_, _) => {}
-                        IndexedDataOp::Update(row_log_idx) => {
-                           // let vis_idx = data.remaps.get_vis_idx(TableAxis::Rows, row_log_idx);
-                            //ctx.stroke(  )
-                        }
-                    }
-                });
-            }
-        });
     }
 }
 
@@ -329,8 +301,6 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
                             self.editing.stop_editing(&mut data.table_data);
                             self.dragging_selection = true;
                             ctx.set_active(true);
-
-
                         } else if me.count == 2 {
                             let cd = &data.cells_del;
                             self.editing.start_editing(
@@ -344,7 +314,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
                 }
             }
             Event::MouseMove(me) if !self.editing.is_active() && self.dragging_selection => {
-                if let Some(cell) = data.find_cell( me.pos) {
+                if let Some(cell) = data.find_cell(me.pos) {
                     new_selection = data.selection.move_extent(cell.into());
                 }
             }
@@ -408,7 +378,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         if let Some(sel) = new_selection {
             data.selection = sel;
             if data.selection.has_focus() && !self.editing.is_active() {
-                 ctx.request_focus();
+                ctx.request_focus();
             }
         }
 
@@ -434,15 +404,27 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         }
 
         if let Event::AnimFrame(nanos) = event {
-            // State split
+            if let (Ok(mut anim_guard), Ok(mut interp_guard)) =
+                (data.animator.lock(), data.interp.lock())
+            {
+                let overrides = &mut data.overrides;
+                let interp = &mut *interp_guard;
+                anim_guard.advance_by(*nanos as f64, move |anim_ctx| {
+                     if let Err(e) = interp.interp(anim_ctx, overrides){
+                         log::warn!("Issue animating table {:?}", e)
+                     }
+                });
 
-            let mut anim_guard = data.animator.lock().unwrap();
-            anim_guard.advance_by(*nanos as f64, |anim_ctx| {});
+                ctx.request_layout();
 
-            ctx.request_paint();
-
-            if anim_guard.running() {
-                ctx.request_anim_frame();
+                if anim_guard.running() {
+                    ctx.request_anim_frame();
+                } else {
+                    data.overrides
+                        .measure
+                        .for_each_mut(|_, ranges| ranges.clear());
+                    *interp_guard = Default::default();
+                }
             }
         }
     }
@@ -485,7 +467,7 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
     ) {
         if !old_data.table_data.same(&data.table_data) || !old_data.remaps.same(&data.remaps) {
             log::info!("table data or remaps changed, request cells layout");
-            ctx.request_layout()
+            ctx.request_layout();
         }
 
         if !old_data.selection.same(&data.selection) {
@@ -494,17 +476,27 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
 
         let editor_valid = match &mut self.editing {
             Editing::Cell { single_cell, child } => {
-                let valid = data.remaps.get_log_cell(&single_cell.vis)
-                    .map(|log|log.same(&single_cell.log)).unwrap_or(false);
+                let valid = data
+                    .remaps
+                    .get_log_cell(&single_cell.vis)
+                    .map(|log| log.same(&single_cell.log))
+                    .unwrap_or(false);
                 if valid {
-                    data.table_data.with(single_cell.log.row, |row| child.update(ctx, row, env));
+                    data.table_data
+                        .with(single_cell.log.row, |row| child.update(ctx, row, env));
                 }
                 valid
             }
             _ => true,
         };
 
-        if !editor_valid{
+        if let Ok(a) = data.animator.lock() {
+            if a.running() {
+                ctx.request_anim_frame();
+            }
+        }
+
+        if !editor_valid {
             self.editing = Editing::Inactive;
             ctx.children_changed();
         }
@@ -542,10 +534,19 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         if let Editing::Cell { single_cell, child } = &mut self.editing {
             let vis = &single_cell.vis;
 
-            let pixels_len = data.measures.zip_with(&vis, |m, v| m.pixels_length_for_vis(*v)).opt();
-            let first_pix = data.measures.zip_with(&vis, |m, v| m.first_pixel_from_vis(*v)).opt();
+            let pixels_len = data
+                .measures
+                .zip_with(&vis, |m, v| m.pixels_length_for_vis(*v))
+                .opt();
+            let first_pix = data
+                .measures
+                .zip_with(&vis, |m, v| m.first_pixel_from_vis(*v))
+                .opt();
 
-            if let (Some(size), Some(origin)) = ( pixels_len.as_ref().map(AxisPair::size), first_pix.as_ref().map(AxisPair::point) ) {
+            if let (Some(size), Some(origin)) = (
+                pixels_len.as_ref().map(AxisPair::size),
+                first_pix.as_ref().map(AxisPair::point),
+            ) {
                 let bc = BoxConstraints::tight(size).loosen();
                 data.table_data.with(single_cell.log.row, |row| {
                     child.layout(ctx, &bc, row, env);
@@ -560,16 +561,27 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
             .scroll_rect
             .intersect(Rect::from_origin_size(Point::ZERO, measured));
 
-        let cell_rect = data.measures.cell_rect_from_pixels(draw_rect) ;
+        let cell_rect = data.measures.cell_rect_from_pixels(draw_rect);
 
-        for vis in cell_rect.cells(){
-            if let Some(log) = data.remaps.get_log_cell(&vis){
+        for vis in cell_rect.cells() {
+            if let Some(log) = data.remaps.get_log_cell(&vis) {
                 data.table_data.with(log.row, |row| {
-                    if let Some(Some(cell_pod)) = self
-                        .cell_pool
-                        .get_mut(&log)
-                    {
-                        if let Some(vis_rect) = CellRect::point(vis).to_pixel_rect(&data.measures) {
+                    if let Some(Some(cell_pod)) = self.cell_pool.get_mut(&log) {
+                        let overridden = data.overrides.measure.zip_with(&log, |m, k| m.get(k));
+
+                        if let Some(mut vis_rect) =
+                            CellRect::point(vis).to_pixel_rect(&data.measures)
+                        {
+                            if let Some(ov) = overridden[TableAxis::Rows] {
+                                vis_rect.y0 = ov.p_0;
+                                vis_rect.y1 = ov.p_1;
+                            }
+
+                            if let Some(ov) = overridden[TableAxis::Columns] {
+                                vis_rect.x0 = ov.p_0;
+                                vis_rect.x1 = ov.p_1;
+                            }
+
                             if cell_pod.is_initialized() {
                                 cell_pod.layout(
                                     ctx,
@@ -605,7 +617,6 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
         self.paint_selections(ctx, data, &rtc, &cell_rect);
 
         self.paint_editing(ctx, data, env);
-        self.paint_animations(ctx, data, env);
     }
 }
 

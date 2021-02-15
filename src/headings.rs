@@ -1,7 +1,11 @@
 use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
-use druid::{Affine, BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, InternalLifeCycle, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod, WindowConfig, WindowSizePolicy, WidgetExt, Vec2};
+use druid::{
+    BoxConstraints, Color, Cursor, Data, Env, Event, EventCtx, InternalLifeCycle, LayoutCtx,
+    LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx,
+    WidgetPod
+};
 
 use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::columns::{CellCtx, DisplayFactory, HeaderInfo};
@@ -9,13 +13,11 @@ use crate::data::SortSpec;
 use crate::ensured_pool::EnsuredPool;
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
-use crate::table::TableState;
-use crate::{IndexedData, IndicesSelection, SortDirection};
+use crate::table::{TableState, PixelRange};
+use crate::{IndexedData, Remap, SortDirection};
 use druid::kurbo::PathEl;
 use druid_bindings::{bindable_self_body, BindableAccess};
 use std::collections::HashMap;
-use druid::widget::Label;
-use druid::lens::Unit;
 
 pub trait HeadersFromData {
     type TableData: IndexedData;
@@ -88,25 +90,38 @@ impl<TableData: IndexedData> HeadersFromData for HeadersFromIndices<TableData> {
 
 struct HeaderMoving {
     idx: VisIdx,
+    first_px: f64,
     init_pos: f64,
-    current_pos: f64
+    current_pos: f64,
 }
 
 impl HeaderMoving {
-    pub fn new(idx: VisIdx, init_pos: f64) -> Self {
-        HeaderMoving { idx, init_pos, current_pos: init_pos }
+    pub fn new(idx: VisIdx, first_px: f64, init_pos: f64) -> Self {
+        HeaderMoving {
+            idx,
+            first_px,
+            init_pos,
+            current_pos: init_pos,
+        }
+    }
+
+    pub fn current_first_px(&self)->f64{
+        self.first_px + self.offset()
+    }
+
+    pub fn offset(&self)->f64{
+        self.current_pos - self.init_pos
     }
 }
 
-pub struct Headings<HeadersSource, Render>
+pub struct Headings<HeadersSource>
 where
-    HeadersSource: HeadersFromData,
-    Render: DisplayFactory<HeadersSource::Header>,
+    HeadersSource: HeadersFromData
 {
     axis: TableAxis,
     headers_source: HeadersSource,
     headers: Option<HeadersSource::Headers>,
-    header_render: Render,
+    header_render: Box<dyn DisplayFactory<HeadersSource::Header>>,
     pods: EnsuredPool<
         LogIdx,
         Option<WidgetPod<HeadersSource::Header, Box<dyn Widget<HeadersSource::Header>>>>,
@@ -118,17 +133,13 @@ where
     selection_dragging: bool,
 }
 
-impl<HeadersSource, Render> Headings<HeadersSource, Render>
-where
-    HeadersSource: HeadersFromData,
-    Render: DisplayFactory<HeadersSource::Header>,
-{
+impl<HeadersSource: HeadersFromData> Headings<HeadersSource> {
     pub fn new(
         axis: TableAxis,
         headers_source: HeadersSource,
-        header_render: Render,
+        header_render: Box<dyn DisplayFactory<HeadersSource::Header>>,
         allow_moves: bool,
-    ) -> Headings<HeadersSource, Render> {
+    ) -> Headings<HeadersSource> {
         Headings {
             axis,
             headers_source,
@@ -145,12 +156,12 @@ where
     fn set_pix_length_for_axis(
         &mut self,
         measure: &mut AxisMeasure,
+        remap: &Remap,
         ctx: &mut EventCtx,
         vis_idx: VisIdx,
         pixel: f64,
     ) {
-        measure.set_far_pixel_for_vis(vis_idx, pixel);
-        // TODO : this might be overkill if we knew that we are bigger that the viewport - repaint would work
+        measure.set_far_pixel_for_vis(vis_idx, pixel, remap);
         ctx.request_layout();
     }
 
@@ -177,18 +188,6 @@ where
         )
     }
 
-    fn paint_header(
-        &mut self,
-        ctx: &mut PaintCtx,
-        data: &TableState<HeadersSource::TableData>,
-        env: &Env,
-        measure: &AxisMeasure,
-        indices_selection: &IndicesSelection,
-        sort_dirs: &HashMap<LogIdx, SortSpec>,
-        vis_main_idx: VisIdx,
-    ) {
-
-    }
 }
 
 fn draw_sort_indicator(ctx: &mut PaintCtx, sort_spec: &SortSpec, orig_rect: Rect) -> Rect {
@@ -229,56 +228,20 @@ fn make_arrow(top_point: &Point, up: bool, height: f64, head_rad: f64) -> [PathE
     ]
 }
 
-struct HeaderDrag<TableData>{
-    phantom_td: PhantomData<TableData>
-}
-
-impl<TableData> HeaderDrag<TableData> {
-    pub fn new() -> Self {
-        HeaderDrag { phantom_td: Default::default() }
-    }
-}
-
-impl <TableData: IndexedData> Widget<TableState<TableData>> for HeaderDrag<TableState<TableData>>{
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TableState<TableData>, env: &Env) {
-
-    }
-
-    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &TableState<TableData>, env: &Env) {
-
-    }
-
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &TableState<TableData>, data: &TableState<TableData>, env: &Env) {
-
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &TableState<TableData>, env: &Env) -> Size {
-        bc.constrain((100., 100.))
-    }
-
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &TableState<TableData>, env: &Env) {
-
-    }
-}
-
-fn make_header_drag<TableData: IndexedData>()->impl Widget<TableState<TableData>>{
-    HeaderDrag::new()
-}
-
-impl<HeadersSource, Render> Widget<TableState<HeadersSource::TableData>>
-    for Headings<HeadersSource, Render>
+impl<HeadersSource> Widget<TableState<HeadersSource::TableData>>
+    for Headings<HeadersSource>
 where
-    HeadersSource: HeadersFromData,
-    Render: DisplayFactory<HeadersSource::Header>,
+    HeadersSource: HeadersFromData
 {
     fn event(
         &mut self,
         ctx: &mut EventCtx,
         event: &Event,
         data: &mut TableState<HeadersSource::TableData>,
-        env: &Env,
+        _env: &Env,
     ) {
         let measure = &mut data.measures[self.axis];
+        let remap = &data.remaps[self.axis];
         match event {
             Event::MouseDown(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
@@ -291,7 +254,7 @@ where
                         ctx.set_handled()
                     }
                 } else if me.count == 1 {
-                    //TODO: Combine lookups
+                    //TODO: Combine lookups?
                     if let Some(idx) = measure.pixel_near_border(pix_main) {
                         if idx > VisIdx(0) && measure.can_resize(idx - VisOffset(1)) {
                             self.resize_dragging = Some(idx - VisOffset(1));
@@ -302,15 +265,15 @@ where
                     } else if let Some(idx) = measure.vis_idx_from_pixel(pix_main) {
                         let sel = &mut data.selection;
                         // Already selected so move headings:
-                        if sel.fully_selects_heading(self.axis, idx) {
-                            self.moving = Some(HeaderMoving::new(idx, self.axis.main_pixel_from_point(&me.pos)));
-
-                            // ctx.new_sub_window(WindowConfig::default()
-                            //                        .window_size_policy(WindowSizePolicy::Content)
-                            //                        .show_titlebar(false),
-                            //                    make_header_drag::<HeadersSource::TableData>(), data.clone(), env.clone());
-
-                            ctx.set_active(true);
+                        if sel.fully_selects_heading(self.axis, idx) && self.allow_moves {
+                            if let Some(first_px) = measure.first_pixel_from_vis(idx) {
+                                self.moving = Some(HeaderMoving::new(
+                                    idx,
+                                    first_px,
+                                    self.axis.main_pixel_from_point(&me.pos),
+                                ));
+                                ctx.set_active(true);
+                            }
                         } else {
                             // Change the selection
                             if me.mods.shift() {
@@ -330,7 +293,7 @@ where
                 let over_idx = measure.vis_idx_from_pixel(pix_main);
 
                 if let Some(resizing_idx) = self.resize_dragging {
-                    self.set_pix_length_for_axis(measure, ctx, resizing_idx, pix_main);
+                    self.set_pix_length_for_axis(measure, remap, ctx, resizing_idx, pix_main);
 
                     if me.buttons.is_empty() {
                         self.resize_dragging = None;
@@ -340,6 +303,16 @@ where
                     ctx.set_handled()
                 } else if let Some(moving) = &mut self.moving {
                     moving.current_pos = self.axis.main_pixel_from_point(&me.pos);
+
+                    if let Some(log_idx) = remap.get_log_idx(moving.idx) {
+
+                        data.overrides.measure[self.axis].entry(log_idx)
+                            .or_insert_with(|| measure.pix_range_from_vis(moving.idx)
+                                .unwrap_or_else(||PixelRange::new(moving.current_first_px(),
+                                                                  measure.far_pixel_from_vis(moving.idx).unwrap_or(moving.current_pos + 100.) ))
+                            ).move_to(moving.current_first_px());
+                        ctx.request_layout();
+                    }
 
                     ctx.request_paint();
                     ctx.set_handled();
@@ -360,27 +333,31 @@ where
                 } else {
                     match over_idx {
                         Some(moving_idx)
-                            if data.selection.fully_selects_heading(self.axis, moving_idx) =>
+                            if data.selection.fully_selects_heading(self.axis, moving_idx) && self.allow_moves =>
                         {
                             ctx.set_cursor(&Cursor::OpenHand)
                         }
-                        _ => {
-                            ctx.clear_cursor()
-                        }
+                        _ => ctx.clear_cursor(),
                     }
                 }
             }
             Event::MouseUp(me) => {
                 let pix_main = self.axis.main_pixel_from_point(&me.pos);
                 if let Some(idx) = self.resize_dragging {
-                    self.set_pix_length_for_axis(measure, ctx, idx, pix_main);
+                    self.set_pix_length_for_axis(measure, remap, ctx, idx, pix_main);
                     self.resize_dragging = None;
                     ctx.set_active(false);
                     ctx.set_handled();
                 } else if let Some(moving) = self.moving.take() {
-                    if let Some(moved_to_idx) = measure.vis_idx_from_pixel(pix_main) {
-                        data.explicit_header_move(self.axis, moving.idx,  moved_to_idx)
+                    if let Some(log_idx) = remap.get_log_idx(moving.idx) {
+                        data.overrides.measure[self.axis].remove(&log_idx);
+                        ctx.request_layout();
                     }
+
+                    if let Some(moved_to_idx) = measure.vis_idx_from_pixel(pix_main) {
+                        data.explicit_header_move(self.axis, moving.idx, moved_to_idx)
+                    }
+
                     ctx.request_paint();
                     ctx.set_active(false);
                     ctx.set_handled()
@@ -461,24 +438,26 @@ where
         let measure = &data.measures[axis];
         let size = bc.constrain(axis.size(measure.total_pixel_length(), cross_axis_length));
         let pods = &mut self.pods;
+        let overrides = &data.overrides.measure[axis];
         if let Some(headers) = &self.headers {
             for vis_idx in data.vis_idx_visible_for_axis(axis) {
-                if let (Some(main_0), Some(main_extent), Some(log_idx)) = (
-                    measure.first_pixel_from_vis(vis_idx),
-                    measure.pixels_length_for_vis(vis_idx),
+                if let (Some(found_px), Some(log_idx)) = (
+                    measure.pix_range_from_vis(vis_idx),
                     data.remaps[axis].get_log_idx(vis_idx),
                 ) {
+                    let px = overrides.get(&log_idx).unwrap_or(&found_px);
+
                     if let Some(Some(pod)) = pods.get_mut(&log_idx) {
                         headers.with(log_idx, |header| {
                             if pod.is_initialized() {
-                                let cell_size = axis.size(main_extent, cross_axis_length);
+                                let cell_size = axis.size(px.extent(), cross_axis_length);
                                 pod.layout(
                                     ctx,
                                     &BoxConstraints::tight(cell_size).loosen(),
                                     header,
                                     env,
                                 );
-                                let origin = axis.coords(main_0, 0.).into();
+                                let origin = axis.coords(px.p_0, 0.).into();
                                 pod.set_origin(ctx, header, env, origin);
                             }
                         });
@@ -497,6 +476,7 @@ where
     ) {
         let axis = self.axis;
         let measure = &data.measures[axis];
+        let overrides = &data.overrides.measure[axis];
         let remap = &data.remaps[axis];
         let rtc = &data.resolved_config;
 
@@ -519,27 +499,27 @@ where
 
         let pods = &mut self.pods;
         if let Some(headers) = &self.headers {
-            for vis_main_idx in VisIdx::range_inc_iter(start_main, end_main) {
-                // TODO: excessive unwrapping
-
-                if let (Some(first_pix), Some(pixels_length)) = (
-                    measure.first_pixel_from_vis(vis_main_idx),
-                    measure.pixels_length_for_vis(vis_main_idx),
+            for vis_idx in VisIdx::range_inc_iter(start_main, end_main) {
+                if let (Some(found_px), Some(log_idx)) = (
+                    measure.pix_range_from_vis(vis_idx),
+                    data.remaps[axis].get_log_idx(vis_idx),
                 ) {
+                    let px = overrides.get(&log_idx).unwrap_or(&found_px);
+
                     let cell_rect = Rect::from_origin_size(
-                        axis.cell_origin(first_pix, 0.),
-                        axis.size(pixels_length, rtc.cross_axis_length(&axis)),
+                        axis.cell_origin(px.p_0, 0.),
+                        axis.size(px.extent(), rtc.cross_axis_length(&axis)),
                     );
 
-                    if indices_selection.vis_index_selected(vis_main_idx) {
+                    if indices_selection.vis_index_selected(vis_idx) {
                         ctx.fill(cell_rect, &rtc.header_selected_background);
                     }
 
                     let padded_rect = cell_rect.inset(-rtc.cell_padding);
-                    if let Some(log_main_idx) = remap.get_log_idx(vis_main_idx) {
-                        let sort_spec = sort_dirs.get(&log_main_idx);
+                    if let Some(log_idx) = remap.get_log_idx(vis_idx) {
+                        let sort_spec = sort_dirs.get(&log_idx);
 
-                        headers.with(log_main_idx, |col_name| {
+                        headers.with(log_idx, |col_name| {
                             ctx.with_save(|ctx| {
                                 let clip_rect = if let Some(sort_spec) = sort_spec {
                                     draw_sort_indicator(ctx, sort_spec, padded_rect)
@@ -548,7 +528,7 @@ where
                                 };
                                 ctx.clip(clip_rect);
 
-                                if let Some(Some(pod)) = pods.get_mut(&log_main_idx) {
+                                if let Some(Some(pod)) = pods.get_mut(&log_idx) {
                                     pod.paint(ctx, col_name, env);
                                 }
                             });
@@ -564,28 +544,27 @@ where
             }
         }
 
-
-        if let Some(moving) = &self.moving{
-            if let (Some(first_pix), Some(pixels_length)) = (measure.first_pixel_from_vis(moving.idx),
-                                                      measure.pixels_length_for_vis(moving.idx)) {
-
-                let offset = moving.current_pos - moving.init_pos;
-
-                let header_rect = Rect::from_origin_size(
-                    axis.cell_origin(first_pix, 0.) + self.axis.coords(offset, 0.),
-                    axis.size(pixels_length, rtc.cross_axis_length(&axis))
-                );
-
-                ctx.render_ctx.stroke(header_rect, &Color::TEAL, 1.5);
-            }
-        }
+        // if let Some(moving) = &self.moving {
+        //     if let (Some(first_pix), Some(pixels_length)) = (
+        //         measure.first_pixel_from_vis(moving.idx),
+        //         measure.pixels_length_for_vis(moving.idx),
+        //     ) {
+        //         let offset = moving.current_pos - moving.init_pos;
+        //
+        //         let header_rect = Rect::from_origin_size(
+        //             axis.cell_origin(first_pix, 0.) + self.axis.coords(offset, 0.),
+        //             axis.size(pixels_length, rtc.cross_axis_length(&axis)),
+        //         );
+        //
+        //         ctx.render_ctx.stroke(header_rect, &Color::TEAL, 1.5);
+        //     }
+        // }
     }
 }
 
-impl<HeadersSource, Render> BindableAccess for Headings<HeadersSource, Render>
+impl<HeadersSource> BindableAccess for Headings<HeadersSource>
 where
-    HeadersSource: HeadersFromData,
-    Render: DisplayFactory<HeadersSource::Header>,
+    HeadersSource: HeadersFromData
 {
     bindable_self_body!();
 }

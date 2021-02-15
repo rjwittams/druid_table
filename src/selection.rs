@@ -2,13 +2,11 @@ use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
 use crate::AxisMeasure;
 use druid::kurbo::{Point, Rect, Size};
 use std::fmt::Debug;
-use std::iter::Map;
-use std::ops::{Add, Index, IndexMut, RangeInclusive};
+use std::ops::{Add, Index, IndexMut};
 
 // Could be the address of a cell or something else we have one of for each axis
 
-impl<T: Debug> AxisPair<T> {
-
+impl<T> AxisPair<T> {
     pub fn new(row: T, col: T) -> AxisPair<T> {
         AxisPair { row, col }
     }
@@ -32,15 +30,23 @@ impl<T: Debug> AxisPair<T> {
         f(TableAxis::Columns, &self.col);
     }
 
+    pub fn for_each_mut(&mut self, mut f: impl FnMut(TableAxis, &mut T)) {
+        f(TableAxis::Rows, &mut self.row);
+        f(TableAxis::Columns, &mut self.col);
+    }
+
     pub fn map<O: Debug>(&self, f: impl Fn(&T) -> O) -> AxisPair<O> {
         AxisPair::new(f(&self.row), f(&self.col))
     }
 
-    pub fn zip_with<O: Debug, U: Debug>(
-        &self,
-        other: &AxisPair<U>,
-        f: impl Fn(&T, &U) -> O,
-    ) -> AxisPair<O> {
+    pub fn zip_with<'a, 'b, 'c, O: Debug + 'c, U: Debug>(
+        &'a self,
+        other: &'b AxisPair<U>,
+        f: impl Fn(&'a T, &'b U) -> O,
+    ) -> AxisPair<O>
+    where
+        'c: 'a + 'b,
+    {
         AxisPair::new(f(&self.row, &other.row), f(&self.col, &other.col))
     }
 }
@@ -55,7 +61,6 @@ impl<T: Debug + Copy> AxisPair<Option<T>> {
 }
 
 impl AxisPair<f64> {
-
     // For conversion to points/ sizes
     fn unpack(&self) -> (f64, f64) {
         (self[TableAxis::Columns], self[TableAxis::Rows])
@@ -96,18 +101,19 @@ impl CellRect {
         CellRect::new((point.row, point.row), (point.col, point.col))
     }
 
-    pub fn rows(&self) -> impl Iterator<Item=VisIdx> {
+    pub fn rows(&self) -> impl Iterator<Item = VisIdx> {
         VisIdx::range_inc_iter(self.start_row, self.end_row) // Todo work out how to support custom range
     }
 
-    pub fn cols(&self) -> impl Iterator<Item=VisIdx> {
+    pub fn cols(&self) -> impl Iterator<Item = VisIdx> {
         VisIdx::range_inc_iter(self.start_col, self.end_col)
     }
 
-    pub fn cells(&self) -> impl Iterator<Item=AxisPair<VisIdx>> {
+    pub fn cells(&self) -> impl Iterator<Item = AxisPair<VisIdx>> {
         let (start_col, end_col) = (self.start_col, self.end_col);
-        VisIdx::range_inc_iter(self.start_row, self.end_row)
-            .flat_map(move |row| VisIdx::range_inc_iter(start_col, end_col).map(move |col|AxisPair::new(row, col)))
+        VisIdx::range_inc_iter(self.start_row, self.end_row).flat_map(move |row| {
+            VisIdx::range_inc_iter(start_col, end_col).map(move |col| AxisPair::new(row, col))
+        })
     }
 
     fn contains_cell(&self, cell_addr: &AxisPair<VisIdx>) -> bool {
@@ -115,7 +121,7 @@ impl CellRect {
             && self.contains_idx(TableAxis::Rows, cell_addr.row)
     }
 
-    pub (crate) fn range(&self, axis: TableAxis) -> (VisIdx, VisIdx) {
+    pub(crate) fn range(&self, axis: TableAxis) -> (VisIdx, VisIdx) {
         match axis {
             TableAxis::Rows => (self.start_row, self.end_row),
             TableAxis::Columns => (self.start_col, self.end_col),
@@ -148,7 +154,7 @@ trait AxisPairMove<O> {
     fn move_by(&self, axis: TableAxis, amount: O) -> Self;
 }
 
-impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for AxisPair<T> {
+impl<O, T: Add<O, Output = T> + Copy + Default> AxisPairMove<O> for AxisPair<T> {
     fn move_by(&self, axis: TableAxis, amount: O) -> AxisPair<T> {
         let mut moved = (*self).clone();
         moved[axis] = self[axis] + amount;
@@ -156,7 +162,7 @@ impl<O, T: Add<O, Output = T> + Copy + Debug + Default> AxisPairMove<O> for Axis
     }
 }
 
-impl<T: Debug> Index<TableAxis> for AxisPair<T> {
+impl<T> Index<TableAxis> for AxisPair<T> {
     type Output = T;
 
     fn index(&self, axis: TableAxis) -> &Self::Output {
@@ -167,7 +173,7 @@ impl<T: Debug> Index<TableAxis> for AxisPair<T> {
     }
 }
 
-impl<T: Debug> IndexMut<TableAxis> for AxisPair<T> {
+impl<T> IndexMut<TableAxis> for AxisPair<T> {
     fn index_mut(&mut self, axis: TableAxis) -> &mut Self::Output {
         match axis {
             TableAxis::Rows => &mut self.row,
@@ -285,15 +291,22 @@ impl Default for TableSelection {
 }
 
 pub trait CellDemap {
-    fn get_log_idx(&self, axis: TableAxis, vis: &VisIdx) -> Option<LogIdx>;
+    fn get_log_idx(&self, axis: TableAxis, vis: VisIdx) -> Option<LogIdx>;
+
+    fn get_vis_idx(&self, axis: TableAxis, log: LogIdx) -> Option<VisIdx>;
 
     fn get_log_cell(&self, vis: &AxisPair<VisIdx>) -> Option<AxisPair<LogIdx>> {
-        self.get_log_idx(TableAxis::Rows, &vis.row)
-            .map(|row| {
-                self.get_log_idx(TableAxis::Columns, &vis.col)
-                    .map(|col| AxisPair::new(row, col))
-            })
-            .flatten()
+        self.get_log_idx(TableAxis::Rows, vis.row).and_then(|row| {
+            self.get_log_idx(TableAxis::Columns, vis.col)
+                .map(|col| AxisPair::new(row, col))
+        })
+    }
+
+    fn get_vis_cell(&self, log: &AxisPair<LogIdx>) -> Option<AxisPair<VisIdx>> {
+        self.get_vis_idx(TableAxis::Rows, log.row).and_then(|row| {
+            self.get_vis_idx(TableAxis::Columns, log.col)
+                .map(|col| AxisPair::new(row, col))
+        })
     }
 }
 

@@ -1,8 +1,4 @@
-use druid_table::{
-    AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory,
-    HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap,
-    RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, WidgetCell,
-};
+use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, WidgetCell, RefreshDiffer};
 
 use core::fmt;
 use druid::lens::Map;
@@ -95,7 +91,7 @@ impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> CellsDelegate<
 where
     TableData::Item: Data,
 {
-    fn data_columns(&self, _data: &TableData) -> usize {
+    fn data_fields(&self, _data: &TableData) -> usize {
         self.columns
     }
 }
@@ -112,7 +108,7 @@ impl<RowData: Data, CR: DisplayFactory<RowData>, TableData: IndexedData<Item = R
     }
 
     fn remap_from_records(&self, _table_data: &TableData, _remap_spec: &RemapSpec) -> Remap {
-        Remap::Pristine
+        Remap::Pristine(_table_data.data_len())
     }
 }
 
@@ -121,20 +117,20 @@ fn build_root_widget() -> Table<LogIdxTable> {
 
     let rows = HeaderBuild::new(
         HeadersFromIndices::new(),
-        WidgetCell::text_configured(
+        Box::new(WidgetCell::text_configured(
             |rl| rl.with_text_color(Color::WHITE),
             || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
-        ),
+        )),
     );
 
     let columns = 1_000_000_000;
     let headers = BigTableCols::new(columns);
     let cols = HeaderBuild::new(
         SuppliedHeaders::new(headers),
-        WidgetCell::text_configured(
+        Box::new(WidgetCell::text_configured(
             |rl| rl.with_text_color(Color::WHITE),
             || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
-        ),
+        )),
     );
 
     let measures = AxisPair::new(
@@ -152,6 +148,7 @@ fn build_root_widget() -> Table<LogIdxTable> {
             table_config,
         ),
         measures,
+        Box::new(RefreshDiffer)
     )
 }
 

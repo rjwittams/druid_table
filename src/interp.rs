@@ -38,7 +38,7 @@ impl Add for InterpCoverage {
     }
 }
 
-pub trait Interp: Default + Debug {
+pub trait Interp: Default {
     type Value: HasInterp<Interp = Self>;
 
     fn interp(&mut self, ctx: &AnimationCtx, val: &mut Self::Value) -> InterpResult;
@@ -66,7 +66,7 @@ pub trait Interp: Default + Debug {
     fn build(start: Self::Value, end: Self::Value) -> Self;
 }
 
-pub trait HasInterp: Clone + Debug {
+pub trait HasInterp: Clone {
     type Interp: Interp<Value = Self>;
 
     fn tween_ref(&self, other: &Self) -> InterpNode<Self> {
@@ -103,10 +103,24 @@ impl<T: HasInterp, F: Fn(f64) -> T> From<F> for BasicInterp<T, F> {
     }
 }
 
-#[derive(Debug)]
 pub enum InterpHolder<Value: HasInterp> {
     Interp(Value::Interp),
     Custom(Box<dyn CustomInterp<Value>>),
+}
+
+impl<Value: HasInterp> Debug for InterpHolder<Value>
+where
+    Value::Interp: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            InterpHolder::Interp(interp) => f
+                .debug_struct("InterpHolder")
+                .field("interp", interp)
+                .finish(),
+            InterpHolder::Custom(interp) => interp.fmt(f),
+        }
+    }
 }
 
 impl<Value: HasInterp> Debug for Box<dyn CustomInterp<Value>> {
@@ -159,10 +173,19 @@ impl<Value: HasInterp> InterpHolder<Value> {
     }
 }
 
-#[derive(Debug)]
 pub struct InterpNode<Value: HasInterp> {
     selected: Vec<(AnimationId, InterpHolder<Value>)>,
     focused: Option<InterpHolder<Value>>,
+}
+
+impl<Value: HasInterp> Debug for InterpNode<Value>
+where
+    Value::Interp: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Todo: debug
+        f.debug_struct("InterpNode").finish()
+    }
 }
 
 impl<Value: HasInterp> Default for InterpNode<Value> {
@@ -270,8 +293,6 @@ impl<Value: HasInterp> InterpNode<Value> {
 
     // TODO: fallible merge
     pub fn merge(self, other: InterpNode<Value>) -> Self {
-        //let mut start = format!("merging\n\t A:{:?}\n\t B:{:?}\n\t", self, other);
-
         if self.coverage() == InterpCoverage::Noop {
             other
         } else if other.coverage() == InterpCoverage::Noop {
@@ -300,6 +321,36 @@ impl<Value: HasInterp> InterpNode<Value> {
             ret
         }
     }
+
+    pub fn merge_ref(&mut self, other: InterpNode<Value>) {
+        if self.coverage() == InterpCoverage::Noop {
+            *self = other;
+        } else if other.coverage() == InterpCoverage::Noop {
+        } else {
+            let mut temp = Self::default();
+            std::mem::swap(self, &mut temp);
+            let (si1, r1) = select_internal(temp.selected);
+            let (si2, r2) = select_internal(other.selected);
+            let selected = r1.into_iter().chain(r2.into_iter()).collect();
+
+            let all = si1
+                .into_iter()
+                .chain(temp.focused.into_iter())
+                .chain(si2.into_iter())
+                .chain(other.focused.into_iter());
+
+            let focused: Option<InterpHolder<Value>> = all.fold(None, |res, to_add| {
+                if res.is_none() {
+                    Some(to_add)
+                } else {
+                    res.map(|r: InterpHolder<Value>| r.merge(to_add))
+                }
+            });
+
+            self.selected = selected;
+            self.focused = focused;
+        }
+    }
 }
 
 pub trait EnterExit {
@@ -307,11 +358,22 @@ pub trait EnterExit {
     fn exit(&self) -> Self;
 }
 
-#[derive(Debug)]
 pub struct MapInterp<Value: HasInterp, Key> {
     to_enlist: Vec<(Key, Value)>,
     to_retire: Vec<Key>,
     interps: Vec<(Key, InterpNode<Value>)>,
+}
+
+impl<Value: HasInterp, Key> Debug for MapInterp<Value, Key>
+where
+    Value::Interp: Debug,
+    Value: Debug,
+    Key: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // TODO: debug
+        f.debug_struct("MapInterp").finish()
+    }
 }
 
 impl<Value: HasInterp, Key: Hash + Eq + Clone> MapInterp<Value, Key> {
@@ -351,6 +413,7 @@ impl<Value: HasInterp + EnterExit + Debug, Key: Debug + Hash + Eq + Clone> Inter
     type Value = HashMap<Key, Value>;
 
     fn interp(&mut self, ctx: &AnimationCtx, val: &mut HashMap<Key, Value>) -> InterpResult {
+        log::info!("Map interp {:?}", ctx.status());
         if !self.to_enlist.is_empty() {
             for (k, v) in self.to_enlist.drain(..) {
                 val.insert(k, v);
@@ -367,6 +430,13 @@ impl<Value: HasInterp + EnterExit + Debug, Key: Debug + Hash + Eq + Clone> Inter
                 (loop_err @ None, Err(c_e)) => *loop_err = Some(c_e),
                 (Some(l_e), Err(c_e)) if *l_e != c_e => *l_e = InterpError::Multiple,
                 _ => (),
+            }
+        }
+        if ctx.status() == AnimationStatus::Retiring {
+            log::info!("Retiring map interp");
+            for key in self.to_retire.drain(..) {
+                log::info!("Retired key {:?}", key);
+                val.remove(&key);
             }
         }
         loop_err.map(Err).unwrap_or(OK)
@@ -858,7 +928,7 @@ impl Interp for StringInterp {
         true
     }
 
-    fn select_animation_segment(self, idx: AnimationId) -> Result<Self, Self> {
+    fn select_animation_segment(self, _idx: AnimationId) -> Result<Self, Self> {
         Err(self)
     }
 
@@ -961,6 +1031,7 @@ mod test {
     use std::mem::size_of;
     use std::num::NonZeroU32;
     use std::time::Duration;
+    use simple_logger::SimpleLogger;
 
     #[test]
     fn test_merge() {
@@ -1052,7 +1123,7 @@ mod test {
 
     #[test]
     fn test_merge_selected_overlap() {
-        simple_logger::init();
+        SimpleLogger::new().init();
         let mut animator: Animator = Default::default();
 
         let ai_0 = animator

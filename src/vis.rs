@@ -552,8 +552,8 @@ impl VisMarks {
         self.marks.values().filter(|mark| mark.hit(pos)).next()
     }
 
-    fn paint(&self, ctx: &mut PaintCtx, focus: &Option<MarkId>) {
-        for (_, mark) in self.marks.iter().sorted_by_key(|(k, v)| k.clone()) {
+    fn paint(&self, ctx: &mut PaintCtx, _focus: &Option<MarkId>) {
+        for (_, mark) in self.marks.iter().sorted_by_key(|(k, _)| k.clone()) {
             mark.paint(ctx);
         }
     }
@@ -737,7 +737,7 @@ impl<V: Visualization> Vis<V> {
 }
 
 impl<V: Visualization> Widget<V::Input> for Vis<V> {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut V::Input, env: &Env) {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut V::Input, _env: &Env) {
         if let (
             Event::AnimFrame(nanos),
             Some(VisInner {
@@ -857,10 +857,10 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         }
     }
 
-    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &V::Input, env: &Env) {
+    fn lifecycle(&mut self, _ctx: &mut LifeCycleCtx, _event: &LifeCycle, _data: &V::Input, _env: &Env) {
     }
 
-    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, env: &Env) {
+    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, _env: &Env) {
         if !data.same(old_data) {
             self.regenerate(ctx.size(), data);
             ctx.request_anim_frame();
@@ -869,7 +869,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
 
     fn layout(
         &mut self,
-        ctx: &mut LayoutCtx,
+        _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
         _data: &V::Input,
         _env: &Env,
@@ -883,7 +883,7 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         bc.max()
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &V::Input, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &V::Input, _env: &Env) {
         let size = ctx.size();
 
         let state = self.ensure_inner(data, size);
