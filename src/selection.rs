@@ -1,4 +1,4 @@
-use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset};
+use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, PixelLengths};
 use crate::AxisMeasure;
 use druid::kurbo::{Point, Rect, Size};
 use std::fmt::Debug;
@@ -35,8 +35,12 @@ impl<T> AxisPair<T> {
         f(TableAxis::Columns, &mut self.col);
     }
 
-    pub fn map<O: Debug>(&self, f: impl Fn(&T) -> O) -> AxisPair<O> {
+    pub fn map<O>(&self, f: impl Fn(&T) -> O) -> AxisPair<O> {
         AxisPair::new(f(&self.row), f(&self.col))
+    }
+
+    pub fn map_mut<O>(&mut self, mut f: impl FnMut(TableAxis, &mut T) -> O) -> AxisPair<O> {
+        AxisPair::new(f(TableAxis::Rows, &mut self.row), f(TableAxis::Columns, &mut self.col))
     }
 
     pub fn zip_with<'a, 'b, 'c, O: Debug + 'c, U: Debug>(

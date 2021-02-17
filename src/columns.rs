@@ -8,7 +8,7 @@ use crate::{CellsDelegate, IndexedData, Remap, RemapSpec, Remapper, TableAxis};
 use druid::text::{EditableText, TextStorage};
 use druid::widget::prelude::*;
 use druid::widget::{RawLabel, TextBox};
-use druid::{Color, Data, KeyOrValue, Lens,  WidgetExt};
+use druid::{Color, Data, KeyOrValue, Lens, WidgetExt};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -53,15 +53,15 @@ impl<RowData> DisplayFactory<RowData> for Box<dyn DisplayFactory<RowData>> {
 }
 
 #[derive(Debug)]
-pub struct HeaderInfo<'a> {
-    axis: TableAxis,
-    idx: LogIdx,
-    sort: Option<&'a SortSpec>,
+pub struct HeaderInfo {
+    pub axis: TableAxis,
+    pub level: LogIdx,
+    pub idx: LogIdx,
 }
 
-impl<'a> HeaderInfo<'a> {
-    pub fn new(axis: TableAxis, idx: LogIdx, sort: Option<&'a SortSpec>) -> Self {
-        HeaderInfo { axis, idx, sort }
+impl HeaderInfo {
+    pub fn new(axis: TableAxis, level: LogIdx, idx: LogIdx) -> Self {
+        HeaderInfo { axis, level, idx }
     }
 }
 
@@ -69,7 +69,7 @@ impl<'a> HeaderInfo<'a> {
 pub enum CellCtx<'a> {
     Absent,
     Cell(&'a SingleCell),
-    Header(HeaderInfo<'a>),
+    Header(HeaderInfo),
 }
 
 impl<T, CR: DisplayFactory<T>> DisplayFactory<T> for Vec<CR> {
@@ -183,11 +183,8 @@ impl<
     > WidgetCell<MakeLens, Row, Cell>
 {
     pub fn text(make_lens: MakeLens) -> Self {
-        Self::new(
-            |_| RawLabel::new().with_text_color(Color::BLACK),
-            make_lens,
-        )
-        .edit_with(|_| TextBox::new().expand())
+        Self::new(|_| RawLabel::new().with_text_color(Color::BLACK), make_lens)
+            .edit_with(|_| TextBox::new().expand())
     }
 
     pub fn text_configured(
@@ -228,8 +225,8 @@ impl<MakeLens: Fn() -> L, L: Lens<Row, Cell>, Row: Data, Cell: Data> DataCompare
     }
 }
 
-pub struct TableColumn<T, CD> {
-    pub(crate) header: String,
+pub struct TableColumn<H, T, CD> {
+    pub(crate) header: H,
     cell_delegate: CD,
     pub(crate) width: TableColumnWidth,
     pub(crate) sort_order: Option<usize>,
@@ -238,10 +235,13 @@ pub struct TableColumn<T, CD> {
     phantom_: PhantomData<T>,
 }
 
-impl<T: Data, CD: CellDelegate<T>> Debug for TableColumn<T, CD> {
+impl<H: Debug, T: Data, CD: CellDelegate<T>> Debug for TableColumn<H, T, CD> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("TableColumn")
             .field("header", &self.header)
+            .field("sort_order", &self.sort_order)
+            .field("sort_fixed", &self.sort_fixed)
+            .field("sort_dir", &self.sort_dir)
             .finish()
     }
 }
@@ -288,12 +288,12 @@ where
 pub fn column<T: Data, CD: CellDelegate<T> + 'static>(
     header: impl Into<String>,
     cell_delegate: CD,
-) -> TableColumn<T, Box<dyn CellDelegate<T>>> {
+) -> TableColumn<String, T, Box<dyn CellDelegate<T>>> {
     TableColumn::new(header, Box::new(cell_delegate))
 }
 
-impl<T: Data, CD: CellDelegate<T>> TableColumn<T, CD> {
-    pub fn new(header: impl Into<String>, cell_delegate: CD) -> Self {
+impl<Header, T: Data, CD: CellDelegate<T>> TableColumn<Header, T, CD> {
+    pub fn new(header: impl Into<Header>, cell_delegate: CD) -> Self {
         TableColumn {
             header: header.into(),
             cell_delegate,
@@ -321,8 +321,8 @@ impl<T: Data, CD: CellDelegate<T>> TableColumn<T, CD> {
     }
 }
 
-impl<RowData: Data, CR: CellDelegate<RowData>> DisplayFactory<RowData>
-    for TableColumn<RowData, CR>
+impl<Header, RowData: Data, CR: CellDelegate<RowData>> DisplayFactory<RowData>
+    for TableColumn<Header, RowData, CR>
 {
     fn make_display(&self, cell: &CellCtx) -> Option<Box<dyn Widget<RowData>>> {
         self.cell_delegate.make_display(cell)
@@ -333,19 +333,19 @@ impl<RowData: Data, CR: CellDelegate<RowData>> DisplayFactory<RowData>
     }
 }
 
-impl<T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<T, CR> {
+impl<Header, T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<Header, T, CR> {
     fn compare(&self, a: &T, b: &T) -> Ordering {
         self.cell_delegate.compare(a, b)
     }
 }
 
-pub struct ProvidedColumns<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> {
-    cols: Vec<TableColumn<TableData::Item, ColumnType>>,
+pub struct ProvidedColumns<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> {
+    cols: Vec<TableColumn<Header, TableData::Item, ColumnType>>,
     phantom_td: PhantomData<TableData>,
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug
-    for ProvidedColumns<TableData, ColumnType>
+impl<Header: Debug, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug
+    for ProvidedColumns<Header, TableData, ColumnType>
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ProvidedColumns")
@@ -354,19 +354,19 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Debug
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    ProvidedColumns<TableData, ColumnType>
+impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
+    ProvidedColumns<Header, TableData, ColumnType>
 {
-    pub fn new(cols: Vec<TableColumn<TableData::Item, ColumnType>>) -> Self {
+    pub fn new(cols: Vec<TableColumn<Header, TableData::Item, ColumnType>>) -> Self {
         ProvidedColumns {
             cols,
-            phantom_td: Default::default(),
+            phantom_td: PhantomData,
         }
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper<TableData>
-    for ProvidedColumns<TableData, ColumnType>
+impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper<TableData>
+    for ProvidedColumns<Header, TableData, ColumnType>
 {
     fn sort_fixed(&self, idx: usize) -> bool {
         self.cols.get(idx).map(|c| c.sort_fixed).unwrap_or(false)
@@ -376,7 +376,7 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper
         let mut spec = RemapSpec::default();
 
         // Put the columns in sort order
-        let mut in_order: Vec<(usize, &TableColumn<TableData::Item, ColumnType>)> =
+        let mut in_order: Vec<(usize, &TableColumn<Header, TableData::Item, ColumnType>)> =
             self.cols.iter().enumerate().collect();
         in_order.sort_by(|(_, a), (_, b)| match (a.sort_order, b.sort_order) {
             (Some(a), Some(b)) => a.cmp(&b),
@@ -410,25 +410,28 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> Remapper
                         table_data
                             .with(*b_idx, |b_row| {
                                 for SortSpec { idx, direction } in &remap_spec.sort_by {
-                                    let col = self.cols.get(*idx).unwrap();
-                                    let ord = col.compare(a_row, b_row);
-                                    if ord != Ordering::Equal {
-                                        return direction.apply(ord);
+                                    if let Some(col) = self.cols.get(*idx) {
+                                        let ord = col.compare(a_row, b_row);
+                                        if ord != Ordering::Equal {
+                                            return direction.apply(ord);
+                                        }
+                                    } else {
+                                        return Ordering::Less;
                                     }
                                 }
                                 a_idx.0.cmp(&b_idx.0)
                             })
-                            .unwrap()
+                            .unwrap_or(Ordering::Less)
                     })
-                    .unwrap()
+                    .unwrap_or(Ordering::Less)
             });
             Remap::Selected(RemapDetails::make_full(idxs))
         }
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
-    DisplayFactory<TableData::Item> for ProvidedColumns<TableData, ColumnType>
+impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
+    DisplayFactory<TableData::Item> for ProvidedColumns<Header, TableData, ColumnType>
 {
     fn make_display(
         &self,
@@ -442,8 +445,8 @@ impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     }
 }
 
-impl<TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> CellsDelegate<TableData>
-    for ProvidedColumns<TableData, ColumnType>
+impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> CellsDelegate<TableData>
+    for ProvidedColumns<Header, TableData, ColumnType>
 {
     fn data_fields(&self, _data: &TableData) -> usize {
         self.cols.len()

@@ -20,14 +20,16 @@ mod vis;
 pub use axis_measure::{
     AxisMeasure, AxisPair, FixedAxisMeasure, LogIdx, StoredAxisMeasure, TableAxis, VisIdx,
 };
-pub use builder::{AxisMeasurementType, DefaultTableArgs, ShowHeadings, TableBuilder};
+pub use builder::{AxisMeasurementType, ShowHeadings, TableBuilder};
 pub use cells::{Cells, CellsDelegate};
 pub use columns::{column, CellCtx, CellDelegate, DataCompare, DisplayFactory, WidgetCell};
 pub use config::TableConfig;
-pub use data::{IndexedData, RefreshDiffer, Remap, RemapSpec, Remapper, SlowVectorDiffer, SortDirection};
-pub use headings::{HeadersFromIndices, Headings, SuppliedHeaders};
+pub use data::{
+    IndexedData, RefreshDiffer, Remap, RemapSpec, Remapper, SlowVectorDiffer, SortDirection,
+};
+pub use headings::{Headers, HeadersFromIndices, Headings, SuppliedHeaders};
 pub use selection::{IndicesSelection, TableSelection};
-pub use table::{HeaderBuild, Table, TableArgs, TableSelectionProp};
+pub use table::{HeaderBuild, Table, TableSelectionProp};
 pub use vis::{
     AxisName, BandScale, BandScaleFactory, DatumId, DrawableAxis, F64Range, LinearScale, Mark,
     MarkId, MarkOverrides, MarkProps, MarkShape, OffsetSource, SeriesId, StateName, TextMark, Vis,

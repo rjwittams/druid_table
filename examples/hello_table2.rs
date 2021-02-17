@@ -1,9 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use druid_table::{
-    column, AxisMeasurementType, CellDelegate, ShowHeadings, SlowVectorDiffer, SortDirection,
-    Table, TableAxis, TableBuilder, TableSelection, TableSelectionProp, WidgetCell,
-};
+use druid_table::{column, AxisMeasurementType, CellDelegate, ShowHeadings, SlowVectorDiffer, SortDirection, Table, TableAxis, TableBuilder, TableSelection, TableSelectionProp, WidgetCell, CellCtx, LogIdx};
 
 use crate::WordOrder::{SubjectObjectVerb, SubjectVerbObject};
 use druid::im::{vector, Vector};
@@ -13,7 +10,7 @@ use druid::widget::{
     Button, Checkbox, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment, Padding,
     Painter, RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher,
 };
-use druid::Color;
+use druid::{Color, theme};
 use druid::{
     AppLauncher, Data, Env, FontDescriptor, FontFamily, Lens, LensExt, LocalizedString, PaintCtx,
     RenderContext, Widget, WidgetExt, WindowDesc,
@@ -24,6 +21,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::f64::consts::PI;
 use std::fmt;
+use druid::lens::{Identity, Index};
 
 const WINDOW_TITLE: LocalizedString<HelloState> = LocalizedString::new("Hello Table!");
 
@@ -88,30 +86,6 @@ struct HelloState {
     items: Vector<HelloRow>,
     settings: Settings,
     table_selection: TableSelection,
-}
-
-fn pie_cell<Row: Data, MakeLens: Fn() -> L, L: Lens<Row, f64> + 'static>(
-    make_lens: MakeLens,
-) -> impl CellDelegate<Row> {
-    WidgetCell::new_unsorted(
-        |_| {
-            Painter::new(|ctx: &mut PaintCtx, data: &f64, _env: &Env| {
-                let rect = ctx.size().to_rect().inset(-5.);
-                let circle = CircleSegment::new(
-                    rect.center(),
-                    f64::min(rect.height(), rect.width()) / 2.,
-                    0.,
-                    0.,
-                    2. * PI * *data,
-                );
-                ctx.fill(&circle, &Color::rgb8(0x0, 0xFF, 0x0));
-                ctx.stroke(&circle, &Color::BLACK, 1.5);
-            })
-        },
-        make_lens,
-    )
-    .edit_with(|_| Stepper::new().with_range(0.0, 1.0).with_step(0.02))
-    .compare_with(|a, b| f64::partial_cmp(a, b).unwrap_or(Ordering::Equal))
 }
 
 fn build_main_widget() -> impl Widget<HelloState> {
@@ -241,68 +215,29 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
     } else {
         AxisMeasurementType::Individual
     };
-    TableBuilder::new()
+
+    let col_del = WidgetCell::<_, [String;2], _>
+        ::new(|ctx| {
+                  let level = if let CellCtx::Header(h) = ctx {
+                      h.level
+                  }else {
+                      LogIdx(0)
+                  };
+                  RawLabel::new().with_text_color(theme::LABEL_COLOR).lens(Index::new(level.0))
+              },
+              || Identity);
+
+    TableBuilder::new_custom_col(col_del)
         .measuring_axis(TableAxis::Rows, measurement_type)
         .measuring_axis(TableAxis::Columns, measurement_type)
         .headings(settings.show_headings)
         .border(settings.border_thickness)
-        .with_column(
-            "Language",
-            WidgetCell::new(
-                |_| {
-                    RawLabel::new()
-                        .with_font(FontDescriptor::new(FontFamily::SERIF))
-                        .with_text_size(15.)
-                        .with_text_color(Color::BLUE)
-                },
-                || HelloRow::lang,
-            )
-            .compare_with(|a, b| a.len().cmp(&b.len()))
-            .edit_with(|_| TextBox::new()),
-        )
-        .with_column(
-            "Complete",
-            WidgetCell::new(|_| Checkbox::new(""), || HelloRow::complete),
-        )
-        .with_column("Greeting", WidgetCell::text(|| HelloRow::greeting))
-        .with_column(
-            "Westernised",
-            WidgetCell::text_configured(|rl| rl.with_text_size(17.), || HelloRow::westernised),
-        )
-        .with(column("Who knows?", pie_cell(|| HelloRow::who_knows)).sort(SortDirection::Ascending))
-        .with_column(
-            "Word order",
-            WidgetCell::new(
-                |_| {
-                    DropdownSelect::build_widget(vec![
-                        ("Subject Verb Object", SubjectVerbObject),
-                        ("Subject Object Verb", SubjectObjectVerb),
-                    ])
-                },
-                || HelloRow::word_order,
-            ),
-        )
-        .with_column(
-            "Greeting 2 with very long column name",
-            WidgetCell::text_configured(
-                |rl| {
-                    rl.with_font(FontDescriptor::new(FontFamily::new_unchecked(
-                        "Courier New",
-                    )))
-                },
-                || HelloRow::greeting,
-            ),
-        )
-        .with_column(
-            "Greeting 3",
-            WidgetCell::text_configured(
-                |rl| rl.with_text_color(Color::rgb8(0xD0, 0, 0)),
-                || HelloRow::greeting,
-            ),
-        )
-        .with_column("Greeting 4", WidgetCell::text(|| HelloRow::greeting))
-        .with_column("Greeting 5", WidgetCell::text(|| HelloRow::greeting))
-        .diff_with(SlowVectorDiffer::new(|row: &HelloRow| row.lang.clone()))
+        .with_column(["Language".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::lang))
+        .with_column(["Greeting".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
+        .with_column(["Greeting2".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
+        .with_column(["Greeting3".to_string(), "Group2".to_string()], WidgetCell::text(|| HelloRow::greeting))
+        .with_column(["Greeting4".to_string(), "Group2".to_string()], WidgetCell::text(|| HelloRow::greeting))
+        .with_column(["Greeting5".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
         .build()
 }
 

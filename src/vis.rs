@@ -857,7 +857,13 @@ impl<V: Visualization> Widget<V::Input> for Vis<V> {
         }
     }
 
-    fn lifecycle(&mut self, _ctx: &mut LifeCycleCtx, _event: &LifeCycle, _data: &V::Input, _env: &Env) {
+    fn lifecycle(
+        &mut self,
+        _ctx: &mut LifeCycleCtx,
+        _event: &LifeCycle,
+        _data: &V::Input,
+        _env: &Env,
+    ) {
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &V::Input, data: &V::Input, _env: &Env) {

@@ -3,10 +3,9 @@ use crate::columns::{CellDelegate, ProvidedColumns, TableColumn};
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedDataDiffer, RefreshDiffer};
-use crate::headings::{HeadersFromIndices, SuppliedHeaders};
-use crate::table::TableArgs;
+use crate::headings::{HeadersFromIndices, SuppliedHeaders, StaticHeader};
 use crate::{DisplayFactory, HeaderBuild, ReadOnly, Table, WidgetCell};
-use druid::lens::{Identity};
+use druid::lens::Identity;
 use druid::{theme, Data, KeyOrValue};
 use im::Vector;
 use std::marker::PhantomData;
@@ -23,9 +22,9 @@ impl Default for AxisMeasurementType {
     }
 }
 
-pub struct TableBuilder<TableData: IndexedData> {
-    table_columns: Vec<TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
-    column_header_delegate: Box<dyn DisplayFactory<String>>,
+pub struct TableBuilder<ColumnHeader, TableData: IndexedData> {
+    table_columns: Vec<TableColumn<ColumnHeader, TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
+    column_header_delegate: Box<dyn DisplayFactory<ColumnHeader>>,
     row_header_delegate: Box<dyn DisplayFactory<LogIdx>>,
     table_config: TableConfig,
     phantom_td: PhantomData<TableData>,
@@ -34,13 +33,7 @@ pub struct TableBuilder<TableData: IndexedData> {
     differ: Option<Box<dyn IndexedDataDiffer<TableData>>>,
 }
 
-impl<TableData: IndexedData> Default for TableBuilder<TableData> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Data, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Data, Ord, PartialOrd, Eq, PartialEq)]
 pub enum ShowHeadings {
     Both,
     One(TableAxis),
@@ -57,15 +50,8 @@ impl ShowHeadings {
     }
 }
 
-pub type DefaultTableArgs<TableData> = TableArgs<
-    TableData,
-    HeaderBuild<HeadersFromIndices<TableData>>,
-    HeaderBuild<SuppliedHeaders<Vector<String>, TableData>>,
-    ProvidedColumns<TableData, Box<dyn CellDelegate<<TableData as IndexedData>::Item>>>,
->;
-
-impl<TableData: IndexedData> TableBuilder<TableData> {
-    pub fn new() -> TableBuilder<TableData> {
+impl<TableData: IndexedData> TableBuilder<String, TableData> {
+    pub fn new() -> Self {
         TableBuilder {
             table_columns: Vec::new(),
             row_header_delegate: Box::new(WidgetCell::text_configured(
@@ -86,7 +72,31 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
             differ: None,
         }
     }
+}
 
+impl<ColumnHeader, TableData: IndexedData> TableBuilder<ColumnHeader, TableData> {
+    pub fn new_custom_col(column_header_delegate: impl DisplayFactory<ColumnHeader> + 'static) -> Self {
+        TableBuilder {
+            table_columns: Vec::new(),
+            row_header_delegate: Box::new(WidgetCell::text_configured(
+                |rl| rl.with_text_color(theme::LABEL_COLOR),
+                || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
+            )),
+            column_header_delegate: Box::new(column_header_delegate),
+            table_config: TableConfig::new(),
+            phantom_td: PhantomData::default(),
+            show_headings: ShowHeadings::Both,
+            measurements: AxisPair::new(
+                AxisMeasurementType::Individual,
+                AxisMeasurementType::Individual,
+            ),
+            differ: None,
+        }
+    }
+}
+
+
+impl<Header: Data, TableData: IndexedData> TableBuilder<Header, TableData> {
     pub fn diff_with(mut self, differ: impl IndexedDataDiffer<TableData> + 'static) -> Self {
         self.differ = Some(Box::new(differ));
         self
@@ -104,7 +114,7 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
 
     pub fn with(
         mut self,
-        col: TableColumn<TableData::Item, Box<dyn CellDelegate<TableData::Item>>>,
+        col: TableColumn<Header, TableData::Item, Box<dyn CellDelegate<TableData::Item>>>,
     ) -> Self {
         self.table_columns.push(col);
         self
@@ -112,7 +122,7 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
 
     pub fn with_column<CD: CellDelegate<TableData::Item> + 'static>(
         mut self,
-        header: impl Into<String>,
+        header: impl Into<Header>,
         cell_delegate: CD,
     ) -> Self {
         self.add_column(header, cell_delegate);
@@ -121,7 +131,7 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
 
     pub fn add_column<CD: CellDelegate<TableData::Item> + 'static>(
         &mut self,
-        header: impl Into<String>,
+        header: impl Into<Header>,
         cell_render: CD,
     ) {
         self.table_columns
@@ -144,39 +154,39 @@ impl<TableData: IndexedData> TableBuilder<TableData> {
         )
     }
 
-    fn build_args(self) -> DefaultTableArgs<TableData> {
-        let column_headers: Vector<String> = self
-            .table_columns
-            .iter()
-            .map(|tc| tc.header.clone())
-            .collect();
+    pub fn build(mut self) -> Table<TableData> where Header : StaticHeader {
+        let measures = self.build_measures();
+        let Self {
+            show_headings,
+            table_columns,
+            row_header_delegate,
+            column_header_delegate,
+            differ,
+            table_config,
+            ..
+        } = self;
 
-        let row_build = if_opt!(
-            self.show_headings.should_show(&TableAxis::Rows),
-            HeaderBuild::new(
-                HeadersFromIndices::<TableData>::new(),
-                self.row_header_delegate,
-            )
-        );
-        let col_build = if_opt!(
-            self.show_headings.should_show(&TableAxis::Columns),
-            HeaderBuild::new(
-                SuppliedHeaders::new(column_headers),
-                self.column_header_delegate,
-            )
-        );
+        let column_headers: Vector<_> = table_columns.iter().map(|tc| tc.header.clone()).collect();
 
-        TableArgs::new(
-            ProvidedColumns::new(self.table_columns),
+        let row_build = show_headings.should_show(&TableAxis::Rows).then(|| {
+            HeaderBuild::new(
+                HeadersFromIndices::default(),
+                row_header_delegate,
+            )
+        });
+
+        let col_build = show_headings.should_show(&TableAxis::Columns).then(|| {
+            HeaderBuild::new(SuppliedHeaders::new(column_headers), column_header_delegate)
+        });
+
+        let differ = differ.unwrap_or(Box::new(RefreshDiffer));
+        Table::new(
+            ProvidedColumns::new(table_columns),
             row_build,
             col_build,
-            self.table_config,
+            table_config,
+            measures,
+            differ,
         )
-    }
-
-    pub fn build(mut self) -> Table<TableData> {
-        let measures = self.build_measures();
-        let differ = self.differ.take().unwrap_or(Box::new(RefreshDiffer));
-        Table::new(self.build_args(), measures, differ)
     }
 }

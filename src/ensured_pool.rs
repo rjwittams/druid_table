@@ -23,8 +23,8 @@ impl<K: Hash + Eq, V> Default for EnsuredPool<K, V> {
 }
 
 impl<K: Hash + Eq + Clone, V> EnsuredPool<K, V> {
-    pub fn with_load_factor(self, load_factor: f64)->Self{
-        Self{
+    pub fn with_load_factor(self, load_factor: f64) -> Self {
+        Self {
             load_factor,
             ..self
         }
@@ -46,7 +46,7 @@ impl<K: Hash + Eq + Clone, V> EnsuredPool<K, V> {
                 added += 1;
                 make(entry)
             });
-            self.lru.push(key, now );
+            self.lru.push(key, now);
         }
 
         let max_items = (self.load_factor * (ensured as f64)).floor() as isize;
@@ -87,43 +87,53 @@ impl<K: Hash + Eq + Clone, V> EnsuredPool<K, V> {
         self.items.iter_mut()
     }
 
-    pub fn len(&self)->usize{
+    pub fn len(&self) -> usize {
         self.items.len()
     }
 }
 
 #[cfg(test)]
-mod test{
+mod test {
     use crate::ensured_pool::EnsuredPool;
-    use std::collections::HashSet;
     use itertools::Itertools;
+    use std::collections::HashSet;
 
     #[test]
-    fn test_ensured_pool(){
+    fn test_ensured_pool() {
         let mut pool: EnsuredPool<usize, String> = EnsuredPool::default().with_load_factor(2.);
 
-        pool.ensure(1..=5, |i|i , |i|i.to_string());
+        pool.ensure(1..=5, |i| i, |i| i.to_string());
 
         assert_eq!(5, pool.len());
 
         assert_eq!(pool.get(&3).expect("present"), &"3".to_string());
 
-        pool.ensure(6..=10, |i|i, |i|i.to_string());
+        pool.ensure(6..=10, |i| i, |i| i.to_string());
 
         assert_eq!(10, pool.len());
 
-        let keys: Vec<_> = pool.entries().map(|(k, v)| k).copied().sorted().collect_vec();
+        let keys: Vec<_> = pool
+            .entries()
+            .map(|(k, v)| k)
+            .copied()
+            .sorted()
+            .collect_vec();
 
         assert_eq!((1..=10).collect_vec(), keys);
 
-        pool.ensure(100..=105, |i|i, |i|i.to_string());
+        pool.ensure(100..=105, |i| i, |i| i.to_string());
 
-        let keys: Vec<_> = pool.entries().map(|(k, v)| k).copied().sorted().collect_vec();
+        let keys: Vec<_> = pool
+            .entries()
+            .map(|(k, v)| k)
+            .copied()
+            .sorted()
+            .collect_vec();
         assert_eq!(12, keys.len());
         let (chance, retained) = keys.split_at(1);
 
         assert_eq!((6..=10).chain(100..=105).collect_vec(), retained.to_vec());
 
-        assert!(chance.iter().all(|x|*x<6));
+        assert!(chance.iter().all(|x| *x < 6));
     }
 }

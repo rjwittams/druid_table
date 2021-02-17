@@ -1028,10 +1028,10 @@ mod test {
     use crate::{Mark, VisMarks};
     use druid_widget_nursery::animation::AnimationEvent::Ended;
     use druid_widget_nursery::animation::{AnimationEvent, AnimationId, Animator};
+    use simple_logger::SimpleLogger;
     use std::mem::size_of;
     use std::num::NonZeroU32;
     use std::time::Duration;
-    use simple_logger::SimpleLogger;
 
     #[test]
     fn test_merge() {

@@ -1,4 +1,4 @@
-use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableArgs, TableConfig, WidgetCell, RefreshDiffer};
+use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, RefreshDiffer, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableConfig, WidgetCell, Headers};
 
 use core::fmt;
 use druid::lens::Map;
@@ -6,6 +6,8 @@ use druid::{AppLauncher, Color, Data, Env, Event, EventCtx, PaintCtx, Widget, Wi
 use druid_table::numbers_table::LogIdxTable;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use druid_bindings::BindableProperty;
+use std::cmp::Ordering;
 
 #[macro_use]
 extern crate log;
@@ -29,6 +31,16 @@ where
     inner: CR,
     columns: usize,
     phantom_td: PhantomData<TableData>,
+}
+
+impl Headers for BigTableCols {
+    fn header_levels(&self) -> usize {
+        1
+    }
+
+    fn header_compare(&self, level: LogIdx, a: &Self::Item, b: &Self::Item) -> Ordering {
+        a.cmp(b)
+    }
 }
 
 impl<TableData: IndexedData, CR: DisplayFactory<TableData::Item>> Debug
@@ -114,19 +126,18 @@ impl<RowData: Data, CR: DisplayFactory<RowData>, TableData: IndexedData<Item = R
 
 fn build_root_widget() -> Table<LogIdxTable> {
     let table_config = TableConfig::new();
+    let num_columns = 1_000_000_000;
 
     let rows = HeaderBuild::new(
-        HeadersFromIndices::new(),
+        HeadersFromIndices::default(),
         Box::new(WidgetCell::text_configured(
             |rl| rl.with_text_color(Color::WHITE),
             || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
         )),
     );
 
-    let columns = 1_000_000_000;
-    let headers = BigTableCols::new(columns);
     let cols = HeaderBuild::new(
-        SuppliedHeaders::new(headers),
+        SuppliedHeaders::new(BigTableCols::new(num_columns)),
         Box::new(WidgetCell::text_configured(
             |rl| rl.with_text_color(Color::WHITE),
             || ReadOnly::new(|br: &LogIdx| br.0.to_string()),
@@ -138,17 +149,15 @@ fn build_root_widget() -> Table<LogIdxTable> {
         AxisMeasure::new(AxisMeasurementType::Uniform, 100.),
     );
     Table::new(
-        TableArgs::new(
-            BigTableCells::new(
-                WidgetCell::text(|| ReadOnly::new(|br: &LogIdx| br.0.to_string())),
-                columns,
-            ),
-            Some(rows),
-            Some(cols),
-            table_config,
+        BigTableCells::new(
+            WidgetCell::text(|| ReadOnly::new(|br: &LogIdx| br.0.to_string())),
+            num_columns,
         ),
+        Some(rows),
+        Some(cols),
+        table_config,
         measures,
-        Box::new(RefreshDiffer)
+        Box::new(RefreshDiffer),
     )
 }
 

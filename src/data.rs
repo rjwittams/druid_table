@@ -16,12 +16,25 @@ pub trait IndexedData: Data {
     type Item: Data;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
+    fn get_clone(&self, idx: LogIdx)->Option<Self::Item>{
+        self.with(idx, |item|item.clone())
+    }
+
     fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V>;
     // Seems advisable not to clash with len
     fn data_len(&self) -> usize;
 
     fn is_empty(&self) -> bool {
         self.data_len() == 0
+    }
+}
+
+#[derive(Debug)]
+pub struct PartialEqData<T: Data>(pub T);
+
+impl <T: Data> PartialEq for PartialEqData<T>{
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same(&other.0)
     }
 }
 
@@ -220,6 +233,7 @@ impl Remap {
 #[derive(Debug, Data, Clone)]
 pub enum Remap {
     Pristine(usize),
+    Reversed(usize),
     Selected(RemapDetails),
     Internal, // This indicates that the source data has done the remapping, ie no wrapper required. Eg sort in db.
               //  need some token to give back to the table rows
@@ -229,6 +243,7 @@ impl Remap {
     pub fn get_log_idx(&self, vis_idx: VisIdx) -> Option<LogIdx> {
         match self {
             Remap::Selected(v) => v.get_log_idx(vis_idx),
+            Remap::Reversed(len) => (vis_idx.0 >= 0).then(||LogIdx(len - vis_idx.0 - 1)),
             _ => Some(LogIdx(vis_idx.0)), // Dunno if right for internal
         }
     }
@@ -236,6 +251,7 @@ impl Remap {
     pub fn get_vis_idx(&self, log_idx: LogIdx) -> Option<VisIdx> {
         match self {
             Remap::Selected(v) => v.get_vis_idx(log_idx),
+            Remap::Reversed(len) => (log_idx.0 >= 0).then(||VisIdx(len - log_idx.0 - 1)),
             _ => Some(VisIdx(log_idx.0)),
         }
     }
@@ -349,21 +365,23 @@ mod test {
     fn test_slow_vec_differ() {
         let differ = SlowVectorDiffer::new(|s: &(char, usize)| s.0);
 
-        let diff = differ.diff(
-            &vec![('A', 1usize), ('B', 2), ('C', 3), ('D', 5), ('T', 23)]
+        let diff = differ
+            .diff(
+                &vec![('A', 1usize), ('B', 2), ('C', 3), ('D', 5), ('T', 23)]
+                    .into_iter()
+                    .collect(),
+                &vec![
+                    ('A', 1usize),
+                    ('B', 10),
+                    ('Z', 23),
+                    ('I', 13),
+                    ('D', 5),
+                    ('T', 12),
+                ]
                 .into_iter()
                 .collect(),
-            &vec![
-                ('A', 1usize),
-                ('B', 10),
-                ('Z', 23),
-                ('I', 13),
-                ('D', 5),
-                ('T', 12),
-            ]
-            .into_iter()
-            .collect(),
-        ).expect("diff exists");
+            )
+            .expect("diff exists");
 
         assert_eq!(
             IndexedDataDiff::new(vec![

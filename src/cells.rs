@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use druid::widget::prelude::*;
 use druid::{
-    BoxConstraints, Data, Env, Event, EventCtx, InternalLifeCycle, KbKey, LayoutCtx,
-    LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
+    BoxConstraints, Data, Env, Event, EventCtx, InternalLifeCycle, KbKey, LayoutCtx, LifeCycle,
+    LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetPod,
 };
 
 use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisOffset};
@@ -14,7 +14,7 @@ use crate::data::{IndexedData, Remapper};
 use crate::ensured_pool::EnsuredPool;
 use crate::render_ext::RenderContextExt;
 use crate::selection::{CellDemap, CellRect, SingleCell, TableSelection};
-use crate::table::{TableState, PixelRange};
+use crate::table::{PixelRange, TableState};
 use crate::{Remap, RemapSpec};
 use druid_bindings::{bindable_self_body, BindableAccess};
 
@@ -146,7 +146,7 @@ pub struct Cells<TableData: IndexedData> {
     phantom_td: PhantomData<TableData>,
 }
 
-fn override_rect(mut pix_rect: Rect, pix_ranges: AxisPair<Option<&PixelRange>>)->Rect{
+fn override_rect(mut pix_rect: Rect, pix_ranges: AxisPair<Option<&PixelRange>>) -> Rect {
     if let Some(ov) = pix_ranges[TableAxis::Rows] {
         pix_rect.y0 = ov.p_0;
         pix_rect.y1 = ov.p_1;
@@ -201,7 +201,7 @@ impl<TableData: IndexedData> Cells<TableData> {
         for vis in rect.cells() {
             if let Some(log) = data.remaps.get_log_cell(&vis) {
                 data.table_data.with(log.row, |row| {
-                    let overridden = data.overrides.measure.zip_with(&log, |m, k|m.get(k));
+                    let overridden = data.overrides.measure.zip_with(&log, |m, k| m.get(k));
                     if let Some(pix_rect) = data.measures.pixel_rect_for_cell(vis) {
                         let pix_rect = override_rect(pix_rect, overridden);
                         let padded_rect = pix_rect.inset(-rtc.cell_padding);
@@ -243,7 +243,7 @@ impl<TableData: IndexedData> Cells<TableData> {
             }
         }
 
-        if let Some(focus) = selected.focus{
+        if let Some(focus) = selected.focus {
             if let Some(pixel_rect) = CellRect::point(focus).to_pixel_rect(&data.measures) {
                 ctx.stroke(
                     pixel_rect,
@@ -410,9 +410,9 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
                 let overrides = &mut data.overrides;
                 let interp = &mut *interp_guard;
                 anim_guard.advance_by(*nanos as f64, move |anim_ctx| {
-                     if let Err(e) = interp.interp(anim_ctx, overrides){
-                         log::warn!("Issue animating table {:?}", e)
-                     }
+                    if let Err(e) = interp.interp(anim_ctx, overrides) {
+                        log::warn!("Issue animating table {:?}", e)
+                    }
                 });
 
                 ctx.request_layout();

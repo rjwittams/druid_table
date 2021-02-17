@@ -1,17 +1,14 @@
-use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset};
+use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset, PixelLengths};
 use crate::cells::CellsDelegate;
 use crate::config::ResolvedTableConfig;
 use crate::data::{IndexedDataDiff, IndexedDataDiffer, IndexedDataOp, RemapDetails};
 use crate::headings::HeadersFromData;
-use crate::interp::{
-    EnterExit, HasInterp, Interp, InterpCoverage, InterpNode, InterpResult
-};
+use crate::interp::{EnterExit, HasInterp, Interp, InterpCoverage, InterpNode, InterpResult};
 use crate::selection::{CellDemap, SingleCell};
-use crate::{
-    Cells, DisplayFactory, Headings, IndexedData, LogIdx, Remap, RemapSpec, Remapper, TableConfig,
-    TableSelection, VisIdx,
+use crate::{Cells, DisplayFactory, Headings, IndexedData, LogIdx, Remap, RemapSpec, Remapper, TableConfig, TableSelection, VisIdx, AxisMeasurementType};
+use druid::widget::{
+    Axis, ClipBox, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll,
 };
-use druid::widget::{Axis, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LensExt, LifeCycle, LifeCycleCtx,
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetPod,
@@ -24,19 +21,16 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-
-pub struct HeaderBuild<
-    HeadersSource: HeadersFromData + 'static
-> {
+pub struct HeaderBuild<HeadersSource: HeadersFromData + 'static> {
     source: HeadersSource,
     render: Box<dyn DisplayFactory<HeadersSource::Header>>,
 }
 
-impl<
-        HeadersSource: HeadersFromData + 'static
-    > HeaderBuild<HeadersSource>
-{
-    pub fn new(source: HeadersSource, render: Box<dyn DisplayFactory<HeadersSource::Header>>) -> Self {
+impl<HeadersSource: HeadersFromData + 'static> HeaderBuild<HeadersSource> {
+    pub fn new(
+        source: HeadersSource,
+        render: Box<dyn DisplayFactory<HeadersSource::Header>>,
+    ) -> Self {
         HeaderBuild { source, render }
     }
 }
@@ -52,78 +46,19 @@ pub trait HeaderBuildT {
     fn content(self) -> (Self::HeadersSource, Box<dyn DisplayFactory<Self::Header>>);
 }
 
-impl<
-        HeadersSource: HeadersFromData + 'static
-    > HeaderBuildT for HeaderBuild<HeadersSource>
-{
+impl<HeadersSource: HeadersFromData + 'static> HeaderBuildT for HeaderBuild<HeadersSource> {
     type TableData = HeadersSource::TableData;
     type Header = HeadersSource::Header;
     type Headers = HeadersSource::Headers;
     type HeadersSource = HeadersSource;
 
-    fn content(self) -> (Self::HeadersSource, Box<dyn DisplayFactory<HeadersSource::Header>>) {
+    fn content(
+        self,
+    ) -> (
+        Self::HeadersSource,
+        Box<dyn DisplayFactory<HeadersSource::Header>>,
+    ) {
         (self.source, self.render)
-    }
-}
-
-pub struct TableArgs<
-    TableData: IndexedData,
-    RowH: HeaderBuildT<TableData = TableData>,
-    ColH: HeaderBuildT<TableData = TableData>,
-    CellsDel: CellsDelegate<TableData> + 'static,
-> {
-    cells_delegate: CellsDel,
-    row_h: Option<RowH>,
-    col_h: Option<ColH>,
-    table_config: TableConfig,
-}
-
-impl<
-        TableData: IndexedData,
-        RowH: HeaderBuildT<TableData = TableData>,
-        ColH: HeaderBuildT<TableData = TableData>,
-        CellsDel: CellsDelegate<TableData> + 'static,
-    > TableArgs<TableData, RowH, ColH, CellsDel>
-{
-    pub fn new(
-        cells_delegate: CellsDel,
-        row_h: Option<RowH>,
-        col_h: Option<ColH>,
-        table_config: TableConfig,
-    ) -> Self {
-        TableArgs {
-            cells_delegate,
-            row_h,
-            col_h,
-            table_config,
-        }
-    }
-}
-
-// This trait exists to move type parameters to associated types
-pub trait TableArgsT {
-    type TableData: IndexedData;
-    type RowH: HeaderBuildT<TableData = Self::TableData>;
-    type ColH: HeaderBuildT<TableData = Self::TableData>;
-
-    type CellsDel: CellsDelegate<Self::TableData> + 'static;
-    fn content(self) -> TableArgs<Self::TableData, Self::RowH, Self::ColH, Self::CellsDel>;
-}
-
-impl<
-        TableData: IndexedData,
-        RowH: HeaderBuildT<TableData = TableData>,
-        ColH: HeaderBuildT<TableData = TableData>,
-        CellsDel: CellsDelegate<TableData> + 'static,
-    > TableArgsT for TableArgs<TableData, RowH, ColH, CellsDel>
-{
-    type TableData = TableData;
-    type RowH = RowH;
-    type ColH = ColH;
-    type CellsDel = CellsDel;
-
-    fn content(self) -> TableArgs<TableData, RowH, ColH, CellsDel> {
-        self
     }
 }
 
@@ -135,7 +70,10 @@ pub struct PixelRange {
 
 impl PixelRange {
     pub fn new(p_0: f64, p_1: f64) -> Self {
-        PixelRange { p_0: p_0.min(p_1), p_1: p_0.max(p_1) }
+        PixelRange {
+            p_0: p_0.min(p_1),
+            p_1: p_0.max(p_1),
+        }
     }
 
     pub fn move_to(&mut self, p_0: f64) {
@@ -145,7 +83,7 @@ impl PixelRange {
         log::info!("Move px range {:?}", (diff, self.p_0, self.p_1))
     }
 
-    pub fn extent(&self)->f64{
+    pub fn extent(&self) -> f64 {
         self.p_1 - self.p_0
     }
 }
@@ -263,15 +201,14 @@ impl Interp for TableOverridesInterp {
 #[derive(Data, Clone, Lens)]
 pub(crate) struct TableState<TableData> {
     pub(crate) table_data: TableData,
-    pub(crate) input_instant: Instant,
     pub(crate) scroll_rect: Rect,
     pub(crate) config: TableConfig,
     pub(crate) resolved_config: ResolvedTableConfig,
     pub(crate) remap_specs: AxisPair<RemapSpec>,
     pub(crate) remaps: AxisPair<Remap>,
+    pub(crate) measures: AxisPair<AxisMeasure>,
     pub(crate) selection: TableSelection,
-    #[data(ignore)]
-    pub(crate) measures: AxisPair<AxisMeasure>, // TODO
+
     pub(crate) cells_del: Arc<dyn CellsDelegate<TableData>>,
     pub(crate) last_diff: Option<IndexedDataDiff>,
     #[data(ignore)]
@@ -289,12 +226,13 @@ impl<TableData: IndexedData> TableState<TableData> {
         measures: AxisPair<AxisMeasure>,
         cells_del: Arc<dyn CellsDelegate<TableData>>,
     ) -> Self {
+
+
         let mut state = TableState {
             scroll_rect: Rect::ZERO,
             config,
             resolved_config,
             table_data: data,
-            input_instant: Instant::now(),
             remap_specs: AxisPair::new(cells_del.initial_spec(), RemapSpec::default()),
             remaps: AxisPair::new(Remap::default(), Remap::default()),
             selection: TableSelection::default(),
@@ -360,7 +298,7 @@ impl<TableData: IndexedData> TableState<TableData> {
         VisIdx::range_inc_iter(from, to)
     }
 
-    pub(crate) fn log_idx_visible_for_axis(
+    pub(crate) fn log_idx_in_visible_order_for_axis(
         &self,
         axis: TableAxis,
     ) -> impl Iterator<Item = LogIdx> + '_ {
@@ -453,9 +391,7 @@ type TableChild<TableData> = WidgetPod<
     Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
 >;
 
-pub struct Table<TableData: IndexedData> {
-    child: TableChild<TableData>,
-}
+
 
 struct TableScopePolicy<TableData> {
     config: TableConfig,
@@ -525,7 +461,6 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
         if !input.same(&state.table_data) {
             log::info!("Actually wrote table data to TableState");
             state.table_data = input.clone();
-            state.input_instant = Instant::now();
         }
     }
 
@@ -535,7 +470,12 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
         }
     }
 
-    fn update_computed(&self, old_state: &Self::State, state: &mut Self::State, _env: &Env) -> bool {
+    fn update_computed(
+        &self,
+        old_state: &Self::State,
+        state: &mut Self::State,
+        _env: &Env,
+    ) -> bool {
         log::info!(
             "Update computed TableScope data changed:{}",
             !old_state.same(state)
@@ -568,8 +508,7 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
                             if let Some(px) =
                                 state.measures[TableAxis::Rows].pix_range_from_vis(old_vis_idx)
                             {
-                                start_table_overrides.measure[TableAxis::Rows]
-                                    .insert(log_idx, px);
+                                start_table_overrides.measure[TableAxis::Rows].insert(log_idx, px);
                             }
                         }
                     }
@@ -670,103 +609,168 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
     }
 }
 
+type LayoutChild<T> = WidgetPod<T, Box<dyn Widget<T>>>;
+
+struct TableLayout<T>{
+    cells: LayoutChild<T>,
+    headers: AxisPair<Option<LayoutChild<T>>>
+}
+
+impl<T> TableLayout<T> {
+    pub fn new(cells: LayoutChild<T>, headers: AxisPair<Option<LayoutChild<T>>>) -> Self {
+        TableLayout { cells, headers }
+    }
+
+    fn for_each(&mut self, mut f: impl FnMut(&mut LayoutChild<T>)){
+        f(&mut self.cells);
+        self.headers.for_each_mut(|_, opt|{
+            if let Some(w) = opt{
+                f(w)
+            }
+        })
+    }
+}
+
+impl <T: Data> Widget<T> for TableLayout<T>{
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        self.for_each(|c|c.event(ctx, event, data, env));
+    }
+
+    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &T, env: &Env) {
+        self.for_each(|c|c.lifecycle(ctx,event, data, env))
+    }
+
+    fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
+        self.for_each(|c|c.update(ctx, data, env))
+    }
+
+    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
+        let loosened_bc = &bc.loosen();
+        let header_sizes = self.headers.map_mut(|table_axis, header_w|{
+            let min_major = 0.;
+            let major = std::f64::INFINITY;
+
+            let child_bc = match table_axis {
+                TableAxis::Rows => BoxConstraints::new(
+                    Size::new(min_major, bc.min().height),
+                    Size::new(major, bc.max().height),
+                ),
+                TableAxis::Columns => BoxConstraints::new(
+                    Size::new(bc.min().width, min_major),
+                    Size::new(bc.max().width, major),
+                ),
+            };
+
+            if let Some(w) = header_w {
+                w.layout(ctx, &child_bc, data, env)
+            }else{
+                Size::ZERO
+            }
+        });
+        let corner = Size::new(header_sizes.row.width, header_sizes.col.height);
+        let corner_point = Point::new(corner.width, corner.height);
+
+        self.headers.for_each_mut(|t_axis, header_w|{
+            if let Some(w) = header_w{
+                let (main, _) = t_axis.pixels_from_point( &corner_point);
+                w.set_origin(ctx, data, env, t_axis.coords(main, 0.).into() )
+            }
+        });
+
+        let (min, max) = (loosened_bc.min(), loosened_bc.max());
+        let cells_bc = BoxConstraints::new(
+            (min - corner).clamp(Size::ZERO, min),
+            max - corner
+        );
+
+        let cells_size = self.cells.layout(ctx, &cells_bc, data, env);
+        self.cells.set_origin(ctx, data, env, corner_point);
+
+        cells_size + corner
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
+        self.for_each(|c|c.paint(ctx, data, env))
+    }
+}
+
+pub struct Table<TableData: IndexedData> {
+    child: TableChild<TableData>,
+}
+
 impl<TableData: IndexedData> Table<TableData> {
-    pub fn new<Args: TableArgsT<TableData = TableData> + 'static>(
-        args: Args,
+    pub fn new<RowH, ColH, CellsDel>(
+        cells_delegate: CellsDel,
+        row_h: Option<RowH>,
+        col_h: Option<ColH>,
+        table_config: TableConfig,
         measures: AxisPair<AxisMeasure>,
         differ: Box<dyn IndexedDataDiffer<TableData>>,
-    ) -> Self {
+    ) -> Self
+    where
+        RowH: HeaderBuildT<TableData = TableData>,
+        ColH: HeaderBuildT<TableData = TableData>,
+        CellsDel: CellsDelegate<TableData> + 'static,
+    {
         Table {
-            child: Table::build_child(args, measures, differ),
+            child: Table::build_child(cells_delegate, row_h, col_h, table_config, measures, differ),
         }
     }
 
-    fn build_child<Args: TableArgsT<TableData = TableData> + 'static>(
-        args_t: Args,
+    fn build_child<RowH, ColH, CellsDel>(
+        cells_delegate: CellsDel,
+        row_h: Option<RowH>,
+        col_h: Option<ColH>,
+        table_config: TableConfig,
         measures: AxisPair<AxisMeasure>,
         differ: Box<dyn IndexedDataDiffer<TableData>>,
-    ) -> TableChild<TableData> {
-        let args = args_t.content();
-        let table_config = args.table_config;
+    ) -> TableChild<TableData>
+        where
+            RowH: HeaderBuildT<TableData = TableData>,
+            ColH: HeaderBuildT<TableData = TableData>,
+            CellsDel: CellsDelegate<TableData> + 'static
+    {
 
-        let cells_delegate = args.cells_delegate;
-        let cells = Cells::new();
+        let cells = WidgetPod::new(
+            Scroll::new(Cells::new())
+                .binding(TableState::scroll_rect.bind(ReadScrollRectProperty::default()))
+                .boxed()
+        );
 
-        let cells_scroll =
-            Scroll::new(cells).binding(TableState::scroll_rect.bind(ScrollRectProperty::default()));
+        let row = row_h.map(|hb|{
+            let (source, render) = hb.content();
+            let row_headings = Headings::new(TableAxis::Rows, source, Box::new(render), false);
 
+            let row_scroll = ClipBox::new(row_headings).binding(
+                TableState::<TableData>::scroll_rect
+                    .then(lens!(Rect, y0))
+                    .bind(AxisPositionProperty::new(Axis::Vertical)),
+            );
+            WidgetPod::new(row_scroll.boxed())
+        });
+
+        let col = col_h.map(|cb|{
+            let (source, render) = cb.content();
+
+            let col_headings = Headings::new(TableAxis::Columns, source, Box::new(render), true);
+            let ch_scroll = ClipBox::new(col_headings).binding(
+                TableState::<TableData>::scroll_rect
+                    .then(lens!(Rect, x0))
+                    .bind(AxisPositionProperty::new(Axis::Horizontal)),
+            );
+            WidgetPod::new(ch_scroll.boxed())
+        });
+
+        let headers = AxisPair::new(row, col);
+
+        let tl = TableLayout::new(cells, headers);
         let policy = TableScopePolicy::new(
             table_config.clone(),
             measures,
             Arc::new(cells_delegate),
             differ,
         );
-        Self::add_headings(args.col_h, args.row_h, policy, table_config, cells_scroll)
-    }
-
-    fn add_headings<
-        ColH: HeaderBuildT<TableData = TableData>,
-        RowH: HeaderBuildT<TableData = TableData>,
-    >(
-        col_h: Option<ColH>,
-        row_h: Option<RowH>,
-        policy: TableScopePolicy<TableData>,
-        table_config: TableConfig,
-        widget: impl Widget<TableState<TableData>> + 'static,
-    ) -> TableChild<TableData> {
-        if let Some(col_h) = col_h {
-            let (source, render) = col_h.content();
-
-            let col_headings = Headings::new(TableAxis::Columns, source, Box::new(render), true);
-            let ch_scroll = Scroll::new(col_headings).disable_scrollbars().binding(
-                TableState::<TableData>::scroll_rect
-                    .then(lens!(Rect, x0))
-                    .bind(ScrollToProperty::new(Axis::Horizontal)),
-            );
-
-            let cells_column = Flex::column()
-                .cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(ch_scroll)
-                .with_flex_child(widget, 1.);
-            Self::add_row_headings(policy, table_config, true, row_h, cells_column)
-        } else {
-            Self::add_row_headings(policy, table_config, false, row_h, widget)
-        }
-    }
-
-    fn add_row_headings<RowH: HeaderBuildT<TableData = TableData>>(
-        policy: TableScopePolicy<TableData>,
-        table_config: TableConfig,
-        corner_needed: bool,
-        row_h: Option<RowH>,
-        widget: impl Widget<TableState<TableData>> + 'static,
-    ) -> TableChild<TableData> {
-        if let Some(row_h) = row_h {
-            let (source, render) = row_h.content();
-            let row_headings = Headings::new(TableAxis::Rows, source, Box::new(render), false);
-
-            let row_scroll = Scroll::new(row_headings).disable_scrollbars().binding(
-                TableState::<TableData>::scroll_rect
-                    .then(lens!(Rect, y0))
-                    .bind(ScrollToProperty::new(Axis::Vertical)),
-            );
-
-            let mut rh_col = Flex::column().cross_axis_alignment(CrossAxisAlignment::Start);
-            if corner_needed {
-                rh_col.add_spacer(table_config.col_header_height.clone())
-            }
-            rh_col.add_flex_child(row_scroll, 1.);
-
-            let row = Flex::row()
-                .cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(rh_col)
-                .with_flex_child(widget, 1.)
-                .center();
-
-            Self::wrap_in_scope(policy, row)
-        } else {
-            Self::wrap_in_scope(policy, widget)
-        }
+        Self::wrap_in_scope(policy, tl)
     }
 
     fn wrap_in_scope<W: Widget<TableState<TableData>> + 'static>(
