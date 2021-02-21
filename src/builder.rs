@@ -3,7 +3,7 @@ use crate::columns::{CellDelegate, ProvidedColumns, TableColumn};
 use crate::axis_measure::{AxisMeasure, AxisPair, LogIdx, TableAxis};
 use crate::config::TableConfig;
 use crate::data::{IndexedData, IndexedDataDiffer, RefreshDiffer};
-use crate::headings::{HeadersFromIndices, SuppliedHeaders, StaticHeader};
+use crate::headings::{HeadersFromIndices, StaticHeader, SuppliedHeaders};
 use crate::{DisplayFactory, HeaderBuild, ReadOnly, Table, WidgetCell};
 use druid::lens::Identity;
 use druid::{theme, Data, KeyOrValue};
@@ -23,7 +23,8 @@ impl Default for AxisMeasurementType {
 }
 
 pub struct TableBuilder<ColumnHeader, TableData: IndexedData> {
-    table_columns: Vec<TableColumn<ColumnHeader, TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
+    table_columns:
+        Vec<TableColumn<ColumnHeader, TableData::Item, Box<dyn CellDelegate<TableData::Item>>>>,
     column_header_delegate: Box<dyn DisplayFactory<ColumnHeader>>,
     row_header_delegate: Box<dyn DisplayFactory<LogIdx>>,
     table_config: TableConfig,
@@ -75,7 +76,9 @@ impl<TableData: IndexedData> TableBuilder<String, TableData> {
 }
 
 impl<ColumnHeader, TableData: IndexedData> TableBuilder<ColumnHeader, TableData> {
-    pub fn new_custom_col(column_header_delegate: impl DisplayFactory<ColumnHeader> + 'static) -> Self {
+    pub fn new_custom_col(
+        column_header_delegate: impl DisplayFactory<ColumnHeader> + 'static,
+    ) -> Self {
         TableBuilder {
             table_columns: Vec::new(),
             row_header_delegate: Box::new(WidgetCell::text_configured(
@@ -94,7 +97,6 @@ impl<ColumnHeader, TableData: IndexedData> TableBuilder<ColumnHeader, TableData>
         }
     }
 }
-
 
 impl<Header: Data, TableData: IndexedData> TableBuilder<Header, TableData> {
     pub fn diff_with(mut self, differ: impl IndexedDataDiffer<TableData> + 'static) -> Self {
@@ -154,7 +156,10 @@ impl<Header: Data, TableData: IndexedData> TableBuilder<Header, TableData> {
         )
     }
 
-    pub fn build(mut self) -> Table<TableData> where Header : StaticHeader {
+    pub fn build(self) -> Table<TableData>
+    where
+        Header: StaticHeader,
+    {
         let measures = self.build_measures();
         let Self {
             show_headings,
@@ -168,12 +173,9 @@ impl<Header: Data, TableData: IndexedData> TableBuilder<Header, TableData> {
 
         let column_headers: Vector<_> = table_columns.iter().map(|tc| tc.header.clone()).collect();
 
-        let row_build = show_headings.should_show(&TableAxis::Rows).then(|| {
-            HeaderBuild::new(
-                HeadersFromIndices::default(),
-                row_header_delegate,
-            )
-        });
+        let row_build = show_headings
+            .should_show(&TableAxis::Rows)
+            .then(|| HeaderBuild::new(HeadersFromIndices::default(), row_header_delegate));
 
         let col_build = show_headings.should_show(&TableAxis::Columns).then(|| {
             HeaderBuild::new(SuppliedHeaders::new(column_headers), column_header_delegate)

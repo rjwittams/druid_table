@@ -1,27 +1,24 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use druid_table::{column, AxisMeasurementType, CellDelegate, ShowHeadings, SlowVectorDiffer, SortDirection, Table, TableAxis, TableBuilder, TableSelection, TableSelectionProp, WidgetCell, CellCtx, LogIdx};
+use druid_table::{
+    AxisMeasurementType, CellCtx, LogIdx, ShowHeadings, Table, TableAxis, TableBuilder,
+    TableSelection, TableSelectionProp, WidgetCell,
+};
 
-use crate::WordOrder::{SubjectObjectVerb, SubjectVerbObject};
 use druid::im::{vector, Vector};
-use druid::kurbo::CircleSegment;
+use druid::lens::{Identity, Index};
 use druid::theme::PLACEHOLDER_COLOR;
 use druid::widget::{
     Button, Checkbox, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment, Padding,
-    Painter, RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher,
+    RadioGroup, RawLabel, SizedBox, Stepper, ViewSwitcher,
 };
-use druid::{Color, theme};
+use druid::{theme, Color};
 use druid::{
-    AppLauncher, Data, Env, FontDescriptor, FontFamily, Lens, LensExt, LocalizedString, PaintCtx,
-    RenderContext, Widget, WidgetExt, WindowDesc,
+    AppLauncher, Data, Env, Lens, LensExt, LocalizedString, Widget, WidgetExt, WindowDesc,
 };
 use druid_bindings::*;
-use druid_widget_nursery::DropdownSelect;
 use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::f64::consts::PI;
 use std::fmt;
-use druid::lens::{Identity, Index};
 
 const WINDOW_TITLE: LocalizedString<HelloState> = LocalizedString::new("Hello Table!");
 
@@ -216,28 +213,49 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
         AxisMeasurementType::Individual
     };
 
-    let col_del = WidgetCell::<_, [String;2], _>
-        ::new(|ctx| {
-                  let level = if let CellCtx::Header(h) = ctx {
-                      h.level
-                  }else {
-                      LogIdx(0)
-                  };
-                  RawLabel::new().with_text_color(theme::LABEL_COLOR).lens(Index::new(level.0))
-              },
-              || Identity);
+    let col_del = WidgetCell::<_, [String; 2], _>::new(
+        |ctx| {
+            let level = if let CellCtx::Header(h) = ctx {
+                h.level
+            } else {
+                LogIdx(0)
+            };
+            RawLabel::new()
+                .with_text_color(theme::LABEL_COLOR)
+                .lens(Index::new(level.0))
+        },
+        || Identity,
+    );
 
     TableBuilder::new_custom_col(col_del)
         .measuring_axis(TableAxis::Rows, measurement_type)
         .measuring_axis(TableAxis::Columns, measurement_type)
         .headings(settings.show_headings)
         .border(settings.border_thickness)
-        .with_column(["Language".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::lang))
-        .with_column(["Greeting".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
-        .with_column(["Greeting2".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
-        .with_column(["Greeting3".to_string(), "Group2".to_string()], WidgetCell::text(|| HelloRow::greeting))
-        .with_column(["Greeting4".to_string(), "Group2".to_string()], WidgetCell::text(|| HelloRow::greeting))
-        .with_column(["Greeting5".to_string(), "Group".to_string()], WidgetCell::text(|| HelloRow::greeting))
+        .with_column(
+            ["Language".to_string(), "Group".to_string()],
+            WidgetCell::text(|| HelloRow::lang),
+        )
+        .with_column(
+            ["Greeting".to_string(), "Group".to_string()],
+            WidgetCell::text(|| HelloRow::greeting),
+        )
+        .with_column(
+            ["Greeting2".to_string(), "Group".to_string()],
+            WidgetCell::text(|| HelloRow::greeting),
+        )
+        .with_column(
+            ["Greeting3".to_string(), "Group2".to_string()],
+            WidgetCell::text(|| HelloRow::greeting),
+        )
+        .with_column(
+            ["Greeting4".to_string(), "Group2".to_string()],
+            WidgetCell::text(|| HelloRow::greeting),
+        )
+        .with_column(
+            ["Greeting5".to_string(), "Group".to_string()],
+            WidgetCell::text(|| HelloRow::greeting),
+        )
         .build()
 }
 

@@ -10,9 +10,12 @@ edition = "2018"
 #druid = {git = "https://github.com/linebender/druid", features=["im"] }
 #druid-widget-nursery = {git = "https://github.com/linebender/druid-widget-nursery"}
 #druid_bindings = { git = "https://github.com/rjwittams/druid_bindings"}
-druid = {path = "../druid/druid", features=["im"]}
-druid_bindings = {path = "../druid_bindings"}
-druid-widget-nursery = {path = "../druid-widget-nursery"}
+druid = {git = "https://github.com/rjwittams/druid/", branch="scope-fiddling", features=["im"]}
+druid_bindings = {git = "https://github.com/rjwittams/druid_bindings/", branch="more-bindings"}
+druid-widget-nursery = {git = "https://github.com/rjwittams/druid-widget-nursery/", branch="dynamic-layout-big"}
+#druid = {path = "../druid/druid", features=["im"]}
+#druid_bindings = {path = "../druid_bindings"}
+#druid-widget-nursery = {path = "../druid-widget-nursery"}
 priority-queue = {version = "1.0.5"}
 im = { version = "15.0.0"}
 log = "0.4.8"

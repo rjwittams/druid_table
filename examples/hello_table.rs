@@ -13,11 +13,11 @@ use druid::widget::{
     Button, Checkbox, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment, Padding,
     Painter, RadioGroup, RawLabel, SizedBox, Stepper, TextBox, ViewSwitcher,
 };
-use druid::Color;
 use druid::{
     AppLauncher, Data, Env, FontDescriptor, FontFamily, Lens, LensExt, LocalizedString, PaintCtx,
     RenderContext, Widget, WidgetExt, WindowDesc,
 };
+use druid::{Color, MenuDesc};
 use druid_bindings::*;
 use druid_widget_nursery::DropdownSelect;
 use std::cell::RefCell;
@@ -209,9 +209,9 @@ fn build_main_widget() -> impl Widget<HelloState> {
             let table = build_table(sh.clone()).lens(HelloState::items);
             table
                 .binding(
-                    HelloState::table_selection
-                        .bind(TableSelectionProp::default())
-                        .back(),
+                    TableSelectionProp::default()
+                        .read()
+                        .with(HelloState::table_selection),
                 )
                 .boxed()
         },
@@ -306,11 +306,33 @@ fn build_table(settings: Settings) -> Table<Vector<HelloRow>> {
         .build()
 }
 
+pub fn menu<T: Data>() -> MenuDesc<T> {
+    let mut base = MenuDesc::empty();
+    #[cfg(target_os = "macos")]
+    {
+        base = base.append(druid::platform_menus::mac::application::default())
+    }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        base = base.append(druid::platform_menus::win::file::default());
+    }
+    base.append(
+        MenuDesc::new(LocalizedString::new("common-menu-edit-menu"))
+            .append(druid::platform_menus::common::undo())
+            .append(druid::platform_menus::common::redo())
+            .append_separator()
+            .append(druid::platform_menus::common::cut().disabled())
+            .append(druid::platform_menus::common::copy())
+            .append(druid::platform_menus::common::paste()),
+    )
+}
+
 pub fn main() {
     use WordOrder::*;
 
     // describe the main window
     let main_window = WindowDesc::new(build_main_widget())
+        .menu(menu())
         .title(WINDOW_TITLE)
         .window_size((1100.0, 500.0));
 

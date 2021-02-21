@@ -7,7 +7,7 @@ mod cells;
 mod columns;
 mod config;
 mod data;
-mod ensured_pool;
+pub mod ensured_pool;
 mod headings;
 mod interp;
 mod lens;

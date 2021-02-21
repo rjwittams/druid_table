@@ -1,7 +1,7 @@
 use crate::axis_measure::LogIdx;
+use crate::headings::Headers;
 use crate::IndexedData;
 use druid::{Data, Lens};
-use crate::headings::Headers;
 use std::cmp::Ordering;
 
 #[derive(Debug, Data, Clone, Lens)]
@@ -34,12 +34,12 @@ impl IndexedData for LogIdxTable {
     }
 }
 
-impl Headers for LogIdxTable{
+impl Headers for LogIdxTable {
     fn header_levels(&self) -> usize {
         1
     }
 
-    fn header_compare(&self, level: LogIdx, a: &Self::Item, b: &Self::Item) -> Ordering {
+    fn header_compare(&self, _level: LogIdx, a: &Self::Item, b: &Self::Item) -> Ordering {
         a.cmp(b)
     }
 }

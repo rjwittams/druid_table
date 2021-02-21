@@ -1,4 +1,4 @@
-use crate::axis_measure::{AxisPair, LogIdx, TableAxis, VisIdx, VisOffset, PixelLengths};
+use crate::axis_measure::{AxisPair, LogIdx, PixelLengths, TableAxis, VisIdx, VisOffset};
 use crate::AxisMeasure;
 use druid::kurbo::{Point, Rect, Size};
 use std::fmt::Debug;
@@ -40,7 +40,10 @@ impl<T> AxisPair<T> {
     }
 
     pub fn map_mut<O>(&mut self, mut f: impl FnMut(TableAxis, &mut T) -> O) -> AxisPair<O> {
-        AxisPair::new(f(TableAxis::Rows, &mut self.row), f(TableAxis::Columns, &mut self.col))
+        AxisPair::new(
+            f(TableAxis::Rows, &mut self.row),
+            f(TableAxis::Columns, &mut self.col),
+        )
     }
 
     pub fn zip_with<'a, 'b, 'c, O: Debug + 'c, U: Debug>(
@@ -394,13 +397,18 @@ impl TableSelection {
         res
     }
 
-    pub fn extend_in_axis(&mut self, axis: TableAxis, vis: VisIdx, cell_demap: &impl CellDemap) {
+    pub fn extend_in_axis(
+        &mut self,
+        axis: TableAxis,
+        vis: (VisIdx, VisIdx),
+        cell_demap: &impl CellDemap,
+    ) {
         if let Some(focus) = self.focus() {
-            let vis_addr = AxisPair::new_for_axis(axis, vis, Default::default());
-
+            let vis_addr = AxisPair::new_for_axis(axis, vis.0, Default::default());
+            // Todo: work out furthest away from focus out of vis.0 and vis.1
             if let Some(log_addr) = cell_demap.get_log_cell(&vis_addr) {
                 *self = TableSelection::SliceRange(SliceRange {
-                    axis: axis.clone(),
+                    axis,
                     range: CellRange::new(focus.clone(), SingleCell::new(vis_addr, log_addr)),
                 })
             }
@@ -409,13 +417,29 @@ impl TableSelection {
         }
     }
 
-    pub fn select_in_axis(&mut self, axis: TableAxis, vis: VisIdx, cell_demap: &impl CellDemap) {
-        let vis_addr = AxisPair::new_for_axis(axis, vis, Default::default());
+    pub fn select_in_axis(
+        &mut self,
+        axis: TableAxis,
+        vis: (VisIdx, VisIdx),
+        cell_demap: &impl CellDemap,
+    ) {
+        let vis_addr = AxisPair::new_for_axis(axis, vis.0, Default::default());
         if let Some(log_addr) = cell_demap.get_log_cell(&vis_addr) {
-            *self = TableSelection::SingleSlice(SingleSlice::new(
-                axis,
-                SingleCell::new(vis_addr, log_addr),
-            ))
+            let focus = SingleCell::new(vis_addr, log_addr);
+            if vis.0 == vis.1 {
+                *self = TableSelection::SingleSlice(SingleSlice::new(
+                    axis,
+                    SingleCell::new(vis_addr, log_addr),
+                ))
+            } else {
+                let ex_vis_addr = AxisPair::new_for_axis(axis, vis.1, Default::default());
+                if let Some(ex_log_addr) = cell_demap.get_log_cell(&ex_vis_addr) {
+                    *self = TableSelection::SliceRange(SliceRange {
+                        axis,
+                        range: CellRange::new(focus, SingleCell::new(ex_vis_addr, ex_log_addr)),
+                    })
+                }
+            }
         }
     }
 

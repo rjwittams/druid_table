@@ -1,13 +1,17 @@
-use druid_table::{AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory, HeaderBuild, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, RefreshDiffer, Remap, RemapSpec, Remapper, SuppliedHeaders, Table, TableConfig, WidgetCell, Headers};
+use druid_table::{
+    AxisMeasure, AxisMeasurementType, AxisPair, CellCtx, CellsDelegate, DisplayFactory,
+    HeaderBuild, Headers, HeadersFromIndices, IndexedData, LogIdx, ReadOnly, RefreshDiffer, Remap,
+    RemapSpec, Remapper, SuppliedHeaders, Table, TableConfig, WidgetCell,
+};
 
 use core::fmt;
 use druid::lens::Map;
 use druid::{AppLauncher, Color, Data, Env, Event, EventCtx, PaintCtx, Widget, WindowDesc};
+use druid_bindings::Property;
 use druid_table::numbers_table::LogIdxTable;
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use druid_bindings::BindableProperty;
-use std::cmp::Ordering;
 
 #[macro_use]
 extern crate log;

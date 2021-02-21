@@ -8,6 +8,7 @@ use druid_widget_nursery::animation::{AnimationCtx, AnimationId};
 use float_ord::FloatOrd;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
@@ -15,7 +16,6 @@ use std::ops::{Add, Sub};
 use std::rc::Rc;
 use AxisMeasureInner::*;
 use TableAxis::*;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Data, Ord, PartialOrd)]
 pub enum TableAxis {
@@ -139,7 +139,7 @@ impl TableAxis {
     pub fn pixels_from_point(&self, point: &Point) -> (f64, f64) {
         match self {
             Rows => (point.y, point.x),
-            Columns => (point.x, point.y)
+            Columns => (point.x, point.y),
         }
     }
 
@@ -375,11 +375,9 @@ impl AxisMeasure {
             Stored(s) => s.borrow().can_resize(idx),
         }
     }
-
-
 }
 
-pub trait PixelLengths{
+pub trait PixelLengths {
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64>;
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64>;
 
@@ -401,7 +399,7 @@ pub trait PixelLengths{
                 self.first_pixel_from_vis(idx)?,
                 self.far_pixel_from_vis(idx + span)?,
             ))
-        }else{
+        } else {
             None
         }
     }
@@ -417,11 +415,9 @@ trait AxisMeasureT: PixelLengths {
 
     fn set_axis_properties(&mut self, border: f64, len: usize, remap: &Remap) -> bool;
     fn set_far_pixel_for_vis(&mut self, idx: VisIdx, pixel: f64, remap: &Remap) -> bool;
-
-
 }
 
-impl PixelLengths for AxisMeasure{
+impl PixelLengths for AxisMeasure {
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         AxisMeasure::first_pixel_from_vis(self, idx)
     }
@@ -480,7 +476,7 @@ impl FixedAxisMeasure {
 
 const MOUSE_MOVE_EPSILON: f64 = 3.;
 
-impl PixelLengths for FixedAxisMeasure{
+impl PixelLengths for FixedAxisMeasure {
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         if idx.0 < self.len {
             Some((idx.0 as f64) * self.full_pixels_per_unit())
@@ -504,11 +500,11 @@ impl AxisMeasureT for FixedAxisMeasure {
     }
 
     fn total_pixel_length(&self) -> f64 {
-        self.full_pixels_per_unit() * (self.len as f64)
+        self.full_pixels_per_unit() * (self.len as f64) + self.border
     }
 
     fn vis_idx_from_pixel(&self, pixel: f64) -> Option<VisIdx> {
-        let index = (pixel / self.full_pixels_per_unit()).floor() as usize;
+        let index = ((pixel - self.border) / self.full_pixels_per_unit()).floor() as usize;
         if index < self.len {
             Some(VisIdx(index))
         } else {
@@ -572,11 +568,14 @@ impl StoredAxisMeasure {
     }
 
     fn refresh(&mut self, remap: &Remap) {
-        let mut pixels_so_far = 0.;
+        let mut pixels_so_far = self.border;
         self.first_pixels.clear();
-        for vis_idx in
-            VisIdx::range_inc_iter(VisIdx(0), remap.max_vis_idx(self.log_pix_lengths.len()))
-        {
+
+        if self.log_pix_lengths.len() != remap.max_vis_idx().0 + 1 {
+            dbg!(remap);
+        }
+
+        for vis_idx in VisIdx::range_inc_iter(VisIdx(0), remap.max_vis_idx()) {
             if let Some(log_idx) = remap.get_log_idx(vis_idx) {
                 self.first_pixels.push(FloatOrd(pixels_so_far));
                 pixels_so_far += self.log_pix_lengths[log_idx.0] + self.border;
@@ -587,7 +586,7 @@ impl StoredAxisMeasure {
     }
 }
 
-impl PixelLengths for StoredAxisMeasure{
+impl PixelLengths for StoredAxisMeasure {
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
         self.first_pixels.get(idx.0).map(|f| f.0)
     }
@@ -660,29 +659,34 @@ impl AxisMeasureT for StoredAxisMeasure {
     }
 }
 
-pub(crate) struct OverriddenPixelLengths<'a,'b, 'c, PL> {
+pub(crate) struct OverriddenPixelLengths<'a, 'b, 'c, PL> {
     und: &'a PL,
     remap: &'b Remap,
-    overrides: &'c HashMap<LogIdx, PixelRange>
+    overrides: &'c HashMap<LogIdx, PixelRange>,
 }
 
 impl<'a, 'b, 'c, PL> OverriddenPixelLengths<'a, 'b, 'c, PL> {
     pub fn new(und: &'a PL, remap: &'b Remap, overrides: &'c HashMap<LogIdx, PixelRange>) -> Self {
-        OverriddenPixelLengths { und, remap, overrides }
+        OverriddenPixelLengths {
+            und,
+            remap,
+            overrides,
+        }
     }
 }
 
-
-impl <'a,'b,'c, PL: PixelLengths>  PixelLengths for OverriddenPixelLengths<'a,'b, 'c, PL>{
+impl<'a, 'b, 'c, PL: PixelLengths> PixelLengths for OverriddenPixelLengths<'a, 'b, 'c, PL> {
     fn first_pixel_from_vis(&self, idx: VisIdx) -> Option<f64> {
-        self.remap.get_log_idx(idx)
-            .and_then(|log| self.overrides.get(&log).map(|ov|ov.p_0))
+        self.remap
+            .get_log_idx(idx)
+            .and_then(|log| self.overrides.get(&log).map(|ov| ov.p_0))
             .or_else(|| self.und.first_pixel_from_vis(idx))
     }
 
     fn pixels_length_for_vis(&self, idx: VisIdx) -> Option<f64> {
-        self.remap.get_log_idx(idx)
-            .and_then(|log| self.overrides.get(&log).map(|ov|ov.extent()))
+        self.remap
+            .get_log_idx(idx)
+            .and_then(|log| self.overrides.get(&log).map(|ov| ov.extent()))
             .or_else(|| self.und.pixels_length_for_vis(idx))
     }
 }

@@ -1,14 +1,15 @@
-use crate::axis_measure::{AxisMeasure, AxisPair, TableAxis, VisOffset, PixelLengths};
+use crate::axis_measure::{AxisMeasure, AxisPair, PixelLengths, TableAxis, VisOffset};
 use crate::cells::CellsDelegate;
 use crate::config::ResolvedTableConfig;
 use crate::data::{IndexedDataDiff, IndexedDataDiffer, IndexedDataOp, RemapDetails};
 use crate::headings::HeadersFromData;
 use crate::interp::{EnterExit, HasInterp, Interp, InterpCoverage, InterpNode, InterpResult};
 use crate::selection::{CellDemap, SingleCell};
-use crate::{Cells, DisplayFactory, Headings, IndexedData, LogIdx, Remap, RemapSpec, Remapper, TableConfig, TableSelection, VisIdx, AxisMeasurementType};
-use druid::widget::{
-    Axis, ClipBox, CrossAxisAlignment, Flex, Scope, ScopePolicy, ScopeTransfer, Scroll,
+use crate::{
+    Cells, DisplayFactory, Headings, IndexedData, LogIdx, Remap, RemapSpec, Remapper, TableConfig,
+    TableSelection, VisIdx,
 };
+use druid::widget::{Axis, ClipBox, Scope, ScopePolicy, ScopeTransfer, Scroll};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LensExt, LifeCycle, LifeCycleCtx,
     PaintCtx, Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetPod,
@@ -18,8 +19,9 @@ use druid_widget_nursery::animation::{AnimationCtx, AnimationId, Animator, Simpl
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::net::Shutdown::Read;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 pub struct HeaderBuild<HeadersSource: HeadersFromData + 'static> {
     source: HeadersSource,
@@ -226,7 +228,10 @@ impl<TableData: IndexedData> TableState<TableData> {
         measures: AxisPair<AxisMeasure>,
         cells_del: Arc<dyn CellsDelegate<TableData>>,
     ) -> Self {
-
+        let remaps = AxisPair::new(
+            Remap::Pristine(data.data_len()),
+            Remap::Pristine(cells_del.data_fields(&data)),
+        );
 
         let mut state = TableState {
             scroll_rect: Rect::ZERO,
@@ -234,7 +239,7 @@ impl<TableData: IndexedData> TableState<TableData> {
             resolved_config,
             table_data: data,
             remap_specs: AxisPair::new(cells_del.initial_spec(), RemapSpec::default()),
-            remaps: AxisPair::new(Remap::default(), Remap::default()),
+            remaps,
             selection: TableSelection::default(),
             measures,
             cells_del,
@@ -305,6 +310,15 @@ impl<TableData: IndexedData> TableState<TableData> {
         let remap = &self.remaps[axis];
         self.vis_idx_visible_for_axis(axis)
             .flat_map(move |vis| remap.get_log_idx(vis))
+    }
+
+    pub(crate) fn log_and_vis_idx_for_axis(
+        &self,
+        axis: TableAxis,
+    ) -> impl Iterator<Item = (LogIdx, VisIdx)> + '_ {
+        let remap = &self.remaps[axis];
+        self.vis_idx_visible_for_axis(axis)
+            .flat_map(move |vis| remap.get_log_idx(vis).map(|log| (log, vis)))
     }
 
     pub fn explicit_header_move(
@@ -390,8 +404,6 @@ type TableChild<TableData> = WidgetPod<
     TableData,
     Scope<TableScopePolicy<TableData>, Box<dyn Widget<TableState<TableData>>>>,
 >;
-
-
 
 struct TableScopePolicy<TableData> {
     config: TableConfig,
@@ -611,9 +623,9 @@ impl<TableData: IndexedData> ScopeTransfer for TableScopeTransfer<TableData> {
 
 type LayoutChild<T> = WidgetPod<T, Box<dyn Widget<T>>>;
 
-struct TableLayout<T>{
+struct TableLayout<T> {
     cells: LayoutChild<T>,
-    headers: AxisPair<Option<LayoutChild<T>>>
+    headers: AxisPair<Option<LayoutChild<T>>>,
 }
 
 impl<T> TableLayout<T> {
@@ -621,76 +633,77 @@ impl<T> TableLayout<T> {
         TableLayout { cells, headers }
     }
 
-    fn for_each(&mut self, mut f: impl FnMut(&mut LayoutChild<T>)){
+    fn for_each(&mut self, mut f: impl FnMut(&mut LayoutChild<T>)) {
         f(&mut self.cells);
-        self.headers.for_each_mut(|_, opt|{
-            if let Some(w) = opt{
+        self.headers.for_each_mut(|_, opt| {
+            if let Some(w) = opt {
                 f(w)
             }
         })
     }
 }
 
-impl <T: Data> Widget<T> for TableLayout<T>{
+impl<T: Data> Widget<T> for TableLayout<T> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
-        self.for_each(|c|c.event(ctx, event, data, env));
+        self.for_each(|c| c.event(ctx, event, data, env));
     }
 
     fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, data: &T, env: &Env) {
-        self.for_each(|c|c.lifecycle(ctx,event, data, env))
+        self.for_each(|c| c.lifecycle(ctx, event, data, env))
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
-        self.for_each(|c|c.update(ctx, data, env))
+        self.for_each(|c| c.update(ctx, data, env))
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
-        let loosened_bc = &bc.loosen();
-        let header_sizes = self.headers.map_mut(|table_axis, header_w|{
-            let min_major = 0.;
-            let major = std::f64::INFINITY;
+        // Assume that the current row header width is what it will be given.
+        // This is to avoid shrinking one of the header clip boxes which will screw up its pan position.
+        // This is slightly dodgy afaict but in practice converges
+        let cur_row_h_width = self
+            .headers
+            .row
+            .as_ref()
+            .map_or(0., |w| w.layout_rect().width());
 
-            let child_bc = match table_axis {
-                TableAxis::Rows => BoxConstraints::new(
-                    Size::new(min_major, bc.min().height),
-                    Size::new(major, bc.max().height),
-                ),
-                TableAxis::Columns => BoxConstraints::new(
-                    Size::new(bc.min().width, min_major),
-                    Size::new(bc.max().width, major),
-                ),
-            };
+        let bc = &bc.loosen();
+        dbg!(&bc);
+        let bc = bc.shrink(Size::new(cur_row_h_width, 0.));
 
-            if let Some(w) = header_w {
-                w.layout(ctx, &child_bc, data, env)
-            }else{
-                Size::ZERO
-            }
-        });
-        let corner = Size::new(header_sizes.row.width, header_sizes.col.height);
+        let col_size = if let Some(w) = &mut self.headers.col {
+            w.layout(ctx, &bc, data, env)
+        } else {
+            Size::ZERO
+        };
+        dbg!(&col_size);
+
+        let bc = bc.shrink(Size::new(0., col_size.height));
+        dbg!(&bc);
+        let row_size = if let Some(w) = &mut self.headers.row {
+            w.layout(ctx, &bc, data, env)
+        } else {
+            Size::ZERO
+        };
+        dbg!(&row_size);
+
+        let corner = Size::new(row_size.width, col_size.height);
         let corner_point = Point::new(corner.width, corner.height);
 
-        self.headers.for_each_mut(|t_axis, header_w|{
-            if let Some(w) = header_w{
-                let (main, _) = t_axis.pixels_from_point( &corner_point);
-                w.set_origin(ctx, data, env, t_axis.coords(main, 0.).into() )
+        self.headers.for_each_mut(|t_axis, header_w| {
+            if let Some(w) = header_w {
+                let (main, _) = t_axis.pixels_from_point(&corner_point);
+                w.set_origin(ctx, data, env, t_axis.coords(main, 0.).into())
             }
         });
 
-        let (min, max) = (loosened_bc.min(), loosened_bc.max());
-        let cells_bc = BoxConstraints::new(
-            (min - corner).clamp(Size::ZERO, min),
-            max - corner
-        );
-
-        let cells_size = self.cells.layout(ctx, &cells_bc, data, env);
+        let cells_size = self.cells.layout(ctx, &bc, data, env);
         self.cells.set_origin(ctx, data, env, corner_point);
-
+        dbg!(&cells_size);
         cells_size + corner
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
-        self.for_each(|c|c.paint(ctx, data, env))
+        self.for_each(|c| c.paint(ctx, data, env))
     }
 }
 
@@ -725,38 +738,35 @@ impl<TableData: IndexedData> Table<TableData> {
         measures: AxisPair<AxisMeasure>,
         differ: Box<dyn IndexedDataDiffer<TableData>>,
     ) -> TableChild<TableData>
-        where
-            RowH: HeaderBuildT<TableData = TableData>,
-            ColH: HeaderBuildT<TableData = TableData>,
-            CellsDel: CellsDelegate<TableData> + 'static
+    where
+        RowH: HeaderBuildT<TableData = TableData>,
+        ColH: HeaderBuildT<TableData = TableData>,
+        CellsDel: CellsDelegate<TableData> + 'static,
     {
-
         let cells = WidgetPod::new(
             Scroll::new(Cells::new())
-                .binding(TableState::scroll_rect.bind(ReadScrollRectProperty::default()))
-                .boxed()
+                .binding(ReadScrollRect::PROP.with(TableState::scroll_rect))
+                .boxed(),
         );
 
-        let row = row_h.map(|hb|{
+        let row = row_h.map(|hb| {
             let (source, render) = hb.content();
             let row_headings = Headings::new(TableAxis::Rows, source, Box::new(render), false);
 
             let row_scroll = ClipBox::new(row_headings).binding(
-                TableState::<TableData>::scroll_rect
-                    .then(lens!(Rect, y0))
-                    .bind(AxisPositionProperty::new(Axis::Vertical)),
+                AxisPositionProperty::VERTICAL
+                    .with(TableState::<TableData>::scroll_rect.then(lens!(Rect, y0))),
             );
             WidgetPod::new(row_scroll.boxed())
         });
 
-        let col = col_h.map(|cb|{
+        let col = col_h.map(|cb| {
             let (source, render) = cb.content();
 
             let col_headings = Headings::new(TableAxis::Columns, source, Box::new(render), true);
             let ch_scroll = ClipBox::new(col_headings).binding(
-                TableState::<TableData>::scroll_rect
-                    .then(lens!(Rect, x0))
-                    .bind(AxisPositionProperty::new(Axis::Horizontal)),
+                AxisPositionProperty::HORIZONTAL
+                    .with(TableState::<TableData>::scroll_rect.then(lens!(Rect, x0))),
             );
             WidgetPod::new(ch_scroll.boxed())
         });
@@ -854,10 +864,11 @@ impl<TableData> Default for TableSelectionProp<TableData> {
     }
 }
 
-impl<TableData: IndexedData> BindableProperty for TableSelectionProp<TableData> {
+impl<TableData: IndexedData> Property for TableSelectionProp<TableData> {
     type Controlled = Table<TableData>;
     type Value = TableSelection;
     type Change = ();
+    type Requests = ();
 
     fn write_prop(
         &self,
@@ -888,10 +899,22 @@ impl<TableData: IndexedData> BindableProperty for TableSelectionProp<TableData> 
     fn update_data_from_change(
         &self,
         controlled: &Self::Controlled,
-        _ctx: &EventCtx,
+        _ctx: &mut EventCtx,
         field: &mut Self::Value,
         _change: Self::Change,
         _env: &Env,
+    ) {
+        if let Some(s) = controlled.state() {
+            *field = s.selection.clone()
+        }
+    }
+
+    fn initialise_data(
+        &self,
+        controlled: &Self::Controlled,
+        ctx: &mut EventCtx,
+        field: &mut Self::Value,
+        env: &Env,
     ) {
         if let Some(s) = controlled.state() {
             *field = s.selection.clone()

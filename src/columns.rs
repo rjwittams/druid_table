@@ -339,7 +339,11 @@ impl<Header, T: Data, CR: CellDelegate<T>> DataCompare<T> for TableColumn<Header
     }
 }
 
-pub struct ProvidedColumns<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> {
+pub struct ProvidedColumns<
+    Header,
+    TableData: IndexedData,
+    ColumnType: CellDelegate<TableData::Item>,
+> {
     cols: Vec<TableColumn<Header, TableData::Item, ColumnType>>,
     phantom_td: PhantomData<TableData>,
 }
@@ -445,8 +449,8 @@ impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
     }
 }
 
-impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>> CellsDelegate<TableData>
-    for ProvidedColumns<Header, TableData, ColumnType>
+impl<Header, TableData: IndexedData, ColumnType: CellDelegate<TableData::Item>>
+    CellsDelegate<TableData> for ProvidedColumns<Header, TableData, ColumnType>
 {
     fn data_fields(&self, _data: &TableData) -> usize {
         self.cols.len()

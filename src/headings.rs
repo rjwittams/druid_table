@@ -6,24 +6,26 @@ use druid::{
     LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, Size, UpdateCtx, WidgetPod,
 };
 
-use crate::axis_measure::{AxisMeasure, LogIdx, TableAxis, VisIdx, VisOffset, PixelLengths, OverriddenPixelLengths};
+use crate::axis_measure::{
+    AxisMeasure, LogIdx, OverriddenPixelLengths, PixelLengths, TableAxis, VisIdx, VisOffset,
+};
 use crate::columns::{CellCtx, DisplayFactory, HeaderInfo};
-use crate::data::{SortSpec, PartialEqData};
+use crate::data::SortSpec;
 use crate::ensured_pool::EnsuredPool;
 use crate::numbers_table::LogIdxTable;
 use crate::render_ext::RenderContextExt;
 use crate::table::{PixelRange, TableState};
-use crate::{IndexedData, Remap, SortDirection, AxisMeasurementType};
+use crate::{AxisMeasurementType, IndexedData, Remap, SortDirection};
 use druid::kurbo::PathEl;
 use druid_bindings::{bindable_self_body, BindableAccess};
-use std::collections::HashMap;
 use im::Vector;
 use itertools::Itertools;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 pub trait StaticHeader {
-    fn header_levels()->usize;
-    fn header_compare(level: LogIdx, a: &Self, b: &Self)->Ordering;
+    fn header_levels() -> usize;
+    fn header_compare(level: LogIdx, a: &Self, b: &Self) -> Ordering;
 }
 
 impl StaticHeader for String {
@@ -31,13 +33,13 @@ impl StaticHeader for String {
         1
     }
 
-    fn header_compare(level: LogIdx, a: &Self, b: &Self) -> Ordering {
+    fn header_compare(_level: LogIdx, a: &Self, b: &Self) -> Ordering {
         a.cmp(b)
     }
 }
 
 // min const generics where are you
-impl <T: Ord> StaticHeader for [T;2] {
+impl<T: Ord> StaticHeader for [T; 2] {
     fn header_levels() -> usize {
         2
     }
@@ -48,12 +50,12 @@ impl <T: Ord> StaticHeader for [T;2] {
     }
 }
 
-pub trait Headers: IndexedData{
-    fn header_levels(&self)->usize;
-    fn header_compare(&self, level: LogIdx, a: &Self::Item, b: &Self::Item)->Ordering;
+pub trait Headers: IndexedData {
+    fn header_levels(&self) -> usize;
+    fn header_compare(&self, level: LogIdx, a: &Self::Item, b: &Self::Item) -> Ordering;
 }
 
-impl <H : StaticHeader + Data> Headers for Vector<H>{
+impl<H: StaticHeader + Data> Headers for Vector<H> {
     fn header_levels(&self) -> usize {
         H::header_levels()
     }
@@ -84,9 +86,7 @@ impl<Headers, TableData> SuppliedHeaders<Headers, TableData> {
     }
 }
 
-impl<H: Headers, TableData: IndexedData> HeadersFromData
-    for SuppliedHeaders<H, TableData>
-{
+impl<H: Headers, TableData: IndexedData> HeadersFromData for SuppliedHeaders<H, TableData> {
     type TableData = TableData;
     type Header = H::Item;
     type Headers = H;
@@ -150,23 +150,24 @@ impl HeaderMoving {
     }
 }
 
-struct Resolved<Headers>{
+struct Resolved<Headers> {
     headers: Headers,
     level_remap: Remap,
     level_measure: AxisMeasure,
-    visible_headings: Vec<((LogIdx, LogIdx), usize)> // ((level, field), field_span)
+    cell_starts: Vec<Vec<VisIdx>>, // first vec indexed by log level, second is header idxs in vis order
+    visible_headers: Vec<((LogIdx, LogIdx), VisOffset)>, // ((level, field), header_span)
 }
 
 #[derive(Copy, Clone, PartialEq, Data, Debug)]
-enum HeaderAxis{
+enum HeaderAxis {
     Item,
-    Level
+    Level,
 }
 
 #[derive(Copy, Clone, Data, Debug)]
-struct ResizeDragging{
+struct ResizeDragging {
     header_axis: HeaderAxis,
-    idx: VisIdx
+    idx: VisIdx,
 }
 
 impl ResizeDragging {
@@ -175,6 +176,10 @@ impl ResizeDragging {
     }
 }
 
+struct HeaderCell<T> {
+    pod: Option<WidgetPod<T, Box<dyn Widget<T>>>>,
+    span: VisOffset,
+}
 
 pub struct Headings<HeadersSource>
 where
@@ -186,7 +191,7 @@ where
     header_render: Box<dyn DisplayFactory<HeadersSource::Header>>,
     pods: EnsuredPool<
         (LogIdx, LogIdx), // Level, Field
-        Option<WidgetPod<HeadersSource::Header, Box<dyn Widget<HeadersSource::Header>>>>,
+        HeaderCell<HeadersSource::Header>,
     >,
     allow_moves: bool,
     // TODO: combine these three (and) into a state machine enum as only one can be happening
@@ -215,22 +220,23 @@ impl<HeadersSource: HeadersFromData> Headings<HeadersSource> {
         }
     }
 
-
-
-    fn ensure_pods(&mut self, data: &TableState<HeadersSource::TableData>) -> bool {
+    fn ensure_pods(&mut self) -> bool {
         if let Some(r) = &self.resolved {
             let axis = self.axis;
             let header_render = &self.header_render;
 
             self.pods.ensure(
-                r.visible_headings.iter(),
+                r.visible_headers.iter(),
                 |pair| &pair.0,
                 |((level, header_idx), span)| {
                     let cell = CellCtx::Header(HeaderInfo::new(axis, *level, *header_idx));
-                    header_render.make_display(&cell).map(WidgetPod::new)
+                    HeaderCell {
+                        pod: header_render.make_display(&cell).map(WidgetPod::new),
+                        span: *span,
+                    }
                 },
             )
-        }else{
+        } else {
             false
         }
     }
@@ -238,42 +244,99 @@ impl<HeadersSource: HeadersFromData> Headings<HeadersSource> {
     fn refresh_headers(&mut self, data: &TableState<HeadersSource::TableData>) {
         let rc = &data.resolved_config;
         let headers = self.headers_source.get_headers(&data.table_data);
-        let levels = headers.header_levels();
+        let num_levels = headers.header_levels();
         let mut resolved = if let Some(mut r) = self.resolved.take() {
             r.headers = headers;
             // Use reversed as we want the header levels to grow backwards from the edge of the table
-            r.level_remap = Remap::Reversed(levels);
+            r.level_remap = Remap::Reversed(num_levels);
             r
         } else {
-            let cross_axis_length = match self.axis {
-                TableAxis::Columns => rc.col_header_height,
-                TableAxis::Rows => rc.row_header_width,
-            };
-            let level_measure = AxisMeasure::new(AxisMeasurementType::Individual, cross_axis_length);
-            Resolved { headers, level_measure, level_remap: Remap::Reversed(levels), visible_headings: Vec::new() }
+            let cross_axis_length = rc.cross_axis_length(&self.axis);
+            let level_measure =
+                AxisMeasure::new(AxisMeasurementType::Individual, cross_axis_length);
+            Resolved {
+                headers,
+                level_measure,
+                level_remap: Remap::Reversed(num_levels),
+                cell_starts: Vec::new(),
+                visible_headers: Vec::new(),
+            }
         };
 
-        resolved.level_measure.set_axis_properties(rc.cell_border_thickness, levels, &resolved.level_remap);
+        resolved.level_measure.set_axis_properties(
+            rc.cell_border_thickness,
+            num_levels,
+            &resolved.level_remap,
+        );
 
-        let levels = (0..levels).map(LogIdx);
+        let levels = (0..num_levels).map(LogIdx);
 
         let headers = &resolved.headers;
-        resolved.visible_headings = levels.flat_map(|log_level|{
-            data.log_idx_in_visible_order_for_axis(self.axis)
-                .peekable()
-                .batching(move |it|{
-                    it.next().and_then(|log_field_idx|{
-                        headers.get_clone(log_field_idx).as_ref().map(|header_val| {
-                            let count = it.peeking_take_while(|next_log_field_idx| {
-                                headers.get_clone(*next_log_field_idx).as_ref().map(|next_header_val|{
-                                    headers.header_compare(log_level, header_val, next_header_val) == Ordering::Equal
-                                }).unwrap_or(false)
-                            }).count();
-                            ((log_level, log_field_idx), count)
+
+        // This is working out the cell spans on each level by peeking ahead and batching on headers
+        // which compare equal on that level.
+
+        resolved.visible_headers = levels
+            .flat_map(|log_level| {
+                data.log_idx_in_visible_order_for_axis(self.axis)
+                    .peekable()
+                    .batching(move |it| {
+                        it.next().and_then(|log_field_idx| {
+                            IndexedData::with(headers, log_field_idx, |header_val| {
+                                let count = it
+                                    .peeking_take_while(|next_log_field_idx| {
+                                        IndexedData::with(
+                                            headers,
+                                            *next_log_field_idx,
+                                            |next_header_val| {
+                                                headers.header_compare(
+                                                    log_level,
+                                                    header_val,
+                                                    next_header_val,
+                                                ) == Ordering::Equal
+                                            },
+                                        )
+                                        .unwrap_or(false)
+                                    })
+                                    .count();
+                                ((log_level, log_field_idx), VisOffset(count as isize))
+                            })
                         })
                     })
-                })
-        }).collect();
+            })
+            .collect();
+
+        // These two similar loops are separate for now as I might be able to get rid of one or the other
+        let levels = (0..num_levels).map(LogIdx);
+        resolved.cell_starts = levels
+            .map(|log_level| {
+                data.log_and_vis_idx_for_axis(self.axis)
+                    .peekable()
+                    .batching(move |it| {
+                        it.next().and_then(|(log_field_idx, vis_fi)| {
+                            IndexedData::with(headers, log_field_idx, |header_val| {
+                                it.peeking_take_while(|(next_log_field_idx, _)| {
+                                    IndexedData::with(
+                                        headers,
+                                        *next_log_field_idx,
+                                        |next_header_val| {
+                                            headers.header_compare(
+                                                log_level,
+                                                header_val,
+                                                next_header_val,
+                                            ) == Ordering::Equal
+                                        },
+                                    )
+                                    .unwrap_or(false)
+                                })
+                                .count();
+                                vis_fi
+                            })
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
 
         self.resolved = Some(resolved);
     }
@@ -343,32 +406,50 @@ where
                             if me.count == 2 && log_level_idx == LogIdx(0) {
                                 let extend = me.mods.ctrl() || me.mods.meta();
                                 if let Some(vis_idx) = item_measure.vis_idx_from_pixel(pix_item) {
-                                    if let Some(log_idx) = data.remaps[self.axis].get_log_idx(vis_idx) {
-                                        data.remap_specs[self.axis.cross_axis()].toggle_sort(log_idx, extend);
+                                    if let Some(log_idx) =
+                                        data.remaps[self.axis].get_log_idx(vis_idx)
+                                    {
+                                        data.remap_specs[self.axis.cross_axis()]
+                                            .toggle_sort(log_idx, extend);
                                     }
                                     ctx.set_handled()
                                 }
                             } else if me.count == 1 {
                                 //TODO: Combine lookups?
                                 if let Some(idx) = item_measure.pixel_near_border(pix_item) {
-                                    if idx > VisIdx(0) && item_measure.can_resize(idx - VisOffset(1)) {
-                                        self.resize_dragging = Some(ResizeDragging::new(HeaderAxis::Item, idx - VisOffset(1)));
+                                    if idx > VisIdx(0)
+                                        && item_measure.can_resize(idx - VisOffset(1))
+                                    {
+                                        self.resize_dragging = Some(ResizeDragging::new(
+                                            HeaderAxis::Item,
+                                            idx - VisOffset(1),
+                                        ));
                                         ctx.set_active(true);
                                         ctx.set_cursor(self.axis.resize_cursor());
                                         ctx.set_handled()
                                     }
-                                } else if let Some(idx) = level_measure.pixel_near_border(pix_level) {
-                                    if idx > VisIdx(0) && level_measure.can_resize(idx - VisOffset(1)) {
-                                        self.resize_dragging = Some(ResizeDragging::new(HeaderAxis::Level, idx - VisOffset(1)));
+                                } else if let Some(idx) = level_measure.pixel_near_border(pix_level)
+                                {
+                                    if idx > VisIdx(0)
+                                        && level_measure.can_resize(idx - VisOffset(1))
+                                    {
+                                        self.resize_dragging = Some(ResizeDragging::new(
+                                            HeaderAxis::Level,
+                                            idx - VisOffset(1),
+                                        ));
                                         ctx.set_active(true);
                                         ctx.set_cursor(self.axis.cross_axis().resize_cursor());
                                         ctx.set_handled()
                                     }
-                                } else if let Some(idx) = item_measure.vis_idx_from_pixel(pix_item) {
+                                } else if let Some(idx) = item_measure.vis_idx_from_pixel(pix_item)
+                                {
                                     let sel = &mut data.selection;
                                     // Already selected so move headings:
-                                    if sel.fully_selects_heading(self.axis, idx) && self.allow_moves {
-                                        if let Some(first_px) = item_measure.first_pixel_from_vis(idx) {
+                                    if sel.fully_selects_heading(self.axis, idx) && self.allow_moves
+                                    {
+                                        if let Some(first_px) =
+                                            item_measure.first_pixel_from_vis(idx)
+                                        {
                                             self.moving = Some(HeaderMoving::new(
                                                 idx,
                                                 first_px,
@@ -377,11 +458,37 @@ where
                                             ctx.set_active(true);
                                         }
                                     } else {
+                                        let cell_starts = &resolved.cell_starts[log_level_idx.0];
+                                        let offset = cell_starts.binary_search(&idx);
+
+                                        let to_select = match offset {
+                                            Ok(idx) => (
+                                                cell_starts.get(idx).copied().unwrap_or(VisIdx(0)),
+                                                cell_starts
+                                                    .get(idx + 1)
+                                                    .copied()
+                                                    .map(|x| x + VisOffset(-1))
+                                                    .unwrap_or_else(|| item_remap.max_vis_idx()),
+                                            ),
+
+                                            Err(idx) => (
+                                                cell_starts
+                                                    .get(idx.saturating_sub(1))
+                                                    .copied()
+                                                    .unwrap_or(VisIdx(0)),
+                                                cell_starts
+                                                    .get(idx)
+                                                    .copied()
+                                                    .map(|x| x + VisOffset(-1))
+                                                    .unwrap_or_else(|| item_remap.max_vis_idx()),
+                                            ),
+                                        };
+
                                         // Change the selection
                                         if me.mods.shift() {
-                                            sel.extend_in_axis(self.axis, idx, &data.remaps);
+                                            sel.extend_in_axis(self.axis, to_select, &data.remaps);
                                         } else {
-                                            sel.select_in_axis(self.axis, idx, &data.remaps);
+                                            sel.select_in_axis(self.axis, to_select, &data.remaps);
                                         }
                                         self.selection_dragging = true;
                                         ctx.set_active(true);
@@ -397,9 +504,17 @@ where
                     let over_idx = item_measure.vis_idx_from_pixel(pix_main);
 
                     if let Some(resize_dragging) = self.resize_dragging {
-                        match resize_dragging.header_axis{
-                            HeaderAxis::Item => item_measure.set_far_pixel_for_vis(resize_dragging.idx, pix_main, item_remap),
-                            HeaderAxis::Level => level_measure.set_far_pixel_for_vis(resize_dragging.idx, pix_level, level_remap)
+                        match resize_dragging.header_axis {
+                            HeaderAxis::Item => item_measure.set_far_pixel_for_vis(
+                                resize_dragging.idx,
+                                pix_main,
+                                item_remap,
+                            ),
+                            HeaderAxis::Level => level_measure.set_far_pixel_for_vis(
+                                resize_dragging.idx,
+                                pix_level,
+                                level_remap,
+                            ),
                         };
 
                         if me.buttons.is_empty() {
@@ -416,14 +531,16 @@ where
                             data.overrides.measure[self.axis]
                                 .entry(log_idx)
                                 .or_insert_with(|| {
-                                    item_measure.pix_range_from_vis(moving.idx).unwrap_or_else(|| {
-                                        PixelRange::new(
-                                            moving.current_first_px(),
-                                            item_measure
-                                                .far_pixel_from_vis(moving.idx)
-                                                .unwrap_or(moving.current_pos + 100.),
-                                        )
-                                    })
+                                    item_measure.pix_range_from_vis(moving.idx).unwrap_or_else(
+                                        || {
+                                            PixelRange::new(
+                                                moving.current_first_px(),
+                                                item_measure
+                                                    .far_pixel_from_vis(moving.idx)
+                                                    .unwrap_or(moving.current_pos + 100.),
+                                            )
+                                        },
+                                    )
                                 })
                                 .move_to(moving.current_first_px());
                             ctx.request_layout();
@@ -433,7 +550,9 @@ where
                         ctx.set_handled();
                     } else if self.selection_dragging {
                         if let Some(idx) = over_idx {
-                            data.selection.extend_in_axis(self.axis, idx, &data.remaps);
+                            // todo span
+                            data.selection
+                                .extend_in_axis(self.axis, (idx, idx), &data.remaps);
                         }
                     } else if let Some(resize_idx) = item_measure.pixel_near_border(pix_main) {
                         if resize_idx > VisIdx(0) {
@@ -458,11 +577,11 @@ where
                     } else {
                         match over_idx {
                             Some(moving_idx)
-                            if data.selection.fully_selects_heading(self.axis, moving_idx)
-                                && self.allow_moves =>
-                                {
-                                    ctx.set_cursor(&Cursor::OpenHand)
-                                }
+                                if data.selection.fully_selects_heading(self.axis, moving_idx)
+                                    && self.allow_moves =>
+                            {
+                                ctx.set_cursor(&Cursor::OpenHand)
+                            }
                             _ => ctx.clear_cursor(),
                         }
                     }
@@ -470,9 +589,17 @@ where
                 Event::MouseUp(me) => {
                     let (pix_main, pix_level) = self.axis.pixels_from_point(&me.pos);
                     if let Some(resize_dragging) = self.resize_dragging {
-                        match resize_dragging.header_axis{
-                            HeaderAxis::Item => item_measure.set_far_pixel_for_vis(resize_dragging.idx, pix_main, item_remap),
-                            HeaderAxis::Level => level_measure.set_far_pixel_for_vis(resize_dragging.idx, pix_level, level_remap)
+                        match resize_dragging.header_axis {
+                            HeaderAxis::Item => item_measure.set_far_pixel_for_vis(
+                                resize_dragging.idx,
+                                pix_main,
+                                item_remap,
+                            ),
+                            HeaderAxis::Level => level_measure.set_far_pixel_for_vis(
+                                resize_dragging.idx,
+                                pix_level,
+                                level_remap,
+                            ),
                         };
                         self.resize_dragging = None;
                         ctx.request_layout();
@@ -512,15 +639,15 @@ where
     ) {
         if let LifeCycle::WidgetAdded = event {
             self.refresh_headers(data);
-            if self.ensure_pods(data) {
+            if self.ensure_pods() {
                 ctx.children_changed();
                 ctx.request_anim_frame();
             }
         }
 
         if let Some(resolved) = &self.resolved {
-            for ((_, log_idx), pod) in &mut self.pods.entries_mut() {
-                if let Some(pod) = pod {
+            for ((_, log_idx), cell) in &mut self.pods.entries_mut() {
+                if let Some(pod) = &mut cell.pod {
                     resolved.headers.with(*log_idx, |header| {
                         if matches!(
                             event,
@@ -547,7 +674,7 @@ where
 
         if !old_data.same(data) {
             self.refresh_headers(&data);
-            if self.ensure_pods(data) {
+            if self.ensure_pods() {
                 ctx.children_changed();
                 ctx.request_anim_frame();
             }
@@ -561,43 +688,46 @@ where
         data: &TableState<HeadersSource::TableData>,
         env: &Env,
     ) -> Size {
-
-
-
         let axis = self.axis;
         if let Some(resolved) = &self.resolved {
             let header_measure = &data.measures[axis];
             let remap = &data.remaps[axis];
             let overrides = &data.overrides.measure[axis];
-            let pixel_lengths = OverriddenPixelLengths::new(header_measure, &data.remaps[axis], overrides);
+            let pixel_lengths =
+                OverriddenPixelLengths::new(header_measure, &data.remaps[axis], overrides);
 
-            let size = bc.constrain(axis.size(header_measure.total_pixel_length(), // use pixel_lengths
-                                              resolved.level_measure.total_pixel_length()));
+            let size = bc.constrain(axis.size(
+                header_measure.total_pixel_length(), // use pixel_lengths
+                resolved.level_measure.total_pixel_length(),
+            ));
             let pods = &mut self.pods;
 
-
-            for (cell, field_span) in &resolved.visible_headings {
-                let (log_level, log_field_idx) = cell;
+            for (cell_address, header_span) in &resolved.visible_headers {
+                let (log_level, log_header_idx) = cell_address;
                 if let Some(vis_level) = resolved.level_remap.get_vis_idx(*log_level) {
                     if let Some(level_pix) = resolved.level_measure.pix_range_from_vis(vis_level) {
-
-                        if let Some(vis_field_idx) = remap.get_vis_idx(*log_field_idx){
-                            if let Some(field_pix) = pixel_lengths.pix_range_from_vis_span(vis_field_idx, VisOffset(*field_span as isize) ) {
-
-                                if let Some(Some(pod)) = pods.get_mut(&cell) {
-                                    resolved.headers.with(*log_field_idx, |header| {
-                                        if pod.is_initialized() {
-                                            let cell_size = axis.size(field_pix.extent(), level_pix.extent());
-                                            pod.layout(
-                                                ctx,
-                                                &BoxConstraints::tight(cell_size).loosen(),
-                                                header,
-                                                env,
-                                            );
-                                            let origin = axis.cell_origin(field_pix.p_0, level_pix.p_0);
-                                            pod.set_origin(ctx, header, env, origin);
-                                        }
-                                    });
+                        if let Some(vis_field_idx) = remap.get_vis_idx(*log_header_idx) {
+                            if let Some(field_pix) =
+                                pixel_lengths.pix_range_from_vis_span(vis_field_idx, *header_span)
+                            {
+                                if let Some(cell) = pods.get_mut(&cell_address) {
+                                    if let Some(pod) = &mut cell.pod {
+                                        resolved.headers.with(*log_header_idx, |header| {
+                                            if pod.is_initialized() {
+                                                let cell_size = axis
+                                                    .size(field_pix.extent(), level_pix.extent());
+                                                pod.layout(
+                                                    ctx,
+                                                    &BoxConstraints::tight(cell_size).loosen(),
+                                                    header,
+                                                    env,
+                                                );
+                                                let origin =
+                                                    axis.cell_origin(field_pix.p_0, level_pix.p_0);
+                                                pod.set_origin(ctx, header, env, origin);
+                                            }
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -605,7 +735,7 @@ where
                 }
             }
             size
-        }else{
+        } else {
             bc.min()
         }
     }
@@ -639,27 +769,70 @@ where
 
         ctx.fill(rect, &rc.header_background);
 
-        let (p0, p1) = self.axis.pixels_from_rect(&rect);
-
         let pods = &mut self.pods;
         if let Some(resolved) = &self.resolved {
             let headers = &resolved.headers;
 
-            for (cell, field_span) in &resolved.visible_headings {
-                let (log_level, log_field_idx) = cell;
+            for (cell_addr, field_span) in &resolved.visible_headers {
+                let (log_level, log_field_idx) = cell_addr;
                 if let Some(vis_level) = resolved.level_remap.get_vis_idx(*log_level) {
-                    if let Some(level_pix) = resolved.level_measure.pix_range_from_vis(vis_level)
-                    {
-                        if let Some(vis_field_idx) = remap.get_vis_idx(*log_field_idx){
-                            if let Some(field_pix) = pixel_lengths.pix_range_from_vis_span(vis_field_idx, VisOffset(*field_span as isize) ) {
-
+                    if let Some(level_pix) = resolved.level_measure.pix_range_from_vis(vis_level) {
+                        if let Some(vis_field_idx) = remap.get_vis_idx(*log_field_idx) {
+                            if let Some(field_pix) =
+                                pixel_lengths.pix_range_from_vis_span(vis_field_idx, *field_span)
+                            {
                                 let cell_rect = Rect::from_origin_size(
                                     axis.cell_origin(field_pix.p_0, level_pix.p_0),
                                     axis.size(field_pix.extent(), level_pix.extent()),
                                 );
 
-                                if indices_selection.vis_index_selected(vis_field_idx) {
-                                    ctx.fill(cell_rect, &rc.header_selected_background);
+                                let mut prev_covered = false;
+
+                                for covered_v_i in VisIdx::range_inc_iter(
+                                    vis_field_idx,
+                                    vis_field_idx + *field_span,
+                                ) {
+                                    let covered = indices_selection.vis_index_selected(covered_v_i);
+
+                                    if let Some(bg_pix_range) =
+                                        pixel_lengths.pix_range_from_vis(covered_v_i)
+                                    {
+                                        let bg_rect = Rect::from_origin_size(
+                                            axis.cell_origin(bg_pix_range.p_0, level_pix.p_0),
+                                            axis.size(bg_pix_range.extent(), level_pix.extent()),
+                                        );
+                                        let different = covered != prev_covered;
+
+                                        if vis_level == VisIdx(0) {
+                                            ctx.stroke_trailing_main_border(
+                                                axis.cross_axis(),
+                                                &bg_rect,
+                                                &rc.cells_border,
+                                                rc.cell_border_thickness,
+                                            );
+                                        }
+
+                                        let brush = if vis_field_idx == covered_v_i || different {
+                                            &rc.cells_border
+                                        } else if covered {
+                                            &rc.header_selected_background
+                                        } else {
+                                            &rc.header_background
+                                        };
+
+                                        ctx.stroke_trailing_main_border(
+                                            axis,
+                                            &bg_rect,
+                                            brush,
+                                            rc.cell_border_thickness,
+                                        );
+
+                                        if covered {
+                                            ctx.fill(bg_rect, &rc.header_selected_background);
+                                        }
+                                    }
+
+                                    prev_covered = covered;
                                 }
 
                                 let padded_rect = cell_rect.inset(-rc.cell_padding);
@@ -675,13 +848,15 @@ where
                                         };
                                         ctx.clip(clip_rect);
 
-                                        if let Some(Some(pod)) = pods.get_mut(cell) {
-                                            pod.paint(ctx, col_name, env);
+                                        if let Some(cell) = pods.get_mut(cell_addr) {
+                                            if let Some(pod) = &mut cell.pod {
+                                                pod.paint(ctx, col_name, env);
+                                            }
                                         }
                                     });
                                 });
 
-                                ctx.stroke_bottom_left_border(
+                                ctx.stroke_bottom_right_border(
                                     &cell_rect,
                                     &rc.cells_border,
                                     rc.cell_border_thickness,
@@ -695,12 +870,9 @@ where
     }
 }
 
-
 impl<HeadersSource> BindableAccess for Headings<HeadersSource>
 where
     HeadersSource: HeadersFromData,
 {
     bindable_self_body!();
 }
-
-

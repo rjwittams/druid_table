@@ -209,11 +209,15 @@ impl<TableData: IndexedData> Cells<TableData> {
                         ctx.with_save(|ctx| {
                             ctx.clip(padded_rect);
                             if let Some(Some(pod)) = self.cell_pool.get_mut(&log) {
-                                pod.paint(ctx, row, env)
+                                if pod.is_initialized() {
+                                    pod.paint(ctx, row, env)
+                                } else {
+                                    log::warn!("Cell pod not init out at {:?}", (log, vis))
+                                }
                             }
                         });
 
-                        ctx.stroke_bottom_left_border(
+                        ctx.stroke_bottom_right_border(
                             &pix_rect,
                             &rtc.cells_border,
                             rtc.cell_border_thickness,
@@ -368,9 +372,13 @@ impl<TableData: IndexedData> Widget<TableState<TableData>> for Cells<TableData> 
 
                         // TODO - when Ctrl + Shift, select full grid
                     }
-                    KbKey::Copy => log::info!("Copy"),
+                    KbKey::Copy => log::info!("Copy key"),
                     k => log::info!("Key {:?}", k),
                 }
+            }
+            Event::Command(ref cmd) if ctx.is_focused() && cmd.is(druid::commands::COPY) => {
+                log::info!("Copy command");
+                ctx.set_handled();
             }
             _ => (),
         }

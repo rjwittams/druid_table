@@ -16,8 +16,8 @@ pub trait IndexedData: Data {
     type Item: Data;
     fn with<V>(&self, idx: LogIdx, f: impl FnOnce(&Self::Item) -> V) -> Option<V>;
 
-    fn get_clone(&self, idx: LogIdx)->Option<Self::Item>{
-        self.with(idx, |item|item.clone())
+    fn get_clone(&self, idx: LogIdx) -> Option<Self::Item> {
+        self.with(idx, |item| item.clone())
     }
 
     fn with_mut<V>(&mut self, idx: LogIdx, f: impl FnOnce(&mut Self::Item) -> V) -> Option<V>;
@@ -26,15 +26,6 @@ pub trait IndexedData: Data {
 
     fn is_empty(&self) -> bool {
         self.data_len() == 0
-    }
-}
-
-#[derive(Debug)]
-pub struct PartialEqData<T: Data>(pub T);
-
-impl <T: Data> PartialEq for PartialEqData<T>{
-    fn eq(&self, other: &Self) -> bool {
-        self.0.same(&other.0)
     }
 }
 
@@ -221,12 +212,11 @@ impl Remap {
         }
     }
 
-    pub fn max_vis_idx(&self, len: usize) -> VisIdx {
-        if let Remap::Selected(RemapDetails::Full(v, _)) = self {
-            VisIdx(v.len()) + VisOffset(-1)
-        } else {
-            VisIdx(len) + VisOffset(-1)
-        }
+    pub fn max_vis_idx(&self) -> VisIdx {
+        (match self {
+            Remap::Selected(RemapDetails::Full(v, _)) => VisIdx(v.len()),
+            Remap::Reversed(len) | Remap::Pristine(len) => VisIdx(*len),
+        }) + VisOffset(-1)
     }
 }
 
@@ -235,15 +225,13 @@ pub enum Remap {
     Pristine(usize),
     Reversed(usize),
     Selected(RemapDetails),
-    Internal, // This indicates that the source data has done the remapping, ie no wrapper required. Eg sort in db.
-              //  need some token to give back to the table rows
 }
 
 impl Remap {
     pub fn get_log_idx(&self, vis_idx: VisIdx) -> Option<LogIdx> {
         match self {
             Remap::Selected(v) => v.get_log_idx(vis_idx),
-            Remap::Reversed(len) => (vis_idx.0 >= 0).then(||LogIdx(len - vis_idx.0 - 1)),
+            Remap::Reversed(len) => (vis_idx.0 < *len).then(|| LogIdx(len - vis_idx.0 - 1)),
             _ => Some(LogIdx(vis_idx.0)), // Dunno if right for internal
         }
     }
@@ -251,7 +239,7 @@ impl Remap {
     pub fn get_vis_idx(&self, log_idx: LogIdx) -> Option<VisIdx> {
         match self {
             Remap::Selected(v) => v.get_vis_idx(log_idx),
-            Remap::Reversed(len) => (log_idx.0 >= 0).then(||VisIdx(len - log_idx.0 - 1)),
+            Remap::Reversed(len) => (log_idx.0 < *len).then(|| VisIdx(len - log_idx.0 - 1)),
             _ => Some(VisIdx(log_idx.0)),
         }
     }
