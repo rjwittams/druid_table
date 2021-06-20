@@ -15,7 +15,7 @@ use crate::render_ext::RenderContextExt;
 use crate::selection::{CellRect, SingleCell, TableSelection};
 use crate::table::TableState;
 use crate::{EditorFactory, IndexedItems, Remap};
-use druid_bindings::{BindableAccess, bindable_self_body};
+use druid_bindings::{bindable_self_body, BindableAccess};
 
 pub trait CellsDelegate<TableData: IndexedData>:
     CellRender<TableData::Item> + Remapper<TableData> + EditorFactory<TableData::Item>

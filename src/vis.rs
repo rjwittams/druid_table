@@ -1,12 +1,12 @@
-use druid_widget_nursery::animation::{SimpleCurve, AnimationEventName};
 use crate::LogIdx;
-use druid::kurbo::{Affine, Line, ParamCurveNearest, Point, Rect, Size, Vec2};
+use druid::kurbo::{Affine, Line, Nearest, ParamCurveNearest, Point, Rect, Size, Vec2};
 use druid::piet::{FontFamily, Text, TextLayout, TextLayoutBuilder};
 use druid::widget::prelude::RenderContext;
 use druid::{
     BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx,
     PaintCtx, UpdateCtx, Widget,
 };
+use druid_widget_nursery::animation::{AnimationEventName, SimpleCurve};
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::f64::consts::LN_10;
@@ -16,11 +16,11 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use druid_widget_nursery::animation::{AnimationCtx, AnimationEvent, AnimationId, Animator};
 use crate::interp::{
     EnterExit, HasInterp, Interp, InterpCoverage, InterpError, InterpNode, InterpResult, OK,
 };
 use druid_widget_nursery::animation::AnimationEvent::Named;
+use druid_widget_nursery::animation::{AnimationCtx, AnimationEvent, AnimationId, Animator};
 
 #[derive(Debug, Default)]
 pub struct TextMarkInterp {
@@ -367,7 +367,7 @@ impl Mark {
         match self.shape {
             MarkShape::Rect(r) => r.contains(pos),
             MarkShape::Line(l) => {
-                let (_, d2) = l.nearest(pos, 1.0);
+                let Nearest { t: d2, .. } = l.nearest(pos, 1.0);
                 d2 < 1.0
             }
             _ => false,
