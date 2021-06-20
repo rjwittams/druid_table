@@ -6,10 +6,7 @@ use crate::{
     CellRender, Cells, Headings, IndexedData, IndexedItems, LogIdx, Remap, RemapSpec, TableConfig,
     TableSelection, VisIdx,
 };
-use druid::widget::{
-    Axis, Container, CrossAxisAlignment, DefaultScopePolicy, Flex,
-    Scope, Scroll,
-};
+use druid::widget::{Axis, Container, CrossAxisAlignment, DefaultScopePolicy, Flex, Scope, Scroll};
 use druid::{
     BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx,
     Point, Rect, Size, UpdateCtx, Widget, WidgetExt, WidgetId, WidgetPod,
