@@ -30,7 +30,7 @@ fn main_widget() -> impl Widget<TopLevel> {
 }
 
 fn main() {
-    let main_window = WindowDesc::new(main_widget)
+    let main_window = WindowDesc::new(main_widget())
         .title("Visualisation")
         .window_size((800.0, 500.0));
 

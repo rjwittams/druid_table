@@ -152,7 +152,7 @@ pub fn main() {
     info!("Hello table");
 
     // describe the main window
-    let main_window = WindowDesc::new(build_root_widget)
+    let main_window = WindowDesc::new(build_root_widget())
         .title("Big table")
         .window_size((400.0, 700.0));
 
